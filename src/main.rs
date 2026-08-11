@@ -71,5 +71,45 @@ async fn main() -> Result<()> {
         Err(e) => println!("[controls] indisponível (wpctl/brightnessctl): {e}"),
     }
 
+    match backend::bluetooth::Bluetooth::new().await {
+        Ok(bluetooth) => match bluetooth.adapter_paths().await {
+            Ok(adapters) => {
+                println!("[bluetooth] {} adaptador(es): {:?}", adapters.len(), adapters);
+                match bluetooth.devices().await {
+                    Ok(devices) => {
+                        println!("[bluetooth] {} dispositivo(s) conhecido(s):", devices.len());
+                        for device in &devices {
+                            println!(
+                                "  - {} emparelhado={} conectado={}",
+                                device.name, device.paired, device.connected
+                            );
+                        }
+                    }
+                    Err(e) => println!("[bluetooth] erro ao listar dispositivos: {e}"),
+                }
+            }
+            Err(e) => println!("[bluetooth] erro ao listar adaptadores: {e}"),
+        },
+        Err(e) => println!("[bluetooth] indisponível (BlueZ D-Bus): {e}"),
+    }
+
+    match backend::network::Network::new().await {
+        Ok(network) => {
+            match network.active_wifi().await {
+                Ok(Some(wifi)) => println!(
+                    "[network] wi-fi ativo: ssid={:?} sinal={}% dispositivo={}",
+                    wifi.ssid, wifi.strength, wifi.device_path
+                ),
+                Ok(None) => println!("[network] nenhuma rede sem fio ativa"),
+                Err(e) => println!("[network] erro ao consultar wi-fi ativo: {e}"),
+            }
+            match network.wireless_enabled().await {
+                Ok(enabled) => println!("[network] wireless_enabled={enabled}"),
+                Err(e) => println!("[network] erro ao ler wireless_enabled: {e}"),
+            }
+        }
+        Err(e) => println!("[network] indisponível (NetworkManager D-Bus): {e}"),
+    }
+
     Ok(())
 }

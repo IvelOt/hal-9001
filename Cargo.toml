@@ -8,6 +8,7 @@ ratatui = "0.30"
 crossterm = "0.28"
 tokio = { version = "1.40", features = ["full"] }
 zbus = "4.4"
+futures-util = "0.3"
 portable-pty = "0.9"
 vt100 = "0.16"
 serde = { version = "1.0", features = ["derive"] }
