@@ -5,11 +5,6 @@
 //! sessão PTY do AI Terminal Deck e o agregador de eventos — rodando o loop
 //! principal de renderização Ratatui multi-abas.
 
-mod ai_agent;
-mod backend;
-mod events;
-mod ui;
-
 use std::io::Write;
 use std::sync::Arc;
 
@@ -19,15 +14,15 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use hall_9001::ai_agent::ipc_server::{Gatekeeper, IpcServer};
+use hall_9001::ai_agent::pty_session::{AgentCommand, AgentKind, PtySession, PtyTarget};
+use hall_9001::ai_agent::widget::AiDeckState;
+use hall_9001::events::{collect_snapshot, AppEvent, Backends, EventLoop};
+use hall_9001::ui::dashboard::Tab;
+use hall_9001::ui::Dashboard;
 use ratatui::backend::CrosstermBackend;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
-
-use crate::ai_agent::ipc_server::{Gatekeeper, IpcServer};
-use crate::ai_agent::pty_session::{AgentCommand, AgentKind, PtySession, PtyTarget};
-use crate::ai_agent::widget::AiDeckState;
-use crate::events::{collect_snapshot, AppEvent, Backends, EventLoop};
-use crate::ui::dashboard::Tab;
-use crate::ui::Dashboard;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -116,6 +111,9 @@ async fn main() -> Result<()> {
 }
 
 /// Loop principal: consome eventos unificados, atualiza o dashboard e redesenha.
+///
+/// Sai normalmente ao receber `SIGINT`/`SIGTERM`, permitindo que o encerramento
+/// limpo (restauração do terminal e remoção do socket UNIX via `Drop`) aconteça.
 async fn run_loop(
     terminal: &mut ratatui::Terminal<CrosstermBackend<std::io::Stdout>>,
     dashboard: &mut Dashboard,
@@ -124,8 +122,18 @@ async fn run_loop(
     tx: &mpsc::Sender<AppEvent>,
     _gatekeeper: Option<Gatekeeper>,
 ) -> Result<()> {
+    let mut sigterm = signal(SignalKind::terminate())
+        .context("falha ao registrar handler de SIGTERM")?;
+    let mut sigint =
+        signal(SignalKind::interrupt()).context("falha ao registrar handler de SIGINT")?;
+
     loop {
-        if let Some(event) = events.next().await {
+        let event = tokio::select! {
+            _ = sigterm.recv() => break,
+            _ = sigint.recv() => break,
+            event = events.next() => event,
+        };
+        if let Some(event) = event {
             match event {
                 AppEvent::Key(key) => {
                     if handle_key(dashboard, key, &backends, tx).await {
