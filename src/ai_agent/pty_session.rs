@@ -18,6 +18,9 @@ use std::thread::JoinHandle;
 
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 
 /// Tipos de agentes de I.A. suportados pelo AI Terminal Deck.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +31,8 @@ pub enum AgentKind {
     Claude,
     /// Shell `bash` — terminal genérico.
     Bash,
+    /// Yazi — navegador de arquivos embarcado no PTY Dock (Aba Arquivos).
+    Yazi,
 }
 
 impl AgentKind {
@@ -37,6 +42,7 @@ impl AgentKind {
             Self::OpenCode => "opencode",
             Self::Claude => "claude",
             Self::Bash => "bash",
+            Self::Yazi => "yazi",
         }
     }
 
@@ -46,26 +52,53 @@ impl AgentKind {
             Self::OpenCode => "OpenCode",
             Self::Claude => "Claude",
             Self::Bash => "bash",
+            Self::Yazi => "Yazi",
         }
     }
 }
 
-/// Comando a ser executado dentro do PTY (binário do agente + argumentos).
+/// Comando a ser executado dentro do PTY (binário + argumentos).
 #[derive(Debug, Clone)]
 pub struct AgentCommand {
     pub kind: AgentKind,
+    /// Caminho do executável (pode divergir do padrão do `kind`).
+    pub program: String,
     pub args: Vec<String>,
 }
 
 impl AgentCommand {
     /// Cria um comando de agente com argumentos opcionais.
     pub fn new(kind: AgentKind, args: Vec<String>) -> Self {
-        Self { kind, args }
+        Self {
+            program: kind.program().to_string(),
+            kind,
+            args,
+        }
+    }
+
+    /// Cria um comando com um caminho de executável explícito.
+    pub fn with_program(kind: AgentKind, program: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            program: program.into(),
+            kind,
+            args,
+        }
+    }
+
+    /// Comando para embarcar o Yazi no PTY Dock, resolvendo o binário
+    /// (`/usr/sbin/yazi` quando presente, senão `yazi` no `$PATH`).
+    pub fn yazi() -> Self {
+        let program = if std::path::Path::new("/usr/sbin/yazi").exists() {
+            "/usr/sbin/yazi"
+        } else {
+            "yazi"
+        };
+        Self::with_program(AgentKind::Yazi, program, Vec::new())
     }
 
     /// Monta o `CommandBuilder` do `portable-pty` com o binário e argumentos.
     pub fn command_builder(&self) -> CommandBuilder {
-        let mut builder = CommandBuilder::new(self.kind.program());
+        let mut builder = CommandBuilder::new(&self.program);
         for arg in &self.args {
             builder.arg(arg);
         }
@@ -285,5 +318,98 @@ impl PtyTarget for PtySession {
 impl Drop for PtySession {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Copia a tela virtual `vt100` para o buffer do Ratatui, célula a célula.
+///
+/// Compartilhada entre o widget do AI Terminal Deck (`ai_agent::widget`) e o
+/// PTY Dock do Yazi (`ui::yazi_dock`).
+pub(crate) fn render_screen(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
+    let (screen_rows, screen_cols) = screen.size();
+    let rows = screen_rows.min(area.height);
+    let cols = screen_cols.min(area.width);
+
+    for y in 0..rows {
+        for x in 0..cols {
+            let Some(cell) = screen.cell(y, x) else {
+                continue;
+            };
+            // Células de continuação de caracteres largos são puladas; o símbolo
+            // de largura dupla já foi colocado na célula `is_wide`.
+            if cell.is_wide_continuation() {
+                continue;
+            }
+
+            let target = &mut buf[(area.x + x, area.y + y)];
+            target.set_symbol(cell.contents());
+
+            let mut style = Style::new();
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.dim() {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if cell.inverse() {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            if let Some(fg) = vt100_color(cell.fgcolor()) {
+                style = style.fg(fg);
+            }
+            if let Some(bg) = vt100_color(cell.bgcolor()) {
+                style = style.bg(bg);
+            }
+            target.set_style(style);
+        }
+    }
+
+    // Cursor: invertido sobre a célula atual para destacar a posição ativa.
+    if !screen.hide_cursor() && rows > 0 && cols > 0 {
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        let x = area.x + cursor_col.min(cols - 1);
+        let y = area.y + cursor_row.min(rows - 1);
+        let cell = &mut buf[(x, y)];
+        cell.modifier.insert(Modifier::REVERSED);
+    }
+}
+
+/// Converte uma cor `vt100` para a cor correspondente do Ratatui.
+pub(crate) fn vt100_color(color: vt100::Color) -> Option<ratatui::style::Color> {
+    match color {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(index) => Some(ratatui::style::Color::Indexed(index)),
+        vt100::Color::Rgb(r, g, b) => Some(ratatui::style::Color::Rgb(r, g, b)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yazi_command_resolves_binary() {
+        let command = AgentCommand::yazi();
+        assert_eq!(command.kind, AgentKind::Yazi);
+        assert!(command.program == "yazi" || command.program == "/usr/sbin/yazi");
+        assert!(command.args.is_empty());
+    }
+
+    #[test]
+    fn custom_program_is_used_in_builder() {
+        let command = AgentCommand::with_program(AgentKind::Bash, "/bin/sh", vec!["-c".into()]);
+        let builder = command.command_builder();
+        assert!(!format!("{builder:?}").is_empty());
+    }
+
+    #[test]
+    fn vt100_color_maps_default_to_none() {
+        assert!(vt100_color(vt100::Color::Default).is_none());
     }
 }

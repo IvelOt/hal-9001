@@ -130,7 +130,7 @@ async fn run_loop(
         if let Some(event) = event {
             match event {
                 AppEvent::Key(key) => {
-                    if handle_key(terminal, dashboard, &key, &backends, tx).await {
+                    if handle_key(dashboard, &key, &backends, tx).await {
                         break;
                     }
                 }
@@ -164,11 +164,10 @@ async fn run_loop(
 
 /// Processa uma tecla pressionada. Retorna `true` quando o aplicativo deve sair.
 ///
-/// O `terminal` é necessário para a aba de Arquivos: `[Enter]`/`[f]` suspendem
-/// o raw mode do Ratatui, executam o Yazi nativamente e restauram a TUI ao
-/// sair do subprocesso.
+/// Quando a aba de Arquivos está ativa, as teclas são repassadas ao PTY do Yazi
+/// (`YaziDock`), sem suspender o raw mode do Ratatui. `Ctrl+Q` encerra a TUI e
+/// `Alt+1..5` troca de aba sem interferir na navegação do Yazi.
 async fn handle_key(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<std::io::Stdout>>,
     dashboard: &mut Dashboard,
     key: &KeyEvent,
     backends: &Arc<Backends>,
@@ -197,22 +196,32 @@ async fn handle_key(
 
     let current = dashboard.tab;
 
-    // Aba de Arquivos — integra o Yazi File Manager nativamente.
+    // Aba de Arquivos — o Yazi roda num PTY embarcado (`YaziDock`), no estilo
+    // `:terminal` do Neovim. O raw mode da TUI continua ativo: as teclas são
+    // convertidas em bytes crus e repassadas ao Yazi, exceto as combinações de
+    // escape da própria TUI (`Ctrl+Q` para sair, `Alt+1..5` para trocar de aba).
     if current == Tab::Files {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => return true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
-            KeyCode::Char('1') => return select_tab(dashboard, Tab::Home),
-            KeyCode::Char('2') => return select_tab(dashboard, Tab::Storage),
-            KeyCode::Char('3') => return select_tab(dashboard, Tab::Network),
-            KeyCode::Char('4') => return select_tab(dashboard, Tab::Bluetooth),
-            KeyCode::Char('5') => return select_tab(dashboard, Tab::Files),
-            KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
-                launch_yazi(terminal, dashboard).await;
-                return false;
+        if let KeyModifiers::ALT = key.modifiers {
+            if let KeyCode::Char(digit @ '1'..='5') = key.code {
+                let tab = Tab::from_index(digit.to_digit(10).unwrap() as usize - 1);
+                return select_tab(dashboard, tab);
             }
-            _ => return handle_tab_switch(dashboard, *key),
         }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return true;
+        }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+C é passado ao Yazi (cancelar operação) — não encerra a TUI.
+            let _ = dashboard.yazi_dock.write_input(b"\x03");
+            return false;
+        }
+        if let Some(bytes) = crossterm_key_to_bytes(key) {
+            if let Err(e) = dashboard.yazi_dock.write_input(&bytes) {
+                dashboard.message = Some(format!("yazi: {e}"));
+                dashboard.push_toast(Toast::error(format!("falha ao enviar tecla ao Yazi: {e}")));
+            }
+        }
+        return false;
     }
 
     match key.code {
@@ -273,26 +282,72 @@ async fn handle_key(
     }
 }
 
-/// Trata troca de aba usando Tab/BackTab (usada quando uma aba consome as
-/// setas, ex.: File Manager).
-fn handle_tab_switch(dashboard: &mut Dashboard, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Char('1') => select_tab(dashboard, Tab::Home),
-        KeyCode::Char('2') => select_tab(dashboard, Tab::Storage),
-        KeyCode::Char('3') => select_tab(dashboard, Tab::Network),
-        KeyCode::Char('4') => select_tab(dashboard, Tab::Bluetooth),
-        KeyCode::Char('5') => select_tab(dashboard, Tab::Files),
-        KeyCode::Tab | KeyCode::Right => {
-            dashboard.next_tab();
-            false
+/// Converte um `KeyEvent` do Crossterm em bytes crus de terminal para enviar ao
+/// PTY do Yazi (repasses de teclas no estilo `:terminal` do Neovim).
+///
+/// Combinações como `Alt+letra` produzem o prefixo ESC (`0x1B`) e `Ctrl+letra`
+/// produz o byte de controle correspondente (`0x01`..`0x1A`).
+fn crossterm_key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
+    use crossterm::event::KeyModifiers;
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    let base = match key.code {
+        KeyCode::Enter => Some(vec![b'\r']),
+        KeyCode::Tab => Some(vec![0x09]),
+        KeyCode::BackTab => Some(vec![0x1B, b'[', b'Z']),
+        KeyCode::Backspace => Some(vec![0x7F]),
+        KeyCode::Esc => Some(vec![0x1B]),
+        KeyCode::Left => Some(vec![0x1B, b'[', b'D']),
+        KeyCode::Right => Some(vec![0x1B, b'[', b'C']),
+        KeyCode::Up => Some(vec![0x1B, b'[', b'A']),
+        KeyCode::Down => Some(vec![0x1B, b'[', b'B']),
+        KeyCode::Home => Some(vec![0x1B, b'[', b'H']),
+        KeyCode::End => Some(vec![0x1B, b'[', b'F']),
+        KeyCode::PageUp => Some(vec![0x1B, b'[', b'5', b'~']),
+        KeyCode::PageDown => Some(vec![0x1B, b'[', b'6', b'~']),
+        KeyCode::Delete => Some(vec![0x1B, b'[', b'3', b'~']),
+        KeyCode::Insert => Some(vec![0x1B, b'[', b'2', b'~']),
+        KeyCode::F(n) => Some(f_key_bytes(n)),
+        KeyCode::Char(c) => {
+            if ctrl && c.is_ascii_alphabetic() {
+                // Ctrl+A..Ctrl+Z → 0x01..0x1A.
+                let upper = c.to_ascii_uppercase();
+                Some(vec![upper as u8 - b'A' + 1])
+            } else {
+                Some(c.to_string().into_bytes())
+            }
         }
-        KeyCode::BackTab | KeyCode::Left => {
-            dashboard.prev_tab();
-            false
-        }
-        KeyCode::Char('q') | KeyCode::Char('Q') => true,
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
-        _ => false,
+        _ => None,
+    };
+
+    let bytes = base?;
+    // `Alt+caractere` é o prefixo ESC seguido do caractere (vi-style meta).
+    if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char(_)) {
+        let mut out = vec![0x1B];
+        out.extend_from_slice(&bytes);
+        Some(out)
+    } else {
+        Some(bytes)
+    }
+}
+
+/// Sequência ANSI de uma tecla de função F1..F12.
+fn f_key_bytes(n: u8) -> Vec<u8> {
+    match n {
+        1 => b"\x1bOP".to_vec(),
+        2 => b"\x1bOQ".to_vec(),
+        3 => b"\x1bOR".to_vec(),
+        4 => b"\x1bOS".to_vec(),
+        5 => b"\x1b[15~".to_vec(),
+        6 => b"\x1b[17~".to_vec(),
+        7 => b"\x1b[18~".to_vec(),
+        8 => b"\x1b[19~".to_vec(),
+        9 => b"\x1b[20~".to_vec(),
+        10 => b"\x1b[21~".to_vec(),
+        11 => b"\x1b[23~".to_vec(),
+        12 => b"\x1b[24~".to_vec(),
+        _ => Vec::new(),
     }
 }
 
@@ -497,54 +552,7 @@ async fn connect_wifi(
     });
 }
 
-/// Suspende a TUI Ratatui e executa o Yazi File Manager nativamente na aba 5.
-///
-/// Desativa o raw mode e sai do alternate screen, roda `/usr/sbin/yazi` como
-/// subprocesso bloqueante (fora da thread assíncrona) e, ao sair, restaura o
-/// modo TUI e redesenha o dashboard.
-async fn launch_yazi(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<std::io::Stdout>>,
-    dashboard: &mut Dashboard,
-) {
-    // 1. Suspende o raw mode + alternate screen da TUI Ratatui.
-    let _ = terminal.show_cursor();
-    let _ = disable_raw_mode();
-    let mut stdout = std::io::stdout();
-    let _ = execute!(stdout, LeaveAlternateScreen);
-    let _ = stdout.flush();
-
-    // 2. Executa o Yazi como subprocesso bloqueante.
-    let status = tokio::task::spawn_blocking(|| {
-        std::process::Command::new("/usr/sbin/yazi")
-            .status()
-            .map(|s| s.success())
-    })
-    .await;
-
-    match status {
-        Ok(Ok(true)) => {
-            dashboard.push_toast(Toast::info("Yazi encerrado"));
-        }
-        Ok(Ok(false)) => {
-            dashboard.push_toast(Toast::warning("Yazi saiu com status de erro"));
-        }
-        Ok(Err(e)) => {
-            dashboard.push_toast(Toast::error(format!("falha ao executar Yazi: {e}")));
-        }
-        Err(e) => {
-            dashboard.push_toast(Toast::error(format!("falha ao aguardar Yazi: {e}")));
-        }
-    }
-
-    // 3. Restaura suavemente o modo TUI do Ratatui.
-    let _ = enable_raw_mode();
-    let mut stdout = std::io::stdout();
-    let _ = execute!(stdout, EnterAlternateScreen);
-    let _ = stdout.flush();
-    let _ = terminal.hide_cursor();
-    let _ = terminal.clear();
-    let _ = dashboard.draw(terminal);
-}
+/// Desconecta o Wi-Fi ativo via NetworkManager.
 async fn disconnect_wifi(
     dashboard: &mut Dashboard,
     backends: &Arc<Backends>,
@@ -576,4 +584,56 @@ async fn disconnect_wifi(
         let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn plain_char_maps_to_utf8_bytes() {
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Char('a'), KeyModifiers::NONE)), Some(b"a".to_vec()));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Char('Z'), KeyModifiers::NONE)), Some(b"Z".to_vec()));
+    }
+
+    #[test]
+    fn ctrl_letter_maps_to_control_byte() {
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(vec![0x03]));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Char('a'), KeyModifiers::CONTROL)), Some(vec![0x01]));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Char('q'), KeyModifiers::CONTROL)), Some(vec![0x11]));
+    }
+
+    #[test]
+    fn alt_char_is_esc_prefixed() {
+        assert_eq!(
+            crossterm_key_to_bytes(&key(KeyCode::Char('j'), KeyModifiers::ALT)),
+            Some(vec![0x1B, b'j'])
+        );
+    }
+
+    #[test]
+    fn arrows_map_to_ansi_csi() {
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Up, KeyModifiers::NONE)), Some(vec![0x1B, b'[', b'A']));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Left, KeyModifiers::NONE)), Some(vec![0x1B, b'[', b'D']));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Enter, KeyModifiers::NONE)), Some(vec![b'\r']));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Backspace, KeyModifiers::NONE)), Some(vec![0x7F]));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::Tab, KeyModifiers::NONE)), Some(vec![0x09]));
+    }
+
+    #[test]
+    fn function_keys_have_sequences() {
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::F(1), KeyModifiers::NONE)), Some(b"\x1bOP".to_vec()));
+        assert_eq!(crossterm_key_to_bytes(&key(KeyCode::F(12), KeyModifiers::NONE)), Some(b"\x1b[24~".to_vec()));
+    }
+
+    #[test]
+    fn tab_all_indexes_are_five() {
+        assert_eq!(Tab::ALL.len(), 5);
+        assert_eq!(Tab::Files.index(), 4);
+    }
 }

@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Widget};
 
 use crate::ai_agent::ipc_server::Gatekeeper;
-use crate::ai_agent::pty_session::PtySession;
+use crate::ai_agent::pty_session::{render_screen, PtySession};
 
 /// Estado agregado do AI Terminal Deck para renderização.
 pub struct AiDeckState {
@@ -127,70 +127,5 @@ fn render_placeholder(lines: &[Line<'_>], area: Rect, buf: &mut Buffer) {
             area.width as usize,
             Style::new().fg(Color::Gray),
         );
-    }
-}
-
-/// Copia a tela virtual `vt100` para o buffer do Ratatui, célula a célula.
-fn render_screen(screen: &vt100::Screen, area: Rect, buf: &mut Buffer) {
-    let (screen_rows, screen_cols) = screen.size();
-    let rows = screen_rows.min(area.height);
-    let cols = screen_cols.min(area.width);
-
-    for y in 0..rows {
-        for x in 0..cols {
-            let Some(cell) = screen.cell(y, x) else {
-                continue;
-            };
-            // Células de continuação de caracteres largos são puladas; o símbolo
-            // de largura dupla já foi colocado na célula `is_wide`.
-            if cell.is_wide_continuation() {
-                continue;
-            }
-
-            let target = &mut buf[(area.x + x, area.y + y)];
-            target.set_symbol(cell.contents());
-
-            let mut style = Style::new();
-            if cell.bold() {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            if cell.dim() {
-                style = style.add_modifier(Modifier::DIM);
-            }
-            if cell.italic() {
-                style = style.add_modifier(Modifier::ITALIC);
-            }
-            if cell.underline() {
-                style = style.add_modifier(Modifier::UNDERLINED);
-            }
-            if cell.inverse() {
-                style = style.add_modifier(Modifier::REVERSED);
-            }
-            if let Some(fg) = vt100_color(cell.fgcolor()) {
-                style = style.fg(fg);
-            }
-            if let Some(bg) = vt100_color(cell.bgcolor()) {
-                style = style.bg(bg);
-            }
-            target.set_style(style);
-        }
-    }
-
-    // Cursor: invertido sobre a célula atual para destacar a posição do agente.
-    if !screen.hide_cursor() && rows > 0 && cols > 0 {
-        let (cursor_row, cursor_col) = screen.cursor_position();
-        let x = area.x + cursor_col.min(cols - 1);
-        let y = area.y + cursor_row.min(rows - 1);
-        let cell = &mut buf[(x, y)];
-        cell.modifier.insert(Modifier::REVERSED);
-    }
-}
-
-/// Converte uma cor `vt100` para a cor correspondente do Ratatui.
-fn vt100_color(color: vt100::Color) -> Option<Color> {
-    match color {
-        vt100::Color::Default => None,
-        vt100::Color::Idx(index) => Some(Color::Indexed(index)),
-        vt100::Color::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
     }
 }

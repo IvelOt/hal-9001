@@ -9,10 +9,12 @@
 pub mod dashboard;
 pub mod file_manager;
 pub mod toast;
+pub mod yazi_dock;
 
 use ratatui::style::Color;
 
 pub use dashboard::Dashboard;
+pub use yazi_dock::YaziDock;
 
 /// Fundo escuro da interface (cinza escuro `#1A1D23`).
 pub const BG: Color = Color::Rgb(0x1A, 0x1D, 0x23);
