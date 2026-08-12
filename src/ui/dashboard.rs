@@ -78,6 +78,26 @@ impl Tab {
     }
 }
 
+/// Estado do **Modal de Entrada de Senha** Wi-Fi (rede protegida nunca salva).
+pub struct WifiPasswordModal {
+    /// Caminho de objeto D-Bus do ponto de acesso alvo.
+    pub ap_path: String,
+    /// SSID exibido no título do modal.
+    pub ssid: String,
+    /// Passphrase digitada até o momento (exibida como `****`).
+    pub input: String,
+}
+
+impl WifiPasswordModal {
+    pub fn new(ap_path: String, ssid: String) -> Self {
+        Self {
+            ap_path,
+            ssid,
+            input: String::new(),
+        }
+    }
+}
+
 /// Estado completo do dashboard renderizado pelo loop principal.
 pub struct Dashboard {
     pub tab: Tab,
@@ -98,6 +118,8 @@ pub struct Dashboard {
     pub files: FileManagerState,
     /// PTY Dock do Yazi embarcado na aba Arquivos (estilo `:terminal`).
     pub yazi_dock: YaziDock,
+    /// Modal flutuante de entrada de senha Wi-Fi (rede protegida nunca salva).
+    pub wifi_modal: Option<WifiPasswordModal>,
 }
 
 impl Default for Dashboard {
@@ -125,6 +147,7 @@ impl Dashboard {
             host: crate::config::collect_host_info(),
             files: FileManagerState::load(),
             yazi_dock,
+            wifi_modal: None,
         }
     }
 
@@ -204,6 +227,7 @@ impl Dashboard {
         self.render_body(chunks[1], frame);
         self.render_status_bar(chunks[2], frame.buffer_mut());
         self.render_consent_modal(frame);
+        self.render_wifi_modal(frame);
         // Toasts por cima de tudo, no canto inferior direito.
         let bar = ToastBar::new(self.toasts.clone());
         frame.render_widget(bar, area);
@@ -276,6 +300,10 @@ impl Dashboard {
                     height: area.height.saturating_sub(2),
                 };
                 self.yazi_dock.resize(inner.height, inner.width);
+                // Limpa a área inteira antes de desenhar o PTY do Yazi: evita que
+                // texto de outras abas (Rede, Discos) vaze por trás dos painéis
+                // quando a tela virtual do vt100 for menor que a área atual.
+                frame.render_widget(Clear, area);
                 frame.render_widget(YaziDockWidget::new(&self.yazi_dock), area);
             }
         }
@@ -374,9 +402,15 @@ impl Dashboard {
         if m.ram {
             let total = snapshot.system.mem_total_kb;
             let used = snapshot.system.mem_used_kb();
+            let pct = if total > 0 { (used * 100 / total) as u8 } else { 0 };
             metrics.push((
                 "RAM".to_string(),
-                format!("{} / {}", human_kib(used), human_kib(total)),
+                format!(
+                    "{}  {} / {}",
+                    progress_bar(pct, 10),
+                    human_kib(used),
+                    human_kib(total)
+                ),
             ));
         }
         if m.disks {
@@ -388,7 +422,11 @@ impl Dashboard {
         }
         if m.battery {
             let battery_text = match &snapshot.primary_battery {
-                Some(bat) => format!("{:.0}%", bat.percentage),
+                Some(bat) => {
+                    let pct = bat.percentage.clamp(0.0, 100.0) as u8;
+                    let badge = battery_badge(pct, snapshot.on_battery);
+                    format!("{}  {:.0}% {}", progress_bar(pct, 10), bat.percentage, badge)
+                }
                 None => "—".to_string(),
             };
             metrics.push(("Bateria".to_string(), battery_text));
@@ -604,7 +642,7 @@ impl Dashboard {
         match self.tab {
             Tab::Home => "[1-5] aba · [q] sair",
             Tab::Storage => "[↑/↓] navegar · [m] montar/desmontar · [1-5] aba · [q] sair",
-            Tab::Network => "[↑/↓] navegar · [Enter/c] conectar · [d] desconectar · [1-5] aba · [q] sair",
+            Tab::Network => "[↑/↓] navegar · [Enter/c] conectar · [d/f] esquecer rede · [1-5] aba · [q] sair",
             Tab::Bluetooth => "[↑/↓] navegar · [b] conectar/desconectar · [1-5] aba · [q] sair",
             Tab::Files => "teclas → Yazi · [Alt+1-5] aba · [Ctrl+Q] sair",
         }
@@ -669,6 +707,61 @@ impl Dashboard {
             Span::styled("[n] Não ", Style::new().fg(DANGER).add_modifier(Modifier::BOLD)),
         ]);
         frame.render_widget(Paragraph::new(decision), chunks[2]);
+    }
+
+    // ------------------------------------------------------------------
+    // Modal de Entrada de Senha Wi-Fi
+    // ------------------------------------------------------------------
+
+    fn render_wifi_modal(&self, frame: &mut Frame) {
+        let Some(modal) = &self.wifi_modal else {
+            return;
+        };
+
+        let area = frame.area();
+        let modal_area = centered_rect(60, 24, area);
+
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(ACCENT))
+            .style(Style::new().bg(BG))
+            .title(Line::from(Span::styled(
+                " CONECTAR — SENHA WI-FI ",
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )))
+            .title_style(Style::new().fg(ACCENT));
+
+        frame.render_widget(Clear, modal_area);
+        let inner = block.inner(modal_area);
+        block.render(modal_area, frame.buffer_mut());
+
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+        let ssid_line = Line::from(vec![
+            Span::styled(" rede: ", Style::new().fg(GRAY)),
+            Span::styled(modal.ssid.clone(), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        ]);
+        frame.render_widget(Paragraph::new(ssid_line), chunks[0]);
+
+        let masked: String = "*".repeat(modal.input.chars().count());
+        let password_field = Line::from(vec![
+            Span::styled(" senha: ", Style::new().fg(GRAY)),
+            Span::styled(masked, Style::new().fg(TEXT)),
+            Span::styled("▏", Style::new().fg(ACCENT)),
+        ]);
+        frame.render_widget(Paragraph::new(password_field), chunks[1]);
+
+        let hint = Line::from(Span::styled(
+            " [Enter] conectar  ·  [Esc] cancelar  ·  [Backspace] apagar",
+            Style::new().fg(GRAY),
+        ));
+        frame.render_widget(Paragraph::new(hint), chunks[3]);
     }
 
     // ------------------------------------------------------------------
@@ -882,7 +975,61 @@ fn pad(value: String, width: usize) -> String {
     result
 }
 
+/// Desenha uma barra de progresso textual estilo `[██████░░░░] 60%`.
+fn progress_bar(percent: u8, width: usize) -> String {
+    let percent = percent.min(100);
+    let filled = (percent as usize * width) / 100;
+    let empty = width.saturating_sub(filled);
+    format!(
+        "[{}{}] {:>3}%",
+        "█".repeat(filled),
+        "░".repeat(empty),
+        percent
+    )
+}
+
+/// Badge textual de bateria: indica carregando/crítica junto ao percentual.
+fn battery_badge(percent: u8, on_battery: Option<bool>) -> &'static str {
+    match on_battery {
+        Some(false) => "⚡ carregando",
+        _ if percent <= 15 => "⚠ crítica",
+        _ => "",
+    }
+}
+
 /// Extrai o nome do shell (basename) a partir do caminho `$SHELL`.
 fn shell_name(shell: &str) -> String {
     shell.trim_end_matches('/').rsplit('/').next().unwrap_or(shell).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_bar_renders_filled_and_empty_blocks() {
+        assert_eq!(progress_bar(0, 10), "[░░░░░░░░░░]   0%");
+        assert_eq!(progress_bar(100, 10), "[██████████] 100%");
+        assert_eq!(progress_bar(60, 10), "[██████░░░░]  60%");
+    }
+
+    #[test]
+    fn progress_bar_clamps_above_100() {
+        assert_eq!(progress_bar(255, 10), "[██████████] 100%");
+    }
+
+    #[test]
+    fn battery_badge_flags_charging_and_critical() {
+        assert_eq!(battery_badge(50, Some(false)), "⚡ carregando");
+        assert_eq!(battery_badge(10, Some(true)), "⚠ crítica");
+        assert_eq!(battery_badge(80, Some(true)), "");
+        assert_eq!(battery_badge(80, None), "");
+    }
+
+    #[test]
+    fn wifi_password_modal_starts_with_empty_input() {
+        let modal = WifiPasswordModal::new("/ap/path".to_string(), "MinhaRede".to_string());
+        assert_eq!(modal.ssid, "MinhaRede");
+        assert!(modal.input.is_empty());
+    }
 }

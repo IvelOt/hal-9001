@@ -85,6 +85,8 @@ pub struct AccessPointInfo {
     pub object_path: String,
     /// `true` se este é o ponto de acesso atualmente ativo.
     pub is_active: bool,
+    /// `true` se a rede exige autenticação (WEP/WPA/WPA2/WPA3).
+    pub is_secured: bool,
 }
 
 /// Proxy para a interface principal `org.freedesktop.NetworkManager`.
@@ -109,6 +111,14 @@ trait NetworkManager {
         device: OwnedObjectPath,
         specific_object: OwnedObjectPath,
     ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
+
+    /// Ativa uma conexão já salva em `Settings` (reconexão sem nova senha).
+    fn activate_connection(
+        &self,
+        connection: OwnedObjectPath,
+        device: OwnedObjectPath,
+        specific_object: OwnedObjectPath,
+    ) -> zbus::Result<OwnedObjectPath>;
 
     /// Desativa uma conexão ativa (desconecta).
     fn deactivate_connection(&self, active_connection: OwnedObjectPath) -> zbus::Result<()>;
@@ -172,6 +182,42 @@ trait AccessPoint {
     /// Força do sinal em percentual (0 a 100).
     #[zbus(property)]
     fn strength(&self) -> zbus::Result<u8>;
+
+    /// Flags de capacidade do AP (bit 0x1 = privacidade/WEP).
+    #[zbus(property)]
+    fn flags(&self) -> zbus::Result<u32>;
+
+    /// Flags de segurança WPA (0 quando a rede não usa WPA).
+    #[zbus(property)]
+    fn wpa_flags(&self) -> zbus::Result<u32>;
+
+    /// Flags de segurança RSN/WPA2/WPA3 (0 quando a rede não usa RSN).
+    #[zbus(property)]
+    fn rsn_flags(&self) -> zbus::Result<u32>;
+}
+
+/// Proxy para `org.freedesktop.NetworkManager.Settings` (perfis salvos).
+#[proxy(
+    interface = "org.freedesktop.NetworkManager.Settings",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/org/freedesktop/NetworkManager/Settings"
+)]
+trait Settings {
+    /// Caminhos de objeto de todos os perfis de conexão salvos.
+    fn list_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+}
+
+/// Proxy para `org.freedesktop.NetworkManager.Settings.Connection` (um perfil salvo).
+#[proxy(
+    interface = "org.freedesktop.NetworkManager.Settings.Connection",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+trait SettingsConnection {
+    /// Lê as configurações (`a{sa{sv}}`) do perfil salvo.
+    fn get_settings(&self) -> zbus::Result<HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>;
+
+    /// Apaga permanentemente o perfil salvo.
+    fn delete(&self) -> zbus::Result<()>;
 }
 
 /// Proxy para `org.freedesktop.NetworkManager.Connection.Active`.
@@ -294,12 +340,19 @@ impl Network {
                     .as_ref()
                     .map(|a| a.access_point_path == ap_path.as_str())
                     .unwrap_or(false);
+                let flags = ap.flags().await.unwrap_or(0);
+                let wpa_flags = ap.wpa_flags().await.unwrap_or(0);
+                let rsn_flags = ap.rsn_flags().await.unwrap_or(0);
+                // Bit 0x1 de `Flags` = NM_802_11_AP_FLAGS_PRIVACY (WEP); qualquer
+                // WPA/RSN flag != 0 indica WPA/WPA2/WPA3.
+                let is_secured = (flags & 0x1) != 0 || wpa_flags != 0 || rsn_flags != 0;
                 access_points.push(AccessPointInfo {
                     ssid: decode_ssid(&ap.ssid().await.unwrap_or_default()),
                     strength: ap.strength().await.unwrap_or(0),
                     interface: interface.clone(),
                     object_path: ap_path.to_string(),
                     is_active,
+                    is_secured,
                 });
             }
         }
@@ -323,6 +376,20 @@ impl Network {
     ///
     /// Ação mutável — o resultado é refletido como Toast na TUI.
     pub async fn connect_access_point(&self, ap_path: &str) -> Result<()> {
+        self.connect_access_point_with_password(ap_path, None).await
+    }
+
+    /// Conecta a um ponto de acesso Wi-Fi, opcionalmente enviando uma
+    /// passphrase WPA-PSK. Quando já existe um perfil salvo para o SSID do
+    /// AP, reativa esse perfil (`ActivateConnection`) em vez de criar um novo
+    /// — dispensando reenviar a senha de redes já conhecidas.
+    ///
+    /// Ação mutável — o resultado é refletido como Toast na TUI.
+    pub async fn connect_access_point_with_password(
+        &self,
+        ap_path: &str,
+        passphrase: Option<&str>,
+    ) -> Result<()> {
         let nm = NetworkManagerProxy::new(&self.connection).await?;
 
         // Localiza o dispositivo sem fio que hospeda o ponto de acesso.
@@ -332,7 +399,6 @@ impl Network {
             .await
             .with_context(|| format!("falha ao ler SSID de {ap_path}"))?;
 
-        let connection = build_wireless_connection(&ssid);
         let ap: OwnedObjectPath = ap_path
             .try_into()
             .with_context(|| format!("caminho de AP inválido: {ap_path}"))?;
@@ -341,10 +407,70 @@ impl Network {
             .try_into()
             .with_context(|| format!("caminho de dispositivo inválido: {device_path}"))?;
 
+        if let Some(saved_path) = self.saved_connection_for_ssid(&ssid).await? {
+            nm.activate_connection(saved_path, device, ap)
+                .await
+                .context("falha ao reativar perfil salvo via NetworkManager")?;
+            return Ok(());
+        }
+
+        let connection = build_wireless_connection(&ssid, passphrase);
         nm.add_and_activate_connection(connection, device, ap)
             .await
             .context("falha ao conectar ao ponto de acesso via NetworkManager")?;
         Ok(())
+    }
+
+    /// `true` quando já existe um perfil de conexão salvo para o SSID.
+    pub async fn has_saved_connection(&self, ssid: &str) -> Result<bool> {
+        Ok(self.saved_connection_for_ssid(ssid).await?.is_some())
+    }
+
+    /// Apaga o perfil de conexão salvo para o SSID informado, se existir.
+    ///
+    /// Ação mutável — o resultado é refletido como Toast na TUI.
+    pub async fn forget_connection(&self, ssid: &str) -> Result<()> {
+        let Some(conn_path) = self.saved_connection_for_ssid(ssid).await? else {
+            anyhow::bail!("nenhum perfil salvo encontrado para {ssid}");
+        };
+        let conn = SettingsConnectionProxy::new(&self.connection, conn_path)
+            .await
+            .context("falha ao criar proxy Settings.Connection")?;
+        conn.delete()
+            .await
+            .context("falha ao apagar perfil de conexão salvo")
+    }
+
+    /// Procura, entre os perfis salvos em `Settings`, um cujo SSID Wi-Fi
+    /// corresponda ao informado.
+    async fn saved_connection_for_ssid(&self, ssid: &str) -> Result<Option<OwnedObjectPath>> {
+        let settings = SettingsProxy::new(&self.connection).await?;
+        let connections = settings
+            .list_connections()
+            .await
+            .context("falha ao listar perfis salvos do NetworkManager")?;
+
+        for conn_path in connections {
+            let conn = SettingsConnectionProxy::new(&self.connection, conn_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Settings.Connection para {conn_path}"))?;
+            let Ok(mut settings_map) = conn.get_settings().await else {
+                continue;
+            };
+            let Some(mut wireless) = settings_map.remove("802-11-wireless") else {
+                continue;
+            };
+            let Some(raw_ssid) = wireless.remove("ssid") else {
+                continue;
+            };
+            let Ok(bytes) = Vec::<u8>::try_from(raw_ssid) else {
+                continue;
+            };
+            if decode_ssid(&bytes) == ssid {
+                return Ok(Some(conn_path));
+            }
+        }
+        Ok(None)
     }
 
     /// Desconecta o Wi-Fi ativo desativando a conexão ativa atual.
@@ -435,8 +561,12 @@ fn decode_ssid(bytes: &[u8]) -> String {
 }
 
 /// Monta o dicionário de configuração D-Bus (`a{sa{sv}}`) para uma conexão
-/// Wi-Fi aberta, usada por `AddAndActivateConnection`.
-fn build_wireless_connection(ssid: &str) -> HashMap<String, HashMap<String, Value<'static>>> {
+/// Wi-Fi, usada por `AddAndActivateConnection`. Quando `passphrase` é
+/// informada, adiciona a seção `802-11-wireless-security` (WPA-PSK).
+fn build_wireless_connection(
+    ssid: &str,
+    passphrase: Option<&str>,
+) -> HashMap<String, HashMap<String, Value<'static>>> {
     let mut connection = HashMap::new();
     connection.insert("type".to_string(), Value::new("802-11-wireless"));
 
@@ -457,6 +587,13 @@ fn build_wireless_connection(ssid: &str) -> HashMap<String, HashMap<String, Valu
     root.insert("802-11-wireless".to_string(), wireless);
     root.insert("ipv4".to_string(), ipv4);
     root.insert("ipv6".to_string(), ipv6);
+
+    if let Some(passphrase) = passphrase.filter(|p| !p.is_empty()) {
+        let mut security = HashMap::new();
+        security.insert("key-mgmt".to_string(), Value::new("wpa-psk"));
+        security.insert("psk".to_string(), Value::new(passphrase.to_string()));
+        root.insert("802-11-wireless-security".to_string(), security);
+    }
     root
 }
 
@@ -481,5 +618,28 @@ mod tests {
         assert_eq!(NetworkDeviceType::from(2), NetworkDeviceType::Wifi);
         assert_eq!(NetworkDeviceType::from(1), NetworkDeviceType::Ethernet);
         assert_eq!(NetworkDeviceType::from(999), NetworkDeviceType::Unknown);
+    }
+
+    #[test]
+    fn build_wireless_connection_without_passphrase_has_no_security_section() {
+        let conn = build_wireless_connection("MinhaRede", None);
+        assert!(!conn.contains_key("802-11-wireless-security"));
+        assert!(conn.contains_key("802-11-wireless"));
+    }
+
+    #[test]
+    fn build_wireless_connection_with_passphrase_adds_wpa_psk_section() {
+        let conn = build_wireless_connection("MinhaRede", Some("segredo123"));
+        let security = conn
+            .get("802-11-wireless-security")
+            .expect("seção de segurança ausente");
+        assert!(security.contains_key("psk"));
+        assert!(security.contains_key("key-mgmt"));
+    }
+
+    #[test]
+    fn build_wireless_connection_ignores_empty_passphrase() {
+        let conn = build_wireless_connection("MinhaRede", Some(""));
+        assert!(!conn.contains_key("802-11-wireless-security"));
     }
 }

@@ -17,7 +17,7 @@ use crossterm::terminal::{
 use hall_9001::ai_agent::ipc_server::{Gatekeeper, IpcServer};
 use hall_9001::ai_agent::widget::AiDeckState;
 use hall_9001::events::{collect_snapshot, AppEvent, Backends, EventLoop};
-use hall_9001::ui::dashboard::Tab;
+use hall_9001::ui::dashboard::{Tab, WifiPasswordModal};
 use hall_9001::ui::toast::Toast;
 use hall_9001::ui::Dashboard;
 use ratatui::backend::CrosstermBackend;
@@ -194,6 +194,34 @@ async fn handle_key(
         };
     }
 
+    // Modal de senha Wi-Fi: captura teclas até confirmar (`Enter`) ou cancelar
+    // (`Esc`), sem interferir na navegação normal das abas.
+    if dashboard.wifi_modal.is_some() {
+        return match key.code {
+            KeyCode::Enter => {
+                connect_wifi_with_password(dashboard, backends, tx).await;
+                false
+            }
+            KeyCode::Esc => {
+                dashboard.wifi_modal = None;
+                false
+            }
+            KeyCode::Backspace => {
+                if let Some(modal) = &mut dashboard.wifi_modal {
+                    modal.input.pop();
+                }
+                false
+            }
+            KeyCode::Char(c) => {
+                if let Some(modal) = &mut dashboard.wifi_modal {
+                    modal.input.push(c);
+                }
+                false
+            }
+            _ => false,
+        };
+    }
+
     let current = dashboard.tab;
 
     // Aba de Arquivos — o Yazi roda num PTY embarcado (`YaziDock`), no estilo
@@ -266,9 +294,9 @@ async fn handle_key(
             }
             false
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('d') | KeyCode::Char('f') => {
             if dashboard.tab == Tab::Network {
-                disconnect_wifi(dashboard, backends, tx).await;
+                forget_wifi(dashboard, backends, tx).await;
             }
             false
         }
@@ -510,6 +538,10 @@ async fn toggle_bluetooth(
 }
 
 /// Conecta ao ponto de acesso Wi-Fi selecionado via NetworkManager.
+///
+/// Redes abertas ou já salvas conectam direto; redes protegidas nunca salvas
+/// abrem o [`WifiPasswordModal`] para coletar a passphrase WPA-PSK antes de
+/// disparar a conexão.
 async fn connect_wifi(
     dashboard: &mut Dashboard,
     backends: &Arc<Backends>,
@@ -524,9 +556,42 @@ async fn connect_wifi(
     };
     let ap_path = ap.object_path.clone();
     let ssid = ap.ssid.clone();
+    let is_secured = ap.is_secured;
 
-    let backends = backends.clone();
-    let tx = tx.clone();
+    if is_secured {
+        let already_saved = match &backends.network {
+            Some(network) => network.has_saved_connection(&ssid).await.unwrap_or(false),
+            None => false,
+        };
+        if !already_saved {
+            dashboard.wifi_modal = Some(WifiPasswordModal::new(ap_path, ssid));
+            return;
+        }
+    }
+
+    spawn_connect(ap_path, ssid, None, backends.clone(), tx.clone());
+}
+
+/// Confirma o modal de senha Wi-Fi e dispara a conexão com a passphrase digitada.
+async fn connect_wifi_with_password(
+    dashboard: &mut Dashboard,
+    backends: &Arc<Backends>,
+    tx: &mpsc::Sender<AppEvent>,
+) {
+    let Some(modal) = dashboard.wifi_modal.take() else {
+        return;
+    };
+    spawn_connect(modal.ap_path, modal.ssid, Some(modal.input), backends.clone(), tx.clone());
+}
+
+/// Dispara a tarefa em segundo plano que conecta ao ponto de acesso.
+fn spawn_connect(
+    ap_path: String,
+    ssid: String,
+    password: Option<String>,
+    backends: Arc<Backends>,
+    tx: mpsc::Sender<AppEvent>,
+) {
     tokio::spawn(async move {
         use hall_9001::ui::toast::ToastLevel;
         let Some(network) = &backends.network else {
@@ -542,7 +607,9 @@ async fn connect_wifi(
                 ToastLevel::Info,
             )))
             .await;
-        let result = network.connect_access_point(&ap_path).await;
+        let result = network
+            .connect_access_point_with_password(&ap_path, password.as_deref())
+            .await;
         let (message, level) = match result {
             Ok(()) => (format!("Conectado com sucesso a {label}"), ToastLevel::Success),
             Err(e) => (format!("erro ao conectar a {label}: {e}"), ToastLevel::Error),
@@ -552,17 +619,21 @@ async fn connect_wifi(
     });
 }
 
-/// Desconecta o Wi-Fi ativo via NetworkManager.
-async fn disconnect_wifi(
+/// Esquece (apaga) o perfil de conexão salvo da rede selecionada, via
+/// NetworkManager `Settings.Connection.Delete`, com notificação por Toast.
+async fn forget_wifi(
     dashboard: &mut Dashboard,
     backends: &Arc<Backends>,
     tx: &mpsc::Sender<AppEvent>,
 ) {
-    let active_ssid = dashboard
+    let Some(ap) = dashboard
         .snapshot
         .as_ref()
-        .and_then(|s| s.network.active.as_ref())
-        .map(|w| w.ssid.clone());
+        .and_then(|s| s.network.access_points.get(dashboard.network_index))
+    else {
+        return;
+    };
+    let ssid = ap.ssid.clone();
 
     let backends = backends.clone();
     let tx = tx.clone();
@@ -573,13 +644,11 @@ async fn disconnect_wifi(
             let _ = tx.send(AppEvent::Refresh).await;
             return;
         };
-        let result = network.disconnect_wireless().await;
+        let label = if ssid.is_empty() { "(rede oculta)".to_string() } else { ssid.clone() };
+        let result = network.forget_connection(&ssid).await;
         let (message, level) = match result {
-            Ok(()) => {
-                let target = active_ssid.unwrap_or_else(|| "rede atual".to_string());
-                (format!("wi-fi desconectado de {target}"), ToastLevel::Success)
-            }
-            Err(e) => (format!("erro ao desconectar wi-fi: {e}"), ToastLevel::Error),
+            Ok(()) => (format!("rede esquecida: {label}"), ToastLevel::Success),
+            Err(e) => (format!("erro ao esquecer {label}: {e}"), ToastLevel::Error),
         };
         let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;
