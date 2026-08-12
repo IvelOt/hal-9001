@@ -71,6 +71,21 @@ pub struct WifiInfo {
     pub access_point_path: String,
 }
 
+/// Um ponto de acesso sem fio visível pelo dispositivo.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccessPointInfo {
+    /// SSID da rede (bytes decodificados como UTF-8).
+    pub ssid: String,
+    /// Força do sinal em percentual (0 a 100).
+    pub strength: u8,
+    /// Nome da interface de rede associada (ex.: `wlan0`).
+    pub interface: String,
+    /// Caminho de objeto D-Bus do ponto de acesso.
+    pub object_path: String,
+    /// `true` se este é o ponto de acesso atualmente ativo.
+    pub is_active: bool,
+}
+
 /// Proxy para a interface principal `org.freedesktop.NetworkManager`.
 #[proxy(
     interface = "org.freedesktop.NetworkManager",
@@ -81,6 +96,9 @@ trait NetworkManager {
     /// Caminhos de objeto das conexões ativas.
     #[zbus(property)]
     fn active_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+
+    /// Retorna os caminhos de objeto de todos os dispositivos de rede.
+    fn get_all_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 
     /// `true` se o Wi-Fi está habilitado no momento.
     #[zbus(property)]
@@ -123,6 +141,9 @@ trait WirelessDevice {
     /// Ponto de acesso atualmente ativo (caminho `/` quando desconectado).
     #[zbus(property)]
     fn active_access_point(&self) -> zbus::Result<OwnedObjectPath>;
+
+    /// Retorna os caminhos de objeto de todos os pontos de acesso visíveis.
+    fn get_all_access_points(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
 /// Proxy para `org.freedesktop.NetworkManager.AccessPoint`.
@@ -221,6 +242,58 @@ impl Network {
         nm.wireless_enabled()
             .await
             .context("falha ao ler WirelessEnabled do NetworkManager")
+    }
+
+    /// Lista todos os pontos de acesso visíveis em todos os dispositivos sem fio,
+    /// com SSID e força do sinal. Marca o ponto de acesso ativo (`is_active`).
+    pub async fn access_points(&self) -> Result<Vec<AccessPointInfo>> {
+        let nm = NetworkManagerProxy::new(&self.connection).await?;
+        let device_paths = nm
+            .get_all_devices()
+            .await
+            .context("falha ao chamar NetworkManager.GetAllDevices")?;
+
+        let active = self.active_wifi().await.ok().flatten();
+
+        let mut access_points = Vec::new();
+        for dev_path in device_paths {
+            let device = DeviceProxy::new(&self.connection, dev_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Device para {dev_path}"))?;
+
+            if NetworkDeviceType::from(device.device_type().await.unwrap_or(0))
+                != NetworkDeviceType::Wifi
+            {
+                continue;
+            }
+
+            let interface = device.interface().await.unwrap_or_default();
+            let wireless = WirelessDeviceProxy::new(&self.connection, dev_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Wireless para {dev_path}"))?;
+
+            for ap_path in wireless.get_all_access_points().await.unwrap_or_default() {
+                let ap = AccessPointProxy::new(&self.connection, ap_path.clone())
+                    .await
+                    .with_context(|| format!("falha ao criar proxy AccessPoint para {ap_path}"))?;
+
+                let is_active = active
+                    .as_ref()
+                    .map(|a| a.access_point_path == ap_path.as_str())
+                    .unwrap_or(false);
+                access_points.push(AccessPointInfo {
+                    ssid: decode_ssid(&ap.ssid().await.unwrap_or_default()),
+                    strength: ap.strength().await.unwrap_or(0),
+                    interface: interface.clone(),
+                    object_path: ap_path.to_string(),
+                    is_active,
+                });
+            }
+        }
+
+        // Ordena por força do sinal (decrescente) para destacar as melhores redes.
+        access_points.sort_by(|a, b| b.strength.cmp(&a.strength));
+        Ok(access_points)
     }
 
     /// Retorna `true` se o hardware sem fio está presente e habilitado.

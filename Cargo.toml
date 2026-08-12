@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1.40", features = ["full"] }
 zbus = "4.4"
 futures-util = "0.3"

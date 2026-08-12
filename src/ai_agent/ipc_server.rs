@@ -419,6 +419,13 @@ impl IpcServer {
 
 type PtySlot = Arc<RwLock<Option<Arc<dyn PtyTarget + Send + Sync>>>>;
 
+impl Drop for IpcServer {
+    /// Remove o arquivo de socket ao encerrar, evitando sockets órfãos.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
 /// Atende um cliente: lê requisições linha a linha e responde em JSON-RPC 2.0.
 async fn handle_client(
     stream: UnixStream,
