@@ -122,9 +122,17 @@ impl Storage {
             let hint_system = block.hint_system().await.unwrap_or(false);
 
             let device_bytes = block.device().await.unwrap_or_default();
+            let device = String::from_utf8_lossy(&device_bytes).into_owned();
+
+            // Filtra swap/espaço de troca (ex.: `/dev/zram0`) da listagem
+            // principal de discos — não é mídia de usuário montável.
+            if is_swap_device(&device) {
+                continue;
+            }
+
             devices.push(BlockDevice {
                 object_path: path.to_string(),
-                device: String::from_utf8_lossy(&device_bytes).into_owned(),
+                device,
                 label: block.id_label().await.unwrap_or_default(),
                 uuid: block.id_uuid().await.unwrap_or_default(),
                 size: block.size().await.unwrap_or(0),
@@ -195,4 +203,25 @@ fn default_options() -> HashMap<String, Value<'static>> {
         Value::Bool(true),
     );
     options
+}
+
+/// `true` se o device node é swap/ZRAM (ex.: `/dev/zram0`), filtrado da
+/// listagem principal de discos por não ser mídia de usuário montável.
+fn is_swap_device(device: &str) -> bool {
+    let trimmed = device.trim_start_matches('/');
+    trimmed == "dev/zram" || trimmed.starts_with("dev/zram")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_zram_swap_devices() {
+        assert!(is_swap_device("/dev/zram0"));
+        assert!(is_swap_device("/dev/zram1"));
+        assert!(is_swap_device("/dev/zram"));
+        assert!(!is_swap_device("/dev/sda1"));
+        assert!(!is_swap_device("/dev/nvme0n1p2"));
+    }
 }

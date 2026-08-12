@@ -130,7 +130,7 @@ async fn run_loop(
         if let Some(event) = event {
             match event {
                 AppEvent::Key(key) => {
-                    if handle_key(dashboard, key, &backends, tx).await {
+                    if handle_key(terminal, dashboard, &key, &backends, tx).await {
                         break;
                     }
                 }
@@ -163,9 +163,14 @@ async fn run_loop(
 }
 
 /// Processa uma tecla pressionada. Retorna `true` quando o aplicativo deve sair.
+///
+/// O `terminal` é necessário para a aba de Arquivos: `[Enter]`/`[f]` suspendem
+/// o raw mode do Ratatui, executam o Yazi nativamente e restauram a TUI ao
+/// sair do subprocesso.
 async fn handle_key(
+    terminal: &mut ratatui::Terminal<CrosstermBackend<std::io::Stdout>>,
     dashboard: &mut Dashboard,
-    key: KeyEvent,
+    key: &KeyEvent,
     backends: &Arc<Backends>,
     tx: &mpsc::Sender<AppEvent>,
 ) -> bool {
@@ -192,7 +197,7 @@ async fn handle_key(
 
     let current = dashboard.tab;
 
-    // Navegação da aba de Arquivos (File Manager).
+    // Aba de Arquivos — integra o Yazi File Manager nativamente.
     if current == Tab::Files {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => return true,
@@ -202,21 +207,12 @@ async fn handle_key(
             KeyCode::Char('3') => return select_tab(dashboard, Tab::Network),
             KeyCode::Char('4') => return select_tab(dashboard, Tab::Bluetooth),
             KeyCode::Char('5') => return select_tab(dashboard, Tab::Files),
-            KeyCode::Up | KeyCode::Char('k') => dashboard.files.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') => dashboard.files.move_selection(1),
-            KeyCode::Enter => {
-                if !dashboard.files.open_selected() {
-                    dashboard.push_toast(Toast::warning("item selecionado não é uma pasta"));
-                }
+            KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
+                launch_yazi(terminal, dashboard).await;
+                return false;
             }
-            KeyCode::Backspace | KeyCode::Char('h') => {
-                if !dashboard.files.go_up() {
-                    dashboard.push_toast(Toast::info("já está na raiz"));
-                }
-            }
-            _ => return handle_tab_switch(dashboard, key),
+            _ => return handle_tab_switch(dashboard, *key),
         }
-        return false;
     }
 
     match key.code {
@@ -484,9 +480,16 @@ async fn connect_wifi(
             return;
         };
         let label = if ssid.is_empty() { "(rede oculta)".to_string() } else { ssid };
+        // Status intermediário enquanto a conexão ocorre.
+        let _ = tx
+            .send(AppEvent::Toast(Toast::new(
+                format!("Conectando a {label}…"),
+                ToastLevel::Info,
+            )))
+            .await;
         let result = network.connect_access_point(&ap_path).await;
         let (message, level) = match result {
-            Ok(()) => (format!("conectando a {label}…"), ToastLevel::Info),
+            Ok(()) => (format!("Conectado com sucesso a {label}"), ToastLevel::Success),
             Err(e) => (format!("erro ao conectar a {label}: {e}"), ToastLevel::Error),
         };
         let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
@@ -494,7 +497,54 @@ async fn connect_wifi(
     });
 }
 
-/// Desconecta do Wi-Fi ativo via NetworkManager.
+/// Suspende a TUI Ratatui e executa o Yazi File Manager nativamente na aba 5.
+///
+/// Desativa o raw mode e sai do alternate screen, roda `/usr/sbin/yazi` como
+/// subprocesso bloqueante (fora da thread assíncrona) e, ao sair, restaura o
+/// modo TUI e redesenha o dashboard.
+async fn launch_yazi(
+    terminal: &mut ratatui::Terminal<CrosstermBackend<std::io::Stdout>>,
+    dashboard: &mut Dashboard,
+) {
+    // 1. Suspende o raw mode + alternate screen da TUI Ratatui.
+    let _ = terminal.show_cursor();
+    let _ = disable_raw_mode();
+    let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, LeaveAlternateScreen);
+    let _ = stdout.flush();
+
+    // 2. Executa o Yazi como subprocesso bloqueante.
+    let status = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("/usr/sbin/yazi")
+            .status()
+            .map(|s| s.success())
+    })
+    .await;
+
+    match status {
+        Ok(Ok(true)) => {
+            dashboard.push_toast(Toast::info("Yazi encerrado"));
+        }
+        Ok(Ok(false)) => {
+            dashboard.push_toast(Toast::warning("Yazi saiu com status de erro"));
+        }
+        Ok(Err(e)) => {
+            dashboard.push_toast(Toast::error(format!("falha ao executar Yazi: {e}")));
+        }
+        Err(e) => {
+            dashboard.push_toast(Toast::error(format!("falha ao aguardar Yazi: {e}")));
+        }
+    }
+
+    // 3. Restaura suavemente o modo TUI do Ratatui.
+    let _ = enable_raw_mode();
+    let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, EnterAlternateScreen);
+    let _ = stdout.flush();
+    let _ = terminal.hide_cursor();
+    let _ = terminal.clear();
+    let _ = dashboard.draw(terminal);
+}
 async fn disconnect_wifi(
     dashboard: &mut Dashboard,
     backends: &Arc<Backends>,

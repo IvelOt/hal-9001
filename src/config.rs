@@ -82,13 +82,16 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // Logo ASCII padrão: um "HAL-9000" estilizado em caixas.
+        // Logo ASCII padrão: um "HAL-9001" limpo, centrado em 55 colunas.
+        // Todas as linhas têm exatamente 55 caracteres de largura, garantindo
+        // que nunca estourem a coluna do logo nem sobreponham as métricas.
         let logo = r#"
-  ██     ██ ███████  █████  ██      ██       ████████  ██████   ██████  ██  ██████   ██
-  ██     ██ ██      ██   ██ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
-  ██  █  ██ ███████ ███████ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
-  ██ ███ ██      ██ ██   ██ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
-   ███ ███  ███████ ██   ██ ███████ ███████     ██     ██████   ██████  ██  ██████    ██
+            ██   ██  ██████  ██            
+             ██   ██  ██  ██  ██             
+          ███████  ██████  ██           
+             ██   ██  ██  ██  ██             
+         ██   ██  ██  ██  ██████         
+          HAL-9001 · OPEN THE POD BAY DOORS           
 "#;
         Self {
             user: "user@host".to_string(),
@@ -199,11 +202,12 @@ accent = "retro"   # green | cyan | retro | magenta
 [logo]
 # Multilinha ou aponte para um arquivo com logo-file = "~/meu-logo.txt"
 logo = '''
-██     ██ ███████  █████  ██      ██       ████████  ██████   ██████  ██  ██████   ██
-██     ██ ██      ██   ██ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
-██  █  ██ ███████ ███████ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
-██ ███ ██      ██ ██   ██ ██      ██          ██    ██    ██ ██       ██ ██    ██  ██
- ███ ███  ███████ ██   ██ ███████ ███████     ██     ██████   ██████  ██  ██████    ██
+            ██   ██  ██████  ██            
+             ██   ██  ██  ██  ██             
+          ███████  ██████  ██           
+             ██   ██  ██  ██  ██             
+         ██   ██  ██  ██  ██████         
+          HAL-9001 · OPEN THE POD BAY DOORS           
 '''
 
 [metrics]

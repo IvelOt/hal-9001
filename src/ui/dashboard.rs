@@ -23,7 +23,7 @@ use crate::ai_agent::pty_session::PtyTarget;
 use crate::ai_agent::widget::AiDeckState;
 use crate::config::{load as load_config, Config, HostInfo};
 use crate::events::SystemSnapshot;
-use crate::ui::file_manager::{FileManagerState, FileManagerWidget};
+use crate::ui::file_manager::FileManagerState;
 use crate::ui::toast::{Toast, ToastBar};
 use crate::ui::{accent_color, ACCENT, BG, DANGER, DIM, GRAY, TEXT, WARN};
 
@@ -248,7 +248,7 @@ impl Dashboard {
             Tab::Network => self.render_network(area, frame.buffer_mut()),
             Tab::Bluetooth => self.render_bluetooth(area, frame.buffer_mut()),
             Tab::Files => {
-                frame.render_widget(FileManagerWidget::new(&self.files), area);
+                frame.render_widget(YaziPrompt::new(), area);
             }
         }
     }
@@ -417,9 +417,10 @@ impl Dashboard {
             };
             lines.push(Line::from(Span::styled(
                 format!(
-                    "  {marker}  {}  {:<22}  {}",
-                    device.device,
-                    truncate(&label, 22),
+                    "  {:<8}  {:<18}  {:<26}  {:>10}",
+                    marker,
+                    truncate(&device.device, 18),
+                    truncate(&label, 26),
                     human_bytes(device.size)
                 ),
                 style,
@@ -577,7 +578,7 @@ impl Dashboard {
             Tab::Storage => "[↑/↓] navegar · [m] montar/desmontar · [1-5] aba · [q] sair",
             Tab::Network => "[↑/↓] navegar · [Enter/c] conectar · [d] desconectar · [1-5] aba · [q] sair",
             Tab::Bluetooth => "[↑/↓] navegar · [b] conectar/desconectar · [1-5] aba · [q] sair",
-            Tab::Files => "[↑/↓ j/k] navegar · [Enter] abrir · [Backspace/h] voltar · [1-5] aba · [q] sair",
+            Tab::Files => "[Enter/f] abrir Yazi · [1-5] aba · [q] sair",
         }
     }
 
@@ -680,6 +681,85 @@ impl Dashboard {
 // ---------------------------------------------------------------------------
 // Helpers de renderização
 // ---------------------------------------------------------------------------
+
+/// Tela da aba **Arquivos**: convida o usuário a abrir o Yazi File Manager.
+///
+/// A execução nativa do Yazi é feita no loop principal (`src/main.rs`), que
+/// suspende o raw mode do Ratatui, roda o subprocesso e restaura a TUI ao sair.
+pub struct YaziPrompt;
+
+impl YaziPrompt {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Widget for YaziPrompt {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width < 24 || area.height < 8 {
+            return;
+        }
+        let block = block(" ARQUIVOS · YAZI FILE MANAGER ");
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let lines: Vec<Line<'static>> = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "        ██   ██   ██████   ███████   ██    ██",
+                Style::new().fg(ACCENT),
+            )),
+            Line::from(Span::styled(
+                "        ██  ██   ██   ██  ██        ███   ███",
+                Style::new().fg(ACCENT),
+            )),
+            Line::from(Span::styled(
+                "        █████    ██   ██  ███████   █████████",
+                Style::new().fg(ACCENT),
+            )),
+            Line::from(Span::styled(
+                "        ██  ██   ██   ██       ██  ██  ██  ██",
+                Style::new().fg(ACCENT),
+            )),
+            Line::from(Span::styled(
+                "        ██   ██  ██████   ███████  ██      ██",
+                Style::new().fg(ACCENT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Pressione [f] ou [Enter] para abrir o Yazi File Manager.",
+                Style::new().fg(TEXT),
+            )),
+            Line::from(Span::styled(
+                "  [1-5] troca de aba · [q] sair",
+                Style::new().fg(GRAY),
+            )),
+        ];
+
+        let start_y = inner.y + (inner.height.saturating_sub(lines.len() as u16) / 2);
+        for (i, line) in lines.iter().enumerate() {
+            let y = start_y + i as u16;
+            if y >= inner.y + inner.height {
+                break;
+            }
+            let mut x = inner.x;
+            for span in &line.spans {
+                if x >= inner.x + inner.width {
+                    break;
+                }
+                let style = Style::new().fg(TEXT).patch(span.style);
+                buf.set_stringn(
+                    x,
+                    y,
+                    &span.content,
+                    (inner.x + inner.width - x) as usize,
+                    style,
+                );
+                x = x.saturating_add(span.width() as u16);
+            }
+        }
+    }
+}
 
 /// Bloco com bordas arredondadas e estilo Retro Terminal Minimalista.
 fn block<'a>(title: &'a str) -> Block<'a> {
