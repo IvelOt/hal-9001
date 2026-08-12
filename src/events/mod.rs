@@ -24,6 +24,7 @@ use crate::backend::bluetooth::BluetoothDevice;
 use crate::backend::network::{AccessPointInfo, Network, WifiInfo};
 use crate::backend::power::BatteryInfo;
 use crate::backend::{bluetooth::Bluetooth, controls::Controls, power::Power, storage::Storage};
+use crate::ui::toast::Toast;
 
 /// Intervalo entre amostras de telemetria dos backends.
 pub const TELEMETRY_INTERVAL: Duration = Duration::from_secs(3);
@@ -41,6 +42,8 @@ pub enum AppEvent {
     ConsentChanged,
     /// Notificação assíncrona (resultado de uma ação disparada pela TUI).
     Notice(String),
+    /// Notificação Toast com nível de severidade (Info/Success/Warning/Error).
+    Toast(Toast),
     /// Solicita a coleta imediata de uma nova amostra de telemetria.
     Refresh,
 }

@@ -15,10 +15,10 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use hall_9001::ai_agent::ipc_server::{Gatekeeper, IpcServer};
-use hall_9001::ai_agent::pty_session::{AgentCommand, AgentKind, PtySession, PtyTarget};
 use hall_9001::ai_agent::widget::AiDeckState;
 use hall_9001::events::{collect_snapshot, AppEvent, Backends, EventLoop};
 use hall_9001::ui::dashboard::Tab;
+use hall_9001::ui::toast::Toast;
 use hall_9001::ui::Dashboard;
 use ratatui::backend::CrosstermBackend;
 use tokio::signal::unix::{signal, SignalKind};
@@ -59,14 +59,6 @@ async fn main() -> Result<()> {
     }
 
     // ------------------------------------------------------------------
-    // 4. Sessão PTY do AI Terminal Deck
-    // ------------------------------------------------------------------
-    let session = spawn_pty_session();
-    if let (Some(server), Some(session)) = (&ipc, &session) {
-        server.attach_pty(session.clone());
-    }
-
-    // ------------------------------------------------------------------
     // 5. Agregador de eventos + dashboard
     // ------------------------------------------------------------------
     let events = EventLoop::new();
@@ -74,8 +66,10 @@ async fn main() -> Result<()> {
 
     let mut dashboard = Dashboard::new();
     dashboard.gatekeeper = gatekeeper.clone();
+    // AI Terminal Deck desativado na interface principal (substituído pela aba
+    // de Arquivos). O servidor IPC/Gatekeeper segue ativo para o agente.
     dashboard.deck = AiDeckState {
-        session,
+        session: None,
         gatekeeper: gatekeeper.clone(),
         ipc_socket: ipc.as_ref().map(|server| server.socket_path().to_path_buf()),
         ipc_listening: ipc.is_some(),
@@ -148,7 +142,12 @@ async fn run_loop(
                 }
                 AppEvent::ConsentChanged => {}
                 AppEvent::Notice(message) => {
-                    dashboard.message = Some(message);
+                    dashboard.message = Some(message.clone());
+                    dashboard.push_toast(Toast::info(message));
+                }
+                AppEvent::Toast(toast) => {
+                    dashboard.message = Some(toast.message.clone());
+                    dashboard.push_toast(toast);
                 }
                 AppEvent::Refresh => {
                     let snapshot = Arc::new(collect_snapshot(&backends).await);
@@ -156,6 +155,8 @@ async fn run_loop(
                 }
             }
         }
+        // Remove toasts vencidos e redesenha.
+        dashboard.prune_toasts();
         dashboard.draw(terminal)?;
     }
     Ok(())
@@ -189,74 +190,113 @@ async fn handle_key(
         };
     }
 
-    // AI Terminal Deck: encaminha as teclas ao agente (PTY).
-    if dashboard.tab == Tab::AiDeck {
-        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return true;
-        }
+    let current = dashboard.tab;
+
+    // Navegação da aba de Arquivos (File Manager).
+    if current == Tab::Files {
         match key.code {
-            KeyCode::Tab => {
-                dashboard.next_tab();
-                false
-            }
-            KeyCode::BackTab => {
-                dashboard.prev_tab();
-                false
-            }
-            _ => {
-                if let Some(session) = &dashboard.deck.session {
-                    if let Some(bytes) = key_to_bytes(&key) {
-                        let _ = session.write_input(&bytes);
-                    }
+            KeyCode::Char('q') | KeyCode::Char('Q') => return true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
+            KeyCode::Char('1') => return select_tab(dashboard, Tab::Home),
+            KeyCode::Char('2') => return select_tab(dashboard, Tab::Storage),
+            KeyCode::Char('3') => return select_tab(dashboard, Tab::Network),
+            KeyCode::Char('4') => return select_tab(dashboard, Tab::Bluetooth),
+            KeyCode::Char('5') => return select_tab(dashboard, Tab::Files),
+            KeyCode::Up | KeyCode::Char('k') => dashboard.files.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => dashboard.files.move_selection(1),
+            KeyCode::Enter => {
+                if !dashboard.files.open_selected() {
+                    dashboard.push_toast(Toast::warning("item selecionado não é uma pasta"));
                 }
-                false
             }
+            KeyCode::Backspace | KeyCode::Char('h') => {
+                if !dashboard.files.go_up() {
+                    dashboard.push_toast(Toast::info("já está na raiz"));
+                }
+            }
+            _ => return handle_tab_switch(dashboard, key),
         }
-    } else {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
-            KeyCode::Char('1') => select_tab(dashboard, Tab::Overview),
-            KeyCode::Char('2') => select_tab(dashboard, Tab::Storage),
-            KeyCode::Char('3') => select_tab(dashboard, Tab::Network),
-            KeyCode::Char('4') => select_tab(dashboard, Tab::Bluetooth),
-            KeyCode::Char('5') => select_tab(dashboard, Tab::AiDeck),
-            KeyCode::Tab | KeyCode::Right => {
-                dashboard.next_tab();
-                false
-            }
-            KeyCode::BackTab | KeyCode::Left => {
-                dashboard.prev_tab();
-                false
-            }
-            KeyCode::Up => {
-                dashboard.move_selection(-1);
-                false
-            }
-            KeyCode::Down => {
-                dashboard.move_selection(1);
-                false
-            }
-            KeyCode::Char('m') => {
-                if dashboard.tab == Tab::Storage {
-                    toggle_mount(dashboard, backends, tx).await;
-                }
-                false
-            }
-            KeyCode::Char('w') => {
-                if dashboard.tab == Tab::Network {
-                    toggle_wifi(dashboard, backends, tx).await;
-                }
-                false
-            }
-            KeyCode::Char('b') => {
-                if dashboard.tab == Tab::Bluetooth {
-                    toggle_bluetooth(dashboard, backends, tx).await;
-                }
-                false
-            }
-            _ => false,
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => true,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+        KeyCode::Char('1') => select_tab(dashboard, Tab::Home),
+        KeyCode::Char('2') => select_tab(dashboard, Tab::Storage),
+        KeyCode::Char('3') => select_tab(dashboard, Tab::Network),
+        KeyCode::Char('4') => select_tab(dashboard, Tab::Bluetooth),
+        KeyCode::Char('5') => select_tab(dashboard, Tab::Files),
+        KeyCode::Tab | KeyCode::Right => {
+            dashboard.next_tab();
+            false
         }
+        KeyCode::BackTab | KeyCode::Left => {
+            dashboard.prev_tab();
+            false
+        }
+        KeyCode::Up => {
+            dashboard.move_selection(-1);
+            false
+        }
+        KeyCode::Down => {
+            dashboard.move_selection(1);
+            false
+        }
+        KeyCode::Char('m') => {
+            if dashboard.tab == Tab::Storage {
+                toggle_mount(dashboard, backends, tx).await;
+            }
+            false
+        }
+        KeyCode::Char('w') => {
+            if dashboard.tab == Tab::Network {
+                toggle_wifi(dashboard, backends, tx).await;
+            }
+            false
+        }
+        KeyCode::Enter | KeyCode::Char('c') => {
+            if dashboard.tab == Tab::Network {
+                connect_wifi(dashboard, backends, tx).await;
+            }
+            false
+        }
+        KeyCode::Char('d') => {
+            if dashboard.tab == Tab::Network {
+                disconnect_wifi(dashboard, backends, tx).await;
+            }
+            false
+        }
+        KeyCode::Char('b') => {
+            if dashboard.tab == Tab::Bluetooth {
+                toggle_bluetooth(dashboard, backends, tx).await;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Trata troca de aba usando Tab/BackTab (usada quando uma aba consome as
+/// setas, ex.: File Manager).
+fn handle_tab_switch(dashboard: &mut Dashboard, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('1') => select_tab(dashboard, Tab::Home),
+        KeyCode::Char('2') => select_tab(dashboard, Tab::Storage),
+        KeyCode::Char('3') => select_tab(dashboard, Tab::Network),
+        KeyCode::Char('4') => select_tab(dashboard, Tab::Bluetooth),
+        KeyCode::Char('5') => select_tab(dashboard, Tab::Files),
+        KeyCode::Tab | KeyCode::Right => {
+            dashboard.next_tab();
+            false
+        }
+        KeyCode::BackTab | KeyCode::Left => {
+            dashboard.prev_tab();
+            false
+        }
+        KeyCode::Char('q') | KeyCode::Char('Q') => true,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+        _ => false,
     }
 }
 
@@ -275,14 +315,20 @@ fn resolve_consent(dashboard: &mut Dashboard, approved: bool) {
     };
     match gatekeeper.resolve(request.id, approved) {
         Ok(()) => {
-            dashboard.message = Some(if approved {
+            use hall_9001::ui::toast::ToastLevel;
+            let msg = if approved {
                 format!("aprovado: {}", request.method)
             } else {
                 format!("negado: {}", request.method)
-            });
+            };
+            dashboard.message = Some(msg.clone());
+            let level = if approved { ToastLevel::Success } else { ToastLevel::Warning };
+            dashboard.push_toast(Toast::new(msg, level));
         }
         Err(e) => {
-            dashboard.message = Some(format!("gatekeeper: {e}"));
+            let msg = format!("gatekeeper: {e}");
+            dashboard.message = Some(msg.clone());
+            dashboard.push_toast(Toast::error(msg));
         }
     }
 }
@@ -306,8 +352,9 @@ async fn toggle_mount(
     let backends = backends.clone();
     let tx = tx.clone();
     tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
         let Some(storage) = &backends.storage else {
-            let _ = tx.send(AppEvent::Notice("UDisks2 indisponível".to_string())).await;
+            let _ = tx.send(AppEvent::Toast(Toast::error("UDisks2 indisponível"))).await;
             let _ = tx.send(AppEvent::Refresh).await;
             return;
         };
@@ -317,14 +364,17 @@ async fn toggle_mount(
         } else {
             storage.mount(&object_path).await.map(Some)
         };
-        let notice = match result {
+        let (message, level) = match result {
             Ok(Some(mount_point)) => {
-                format!("{action}: {label} montada em {mount_point}")
+                (
+                    format!("{action}: {label} montada em {mount_point}"),
+                    ToastLevel::Success,
+                )
             }
-            Ok(None) => format!("{action}: {label} com sucesso"),
-            Err(e) => format!("erro ao {action} {label}: {e}"),
+            Ok(None) => (format!("{action}: {label} com sucesso"), ToastLevel::Success),
+            Err(e) => (format!("erro ao {action} {label}: {e}"), ToastLevel::Error),
         };
-        let _ = tx.send(AppEvent::Notice(notice)).await;
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;
     });
 }
@@ -344,17 +394,21 @@ async fn toggle_wifi(
     let backends = backends.clone();
     let tx = tx.clone();
     tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
         let Some(network) = &backends.network else {
-            let _ = tx.send(AppEvent::Notice("NetworkManager indisponível".to_string())).await;
+            let _ = tx.send(AppEvent::Toast(Toast::error("NetworkManager indisponível"))).await;
             let _ = tx.send(AppEvent::Refresh).await;
             return;
         };
         let result = network.set_wireless_enabled(!enabled).await;
-        let notice = match result {
-            Ok(()) => format!("wi-fi {}", if enabled { "desligado" } else { "ligado" }),
-            Err(e) => format!("erro ao alternar wi-fi: {e}"),
+        let (message, level) = match result {
+            Ok(()) => (
+                format!("wi-fi {}", if enabled { "desligado" } else { "ligado" }),
+                ToastLevel::Success,
+            ),
+            Err(e) => (format!("erro ao alternar wi-fi: {e}"), ToastLevel::Error),
         };
-        let _ = tx.send(AppEvent::Notice(notice)).await;
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;
     });
 }
@@ -379,8 +433,9 @@ async fn toggle_bluetooth(
     let backends = backends.clone();
     let tx = tx.clone();
     tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
         let Some(bluetooth) = &backends.bluetooth else {
-            let _ = tx.send(AppEvent::Notice("BlueZ indisponível".to_string())).await;
+            let _ = tx.send(AppEvent::Toast(Toast::error("BlueZ indisponível"))).await;
             let _ = tx.send(AppEvent::Refresh).await;
             return;
         };
@@ -391,53 +446,84 @@ async fn toggle_bluetooth(
             bluetooth.disconnect_device(&object_path).await
         };
         let label = if name.is_empty() { object_path.clone() } else { name };
-        let notice = match result {
-            Ok(()) => format!("bluetooth: {action} {label}"),
-            Err(e) => format!("erro ao {action} {label}: {e}"),
+        let (message, level) = match result {
+            Ok(()) => (
+                format!("bluetooth: {action} {label}"),
+                ToastLevel::Success,
+            ),
+            Err(e) => (format!("erro ao {action} {label}: {e}"), ToastLevel::Error),
         };
-        let _ = tx.send(AppEvent::Notice(notice)).await;
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;
     });
 }
 
-/// Inicia a sessão PTY do AI Terminal Deck (bash por padrão).
-fn spawn_pty_session() -> Option<Arc<PtySession>> {
-    let mut pty = PtySession::new(AgentCommand::new(AgentKind::Bash, Vec::new()));
-    if let Err(e) = pty.start() {
-        eprintln!("[deck] falha ao iniciar PTY do AI Terminal Deck: {e}");
-        return None;
-    }
-    Some(Arc::new(pty))
+/// Conecta ao ponto de acesso Wi-Fi selecionado via NetworkManager.
+async fn connect_wifi(
+    dashboard: &mut Dashboard,
+    backends: &Arc<Backends>,
+    tx: &mpsc::Sender<AppEvent>,
+) {
+    let Some(ap) = dashboard
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.network.access_points.get(dashboard.network_index))
+    else {
+        return;
+    };
+    let ap_path = ap.object_path.clone();
+    let ssid = ap.ssid.clone();
+
+    let backends = backends.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
+        let Some(network) = &backends.network else {
+            let _ = tx.send(AppEvent::Toast(Toast::error("NetworkManager indisponível"))).await;
+            let _ = tx.send(AppEvent::Refresh).await;
+            return;
+        };
+        let label = if ssid.is_empty() { "(rede oculta)".to_string() } else { ssid };
+        let result = network.connect_access_point(&ap_path).await;
+        let (message, level) = match result {
+            Ok(()) => (format!("conectando a {label}…"), ToastLevel::Info),
+            Err(e) => (format!("erro ao conectar a {label}: {e}"), ToastLevel::Error),
+        };
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
+        let _ = tx.send(AppEvent::Refresh).await;
+    });
 }
 
-/// Converte um `KeyEvent` Crossterm nos bytes ANSI a enviar ao agente.
-fn key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let KeyCode::Char(c) = key.code {
-            if c.is_ascii_lowercase() {
-                return Some(vec![c as u8 - b'a' + 1]);
+/// Desconecta do Wi-Fi ativo via NetworkManager.
+async fn disconnect_wifi(
+    dashboard: &mut Dashboard,
+    backends: &Arc<Backends>,
+    tx: &mpsc::Sender<AppEvent>,
+) {
+    let active_ssid = dashboard
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.network.active.as_ref())
+        .map(|w| w.ssid.clone());
+
+    let backends = backends.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
+        let Some(network) = &backends.network else {
+            let _ = tx.send(AppEvent::Toast(Toast::error("NetworkManager indisponível"))).await;
+            let _ = tx.send(AppEvent::Refresh).await;
+            return;
+        };
+        let result = network.disconnect_wireless().await;
+        let (message, level) = match result {
+            Ok(()) => {
+                let target = active_ssid.unwrap_or_else(|| "rede atual".to_string());
+                (format!("wi-fi desconectado de {target}"), ToastLevel::Success)
             }
-        }
-        return None;
-    }
-    match key.code {
-        KeyCode::Enter => Some(vec![b'\r']),
-        KeyCode::Backspace => Some(vec![0x7f]),
-        KeyCode::Tab => Some(vec![b'\t']),
-        KeyCode::Esc => Some(vec![0x1b]),
-        KeyCode::Char(c) => {
-            let mut buf = [0u8; 4];
-            Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
-        }
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Home => Some(b"\x1b[1~".to_vec()),
-        KeyCode::End => Some(b"\x1b[4~".to_vec()),
-        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
-        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
-        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
-        _ => None,
-    }
+            Err(e) => (format!("erro ao desconectar wi-fi: {e}"), ToastLevel::Error),
+        };
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
+        let _ = tx.send(AppEvent::Refresh).await;
+    });
 }

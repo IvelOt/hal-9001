@@ -6,7 +6,8 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use zbus::zvariant::OwnedObjectPath;
+use std::collections::HashMap;
+use zbus::zvariant::{OwnedObjectPath, Value};
 use zbus::{proxy, Connection};
 
 /// Tipos de dispositivos de rede reportados pela propriedade `DeviceType`.
@@ -99,6 +100,18 @@ trait NetworkManager {
 
     /// Retorna os caminhos de objeto de todos os dispositivos de rede.
     fn get_all_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+
+    /// Adiciona e ativa uma conexão a partir de um dicionário de configuração
+    /// (`a{sa{sv}}`). Retorna `(connection_path, active_connection_path)`.
+    fn add_and_activate_connection(
+        &self,
+        connection: HashMap<String, HashMap<String, Value<'_>>>,
+        device: OwnedObjectPath,
+        specific_object: OwnedObjectPath,
+    ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
+
+    /// Desativa uma conexão ativa (desconecta).
+    fn deactivate_connection(&self, active_connection: OwnedObjectPath) -> zbus::Result<()>;
 
     /// `true` se o Wi-Fi está habilitado no momento.
     #[zbus(property)]
@@ -305,6 +318,102 @@ impl Network {
             .context("falha ao ler WirelessHardwareEnabled do NetworkManager")
     }
 
+    /// Conecta a um ponto de acesso Wi-Fi identificado por `ap_path`
+    /// (via NetworkManager `AddAndActivateConnection`).
+    ///
+    /// Ação mutável — o resultado é refletido como Toast na TUI.
+    pub async fn connect_access_point(&self, ap_path: &str) -> Result<()> {
+        let nm = NetworkManagerProxy::new(&self.connection).await?;
+
+        // Localiza o dispositivo sem fio que hospeda o ponto de acesso.
+        let device_path = self.wireless_device_for_ap(ap_path).await?;
+        let ssid = self
+            .ssid_for_ap(ap_path)
+            .await
+            .with_context(|| format!("falha ao ler SSID de {ap_path}"))?;
+
+        let connection = build_wireless_connection(&ssid);
+        let ap: OwnedObjectPath = ap_path
+            .try_into()
+            .with_context(|| format!("caminho de AP inválido: {ap_path}"))?;
+        let device: OwnedObjectPath = device_path
+            .clone()
+            .try_into()
+            .with_context(|| format!("caminho de dispositivo inválido: {device_path}"))?;
+
+        nm.add_and_activate_connection(connection, device, ap)
+            .await
+            .context("falha ao conectar ao ponto de acesso via NetworkManager")?;
+        Ok(())
+    }
+
+    /// Desconecta o Wi-Fi ativo desativando a conexão ativa atual.
+    ///
+    /// Ação mutável — o resultado é refletido como Toast na TUI.
+    pub async fn disconnect_wireless(&self) -> Result<()> {
+        let nm = NetworkManagerProxy::new(&self.connection).await?;
+        let active_connections = nm.active_connections().await?;
+
+        for conn_path in active_connections {
+            let active = ConnectionActiveProxy::new(&self.connection, conn_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Connection.Active para {conn_path}"))?;
+            let device_paths = active.devices().await.unwrap_or_default();
+            for dev_path in device_paths {
+                let device = DeviceProxy::new(&self.connection, dev_path)
+                    .await
+                    .with_context(|| "falha ao criar proxy Device".to_string())?;
+                if NetworkDeviceType::from(device.device_type().await.unwrap_or(0))
+                    == NetworkDeviceType::Wifi
+                {
+                    nm.deactivate_connection(conn_path).await?;
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Encontra o caminho do dispositivo sem fio que hospeda o AP informado.
+    async fn wireless_device_for_ap(&self, ap_path: &str) -> Result<String> {
+        let nm = NetworkManagerProxy::new(&self.connection).await?;
+        let device_paths = nm
+            .get_all_devices()
+            .await
+            .context("falha ao chamar NetworkManager.GetAllDevices")?;
+
+        for dev_path in device_paths {
+            let device = DeviceProxy::new(&self.connection, dev_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Device para {dev_path}"))?;
+            if NetworkDeviceType::from(device.device_type().await.unwrap_or(0))
+                != NetworkDeviceType::Wifi
+            {
+                continue;
+            }
+            let wireless = WirelessDeviceProxy::new(&self.connection, dev_path.clone())
+                .await
+                .with_context(|| format!("falha ao criar proxy Wireless para {dev_path}"))?;
+            for candidate in wireless.get_all_access_points().await.unwrap_or_default() {
+                if candidate.as_str() == ap_path {
+                    return Ok(dev_path.to_string());
+                }
+            }
+        }
+        Err(anyhow::anyhow!("nenhum dispositivo sem fio com o AP {ap_path}"))
+    }
+
+    /// Lê o SSID (bytes decodificados) de um ponto de acesso.
+    async fn ssid_for_ap(&self, ap_path: &str) -> Result<String> {
+        let ap_path: OwnedObjectPath = ap_path
+            .try_into()
+            .with_context(|| format!("caminho de AP inválido: {ap_path}"))?;
+        let ap = AccessPointProxy::new(&self.connection, ap_path)
+            .await
+            .context("falha ao criar proxy AccessPoint")?;
+        Ok(decode_ssid(&ap.ssid().await.unwrap_or_default()))
+    }
+
     /// Habilita ou desabilita o Wi-Fi de forma global (`WirelessEnabled`).
     ///
     /// Ação mutável — será acionada pela TUI / Gatekeeper de consentimento.
@@ -323,6 +432,32 @@ fn decode_ssid(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .trim_end_matches('\0')
         .to_string()
+}
+
+/// Monta o dicionário de configuração D-Bus (`a{sa{sv}}`) para uma conexão
+/// Wi-Fi aberta, usada por `AddAndActivateConnection`.
+fn build_wireless_connection(ssid: &str) -> HashMap<String, HashMap<String, Value<'static>>> {
+    let mut connection = HashMap::new();
+    connection.insert("type".to_string(), Value::new("802-11-wireless"));
+
+    let mut wireless = HashMap::new();
+    wireless.insert(
+        "ssid".to_string(),
+        Value::new(ssid.bytes().collect::<Vec<_>>()),
+    );
+    wireless.insert("mode".to_string(), Value::new("infrastructure"));
+
+    let mut ipv4 = HashMap::new();
+    ipv4.insert("method".to_string(), Value::new("auto"));
+    let mut ipv6 = HashMap::new();
+    ipv6.insert("method".to_string(), Value::new("auto"));
+
+    let mut root = HashMap::new();
+    root.insert("connection".to_string(), connection);
+    root.insert("802-11-wireless".to_string(), wireless);
+    root.insert("ipv4".to_string(), ipv4);
+    root.insert("ipv6".to_string(), ipv6);
+    root
 }
 
 #[cfg(test)]

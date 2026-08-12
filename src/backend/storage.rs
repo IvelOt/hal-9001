@@ -103,7 +103,8 @@ impl Storage {
         Ok(Self { connection })
     }
 
-    /// Lista todos os dispositivos de bloco removíveis (não-sistema, não-ignorados).
+    /// Lista **todos** os dispositivos de bloco e partições (incluindo SSDs,
+    /// NVMe e HDs internos), sem filtrar por removível/sistema.
     pub async fn block_devices(&self) -> Result<Vec<BlockDevice>> {
         let manager = UDisks2ManagerProxy::new(&self.connection).await?;
         let paths = manager
@@ -119,9 +120,6 @@ impl Storage {
 
             let hint_ignore = block.hint_ignore().await.unwrap_or(false);
             let hint_system = block.hint_system().await.unwrap_or(false);
-            if hint_ignore || hint_system {
-                continue;
-            }
 
             let device_bytes = block.device().await.unwrap_or_default();
             devices.push(BlockDevice {
@@ -153,7 +151,7 @@ impl Storage {
             .await
             .context("falha ao criar proxy Filesystem para dispositivo")?;
 
-        fs.mount(HashMap::new())
+        fs.mount(default_options())
             .await
             .context("falha ao montar dispositivo via UDisks2 (Polkit)")
     }
@@ -170,7 +168,7 @@ impl Storage {
             .await
             .context("falha ao criar proxy Filesystem para dispositivo")?;
 
-        fs.unmount(HashMap::new())
+        fs.unmount(default_options())
             .await
             .context("falha ao desmontar dispositivo via UDisks2 (Polkit)")
     }
@@ -186,4 +184,15 @@ impl Storage {
 
         Ok(!fs.mount_points().await.unwrap_or_default().is_empty())
     }
+}
+
+/// Dicionário de opções padrão para `Mount`/`Unmount`: impede a interação do
+/// usuário, de modo que a autorização Polkit aconteça sem prompt.
+fn default_options() -> HashMap<String, Value<'static>> {
+    let mut options = HashMap::new();
+    options.insert(
+        "auth.no_user_interaction".to_string(),
+        Value::Bool(true),
+    );
+    options
 }

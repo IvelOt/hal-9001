@@ -13,34 +13,37 @@ use std::time::Duration;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Tabs, Widget, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::ai_agent::ipc_server::Gatekeeper;
 use crate::ai_agent::pty_session::PtyTarget;
-use crate::ai_agent::widget::{AiDeckState, AiDeckWidget};
+use crate::ai_agent::widget::AiDeckState;
+use crate::config::{load as load_config, Config, HostInfo};
 use crate::events::SystemSnapshot;
-use crate::ui::{ACCENT, BG, CYAN, DANGER, DIM, GRAY, TEXT, WARN};
+use crate::ui::file_manager::{FileManagerState, FileManagerWidget};
+use crate::ui::toast::{Toast, ToastBar};
+use crate::ui::{accent_color, ACCENT, BG, DANGER, DIM, GRAY, TEXT, WARN};
 
 /// Abas do dashboard, na ordem exibida pela barra de abas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Overview = 0,
+    Home = 0,
     Storage = 1,
     Network = 2,
     Bluetooth = 3,
-    AiDeck = 4,
+    Files = 4,
 }
 
 impl Tab {
     pub const ALL: [Tab; 5] = [
-        Tab::Overview,
+        Tab::Home,
         Tab::Storage,
         Tab::Network,
         Tab::Bluetooth,
-        Tab::AiDeck,
+        Tab::Files,
     ];
 
     pub fn index(self) -> usize {
@@ -49,16 +52,16 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Tab::Overview => "Overview",
+            Tab::Home => "Home",
             Tab::Storage => "Discos / USB",
             Tab::Network => "Rede / Wi-Fi",
             Tab::Bluetooth => "Bluetooth",
-            Tab::AiDeck => "AI Terminal Deck",
+            Tab::Files => "Arquivos",
         }
     }
 
     pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or(Self::Overview)
+        Self::ALL.get(index).copied().unwrap_or(Self::Home)
     }
 
     pub fn next(self) -> Self {
@@ -67,7 +70,7 @@ impl Tab {
 
     pub fn prev(self) -> Self {
         if self.index() == 0 {
-            Self::AiDeck
+            Self::Files
         } else {
             Self::from_index(self.index() - 1)
         }
@@ -84,6 +87,14 @@ pub struct Dashboard {
     pub storage_index: usize,
     pub network_index: usize,
     pub bluetooth_index: usize,
+    /// Pilha de notificações toast a renderizar no canto inferior direito.
+    pub toasts: Vec<Toast>,
+    /// Configuração da Home estilo Fastfetch (logo, acentos, métricas).
+    pub config: Config,
+    /// Dados de sistema lidos para a Home (OS/host/kernel/cpu/shell).
+    pub host: HostInfo,
+    /// Estado do navegador de arquivos.
+    pub files: FileManagerState,
 }
 
 impl Default for Dashboard {
@@ -95,7 +106,7 @@ impl Default for Dashboard {
 impl Dashboard {
     pub fn new() -> Self {
         Self {
-            tab: Tab::Overview,
+            tab: Tab::Home,
             snapshot: None,
             deck: AiDeckState::default(),
             gatekeeper: None,
@@ -103,7 +114,22 @@ impl Dashboard {
             storage_index: 0,
             network_index: 0,
             bluetooth_index: 0,
+            toasts: Vec::new(),
+            config: load_config(),
+            host: crate::config::collect_host_info(),
+            files: FileManagerState::load(),
         }
+    }
+
+    /// Registra uma nova notificação toast (auto-dispensa em 4s).
+    pub fn push_toast(&mut self, toast: Toast) {
+        self.toasts.push(toast);
+        ToastBar::prune(&mut self.toasts);
+    }
+
+    /// Remove as notificações já vencidas.
+    pub fn prune_toasts(&mut self) {
+        ToastBar::prune(&mut self.toasts);
     }
 
     // ------------------------------------------------------------------
@@ -158,6 +184,9 @@ impl Dashboard {
         self.render_body(chunks[1], frame);
         self.render_status_bar(chunks[2], frame.buffer_mut());
         self.render_consent_modal(frame);
+        // Toasts por cima de tudo, no canto inferior direito.
+        let bar = ToastBar::new(self.toasts.clone());
+        frame.render_widget(bar, area);
     }
 
     /// Conveniência para desenhar num `Terminal` Crossterm.
@@ -214,212 +243,161 @@ impl Dashboard {
 
     fn render_body(&self, area: Rect, frame: &mut Frame) {
         match self.tab {
-            Tab::Overview => self.render_overview(area, frame.buffer_mut()),
+            Tab::Home => self.render_home(area, frame.buffer_mut()),
             Tab::Storage => self.render_storage(area, frame.buffer_mut()),
             Tab::Network => self.render_network(area, frame.buffer_mut()),
             Tab::Bluetooth => self.render_bluetooth(area, frame.buffer_mut()),
-            Tab::AiDeck => {
-                frame.render_widget(AiDeckWidget::new(&self.deck), area);
+            Tab::Files => {
+                frame.render_widget(FileManagerWidget::new(&self.files), area);
             }
         }
     }
 
-    /// [1] Overview — resumo do sistema, energia, rede ativa e mídias.
-    fn render_overview(&self, area: Rect, buf: &mut Buffer) {
-        if area.width < 4 || area.height < 4 {
+    /// [1] Home — estilo Fastfetch: logo ASCII à esquerda, métricas à direita.
+    fn render_home(&self, area: Rect, buf: &mut Buffer) {
+        if area.width < 12 || area.height < 6 {
             return;
         }
-        let columns = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        let left = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(columns[0]);
-        let right = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(columns[1]);
+        let accent = accent_color(self.config.accent);
 
-        self.render_system_panel(left[0], buf);
-        self.render_energy_panel(left[1], buf);
-        self.render_network_panel(right[0], buf);
-        self.render_storage_panel(right[1], buf);
+        // Título centralizado.
+        let title_width = self.config.title.chars().count() as u16;
+        let title_x = area.x + (area.width.saturating_sub(title_width) / 2).min(area.width.saturating_sub(1));
+        buf.set_stringn(
+            title_x,
+            area.y,
+            &self.config.title,
+            area.width as usize,
+            Style::new().fg(accent).add_modifier(Modifier::BOLD),
+        );
+
+        let body = Layout::horizontal([
+            Constraint::Percentage(45),
+            Constraint::Percentage(55),
+        ])
+        .split(Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+
+        self.render_home_logo(body[0], buf, accent);
+        self.render_home_metrics(body[1], buf, accent);
     }
 
-    fn render_system_panel(&self, area: Rect, buf: &mut Buffer) {
-        let snapshot = self.snapshot.clone().unwrap_or_default();
-        let mut lines = Vec::new();
-        lines.push(Line::from(Span::styled(
-            format!("  carga (1min): {:.2}", snapshot.system.load1),
-            Style::new().fg(TEXT),
-        )));
-
-        let mem_total = snapshot.system.mem_total_kb;
-        let mem_used = snapshot.system.mem_used_kb();
-        let mem_pct = if mem_total > 0 {
-            (mem_used as f64 / mem_total as f64) * 100.0
+    /// Coluna esquerda: logo ASCII colorido.
+    fn render_home_logo(&self, area: Rect, buf: &mut Buffer, accent: Color) {
+        let logo = &self.config.logo;
+        let logo_lines: Vec<&str> = logo.lines().collect();
+        let start_y = if logo_lines.len() as u16 >= area.height {
+            area.y
         } else {
-            0.0
+            area.y + (area.height.saturating_sub(logo_lines.len() as u16) / 2)
         };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  memória:     {} / {} ({:.0}%)",
-                human_kib(mem_used),
-                human_kib(mem_total),
-                mem_pct
-            ),
-            Style::new().fg(TEXT),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("               {}", bar(mem_pct, 16)),
-            Style::new().fg(ACCENT),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("  em operação: {}", human_duration(Duration::from_secs(snapshot.system.uptime_secs))),
-            Style::new().fg(GRAY),
-        )));
-
-        let volume = snapshot
-            .volume
-            .map(|v| format!("{:.0}%", v * 100.0))
-            .unwrap_or_else(|| "—".to_string());
-        let brightness = snapshot
-            .brightness
-            .map(|b| format!("{b}%"))
-            .unwrap_or_else(|| "—".to_string());
-        lines.push(Line::from(vec![
-            Span::styled("  volume:     ", Style::new().fg(GRAY)),
-            Span::styled(volume, Style::new().fg(TEXT)),
-            Span::styled("   brilho: ", Style::new().fg(GRAY)),
-            Span::styled(brightness, Style::new().fg(TEXT)),
-        ]));
-
-        render_block_lines(area, buf, " SISTEMA ", lines);
-    }
-
-    fn render_energy_panel(&self, area: Rect, buf: &mut Buffer) {
-        let snapshot = self.snapshot.clone().unwrap_or_default();
-        let mut lines = Vec::new();
-
-        let source = match snapshot.on_battery {
-            Some(true) => Span::styled("em bateria", Style::new().fg(WARN)),
-            Some(false) => Span::styled("na tomada", Style::new().fg(ACCENT)),
-            None => Span::styled("indisponível", Style::new().fg(GRAY)),
-        };
-        lines.push(Line::from(vec![
-            Span::styled("  fonte:      ", Style::new().fg(GRAY)),
-            source,
-        ]));
-
-        if let Some(battery) = &snapshot.primary_battery {
-            lines.push(Line::from(Span::styled(
-                format!("  estado:     {}", power_state_label(battery.state)),
-                Style::new().fg(TEXT),
-            )));
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "  nível:      {:.0}%  [saúde {:.0}%]",
-                    battery.percentage, battery.capacity
-                ),
-                Style::new().fg(TEXT),
-            )));
-            lines.push(Line::from(Span::styled(
-                format!("               {}", bar(battery.percentage, 16)),
-                Style::new().fg(CYAN),
-            )));
-            if let Some(remaining) = battery.estimated_time_remaining() {
-                lines.push(Line::from(Span::styled(
-                    format!("  restante:   {}", human_duration(remaining)),
-                    Style::new().fg(GRAY),
-                )));
+        let style = Style::new().fg(accent);
+        for (i, line) in logo_lines.iter().enumerate() {
+            let y = start_y + i as u16;
+            if y >= area.y + area.height {
+                break;
             }
-        } else if snapshot.on_battery.is_none() {
-            lines.push(Line::from(Span::styled(
-                "  (UPower indisponível)",
-                Style::new().fg(GRAY),
-            )));
-        } else {
-            lines.push(Line::from(Span::styled(
-                "  nenhuma bateria presente",
-                Style::new().fg(GRAY),
-            )));
-        }
-
-        render_block_lines(area, buf, " ENERGIA / UPower ", lines);
-    }
-
-    fn render_network_panel(&self, area: Rect, buf: &mut Buffer) {
-        let snapshot = self.snapshot.clone().unwrap_or_default();
-        let mut lines = Vec::new();
-
-        let enabled = match snapshot.network.wireless_enabled {
-            Some(true) => Span::styled("ligado", Style::new().fg(ACCENT)),
-            Some(false) => Span::styled("desligado", Style::new().fg(WARN)),
-            None => Span::styled("indisponível", Style::new().fg(GRAY)),
-        };
-        lines.push(Line::from(vec![
-            Span::styled("  wi-fi:      ", Style::new().fg(GRAY)),
-            enabled,
-        ]));
-
-        match &snapshot.network.active {
-            Some(wifi) => {
-                lines.push(Line::from(Span::styled(
-                    format!("  ssid:       {}", wifi.ssid),
-                    Style::new().fg(TEXT),
-                )));
-                lines.push(Line::from(Span::styled(
-                    format!("  sinal:      {}%", wifi.strength),
-                    Style::new().fg(ACCENT),
-                )));
-                lines.push(Line::from(Span::styled(
-                    format!("               {}", bar(wifi.strength as f64, 16)),
-                    Style::new().fg(CYAN),
-                )));
+            let content = line.trim_end();
+            if content.is_empty() {
+                continue;
             }
-            None => lines.push(Line::from(Span::styled(
-                "  nenhuma rede sem fio ativa",
-                Style::new().fg(GRAY),
-            ))),
+            buf.set_stringn(area.x, y, content, area.width as usize, style);
         }
-
-        render_block_lines(area, buf, " REDE / Wi-Fi ", lines);
     }
 
-    fn render_storage_panel(&self, area: Rect, buf: &mut Buffer) {
+    /// Coluna direita: métricas de sistema no estilo Fastfetch.
+    fn render_home_metrics(&self, area: Rect, buf: &mut Buffer, accent: Color) {
         let snapshot = self.snapshot.clone().unwrap_or_default();
-        let mut lines = Vec::new();
+        let m = &self.config.metrics;
+        let host = &self.host;
+        let user_env = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+        let hostname = host.host.clone();
 
-        let mounted = snapshot.storage.iter().filter(|d| d.mounted).count();
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {} mídia(s) · {} montada(s)",
-                snapshot.storage.len(),
-                mounted
-            ),
-            Style::new().fg(TEXT),
-        )));
+        // Cabeçalho `user@host` com destaque.
+        let header = format!("{user_env}@{hostname}");
+        buf.set_stringn(
+            area.x,
+            area.y,
+            &header,
+            area.width as usize,
+            Style::new().fg(accent).add_modifier(Modifier::BOLD),
+        );
+        let mut y = area.y + 2;
 
-        for device in snapshot.storage.iter().take(4) {
-            let marker = if device.mounted { "[M]" } else { "[·]" };
-            let label = if device.label.is_empty() {
-                "(sem rótulo)".to_string()
-            } else {
-                device.label.clone()
-            };
-            let style = if device.mounted {
-                Style::new().fg(ACCENT)
-            } else {
-                Style::new().fg(TEXT)
-            };
-            lines.push(Line::from(Span::styled(
-                format!("  {marker} {}  {}  {}", device.device, label, human_bytes(device.size)),
-                style,
-            )));
+        let mut metrics: Vec<(String, String)> = Vec::new();
+
+        if m.os {
+            metrics.push(("OS".to_string(), host.os.clone()));
         }
-        if snapshot.storage.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  nenhuma mídia removível",
-                Style::new().fg(GRAY),
-            )));
+        if m.host {
+            metrics.push(("Host".to_string(), hostname.clone()));
+        }
+        if m.kernel {
+            metrics.push(("Kernel".to_string(), host.kernel.clone()));
+        }
+        if m.uptime {
+            metrics.push((
+                "Uptime".to_string(),
+                human_duration(Duration::from_secs(snapshot.system.uptime_secs)),
+            ));
+        }
+        if m.cpu {
+            metrics.push(("CPU".to_string(), host.cpu.clone()));
+        }
+        if m.ram {
+            let total = snapshot.system.mem_total_kb;
+            let used = snapshot.system.mem_used_kb();
+            metrics.push((
+                "RAM".to_string(),
+                format!("{} / {}", human_kib(used), human_kib(total)),
+            ));
+        }
+        if m.disks {
+            let mounted = snapshot.storage.iter().filter(|d| d.mounted).count();
+            metrics.push((
+                "Discos".to_string(),
+                format!("{} mídias, {} montadas", snapshot.storage.len(), mounted),
+            ));
+        }
+        if m.battery {
+            let battery_text = match &snapshot.primary_battery {
+                Some(bat) => format!("{:.0}%", bat.percentage),
+                None => "—".to_string(),
+            };
+            metrics.push(("Bateria".to_string(), battery_text));
+        }
+        if m.shell {
+            metrics.push(("Shell".to_string(), shell_name(&host.shell)));
         }
 
-        render_block_lines(area, buf, " ARMAZENAMENTO ", lines);
+        let max_key = metrics.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+        for (key, value) in metrics {
+            if y >= area.y + area.height {
+                break;
+            }
+            let key_span = Span::styled(
+                format!("{}", pad(key, max_key)),
+                Style::new().fg(accent),
+            );
+            let value_span = Span::styled(value, Style::new().fg(TEXT));
+            let line = Line::from(vec![key_span, Span::styled("  ", Style::new()), value_span]);
+            self.render_home_line(line, area.x, y, buf);
+            y += 1;
+        }
     }
+
+    /// Escreve uma linha respeitando os limites da área.
+    fn render_home_line(&self, line: Line<'static>, x: u16, y: u16, buf: &mut Buffer) {
+        let mut cx = x;
+        for span in &line.spans {
+            if span.content.is_empty() {
+                continue;
+            }
+            let width = span.content.chars().count() as u16;
+            buf.set_stringn(cx, y, &span.content, width as usize, span.style);
+            cx = cx.saturating_add(width);
+        }
+    }
+
 
     /// [2] Discos / USB — lista de partições UDisks2 com montar/desmontar `[m]`.
     fn render_storage(&self, area: Rect, buf: &mut Buffer) {
@@ -449,7 +427,7 @@ impl Dashboard {
         }
         if snapshot.storage.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  (UDisks2 indisponível ou nenhuma mídia removível)",
+                "  (UDisks2 indisponível ou nenhum dispositivo de bloco encontrado)",
                 Style::new().fg(GRAY),
             )));
         }
@@ -595,11 +573,11 @@ impl Dashboard {
 
     fn hints(&self) -> &'static str {
         match self.tab {
-            Tab::Overview => "[1-5] aba · [q] sair",
+            Tab::Home => "[1-5] aba · [q] sair",
             Tab::Storage => "[↑/↓] navegar · [m] montar/desmontar · [1-5] aba · [q] sair",
-            Tab::Network => "[↑/↓] navegar · [w] ligar/desligar Wi-Fi · [1-5] aba · [q] sair",
+            Tab::Network => "[↑/↓] navegar · [Enter/c] conectar · [d] desconectar · [1-5] aba · [q] sair",
             Tab::Bluetooth => "[↑/↓] navegar · [b] conectar/desconectar · [1-5] aba · [q] sair",
-            Tab::AiDeck => "[Tab/←/→] trocar aba · [Ctrl+Q] sair — teclas vão para o agente",
+            Tab::Files => "[↑/↓ j/k] navegar · [Enter] abrir · [Backspace/h] voltar · [1-5] aba · [q] sair",
         }
     }
 
@@ -815,33 +793,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     .split(vertical[1])[1]
 }
 
-/// Barra de progresso ASCII (16 células).
-fn bar(percent: f64, width: usize) -> String {
-    let width = width.max(2);
-    let filled = ((percent.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
-    let mut s = String::with_capacity(width + 2);
-    s.push('[');
-    for i in 0..width {
-        s.push(if i < filled { '█' } else { '·' });
-    }
-    s.push(']');
-    s
-}
-
-/// Rótulo PT-BR para um estado de energia UPower.
-fn power_state_label(state: crate::backend::power::PowerState) -> &'static str {
-    use crate::backend::power::PowerState;
-    match state {
-        PowerState::Charging => "carregando",
-        PowerState::Discharging => "descarregando",
-        PowerState::Empty => "vazia",
-        PowerState::FullyCharged => "totalmente carregada",
-        PowerState::PendingCharge => "carga pendente",
-        PowerState::PendingDischarge => "descarga pendente",
-        PowerState::Unknown => "desconhecido",
-    }
-}
-
 /// Formata tamanho em bytes de forma legível (KiB, MiB, GiB...).
 fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -889,4 +840,20 @@ fn truncate(value: &str, max: usize) -> String {
     let mut result: String = value[..end].to_string();
     result.push('…');
     result
+}
+
+/// Preenche uma string com espaços à direita até `width` caracteres.
+fn pad(value: String, width: usize) -> String {
+    if value.chars().count() >= width {
+        return value;
+    }
+    let mut result = value;
+    let padding = width.saturating_sub(result.chars().count());
+    result.push_str(&" ".repeat(padding));
+    result
+}
+
+/// Extrai o nome do shell (basename) a partir do caminho `$SHELL`.
+fn shell_name(shell: &str) -> String {
+    shell.trim_end_matches('/').rsplit('/').next().unwrap_or(shell).to_string()
 }

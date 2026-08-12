@@ -7,6 +7,8 @@
 //! Conforme seção 3 (`src/ui/`) de `docs/backend_architecture.md`.
 
 pub mod dashboard;
+pub mod file_manager;
+pub mod toast;
 
 use ratatui::style::Color;
 
@@ -28,3 +30,14 @@ pub const DANGER: Color = Color::Rgb(0xFF, 0x55, 0x55);
 pub const WARN: Color = Color::Rgb(0xFF, 0xB8, 0x4D);
 /// Cor de texto principal.
 pub const TEXT: Color = Color::Rgb(0xE6, 0xEA, 0xF0);
+
+/// Mapeia um tema de acento (config) para a cor primária de destaque.
+pub fn accent_color(theme: crate::config::AccentTheme) -> Color {
+    use crate::config::AccentTheme;
+    match theme {
+        AccentTheme::Green => Color::Rgb(0x00, 0xFF, 0x66),
+        AccentTheme::Cyan => Color::Rgb(0x00, 0xE5, 0xFF),
+        AccentTheme::Magenta => Color::Rgb(0xFF, 0x3A, 0xD0),
+        AccentTheme::Retro => Color::Rgb(0x00, 0xFF, 0x66),
+    }
+}

@@ -5,5 +5,6 @@
 
 pub mod ai_agent;
 pub mod backend;
+pub mod config;
 pub mod events;
 pub mod ui;
