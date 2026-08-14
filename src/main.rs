@@ -224,32 +224,70 @@ async fn handle_key(
 
     let current = dashboard.tab;
 
-    // Aba de Arquivos — o Yazi roda num PTY embarcado (`YaziDock`), no estilo
-    // `:terminal` do Neovim. O raw mode da TUI continua ativo: as teclas são
-    // convertidas em bytes crus e repassadas ao Yazi, exceto as combinações de
-    // escape da própria TUI (`Ctrl+Q` para sair, `Alt+1..5` para trocar de aba).
+    // Aba de Arquivos / Terminal — emulação PTY embarcada no estilo `:terminal` do Neovim.
     if current == Tab::Files {
-        if let KeyModifiers::ALT = key.modifiers {
-            if let KeyCode::Char(digit @ '1'..='5') = key.code {
-                let tab = Tab::from_index(digit.to_digit(10).unwrap() as usize - 1);
-                return select_tab(dashboard, tab);
+        if dashboard.yazi_dock.is_focused() {
+            // Atalho de emergência para desviar o foco (F12 ou Ctrl+\)
+            if key.code == KeyCode::F(12) || (key.code == KeyCode::Char('\\') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                dashboard.yazi_dock.set_focused(false);
+                dashboard.push_toast(Toast::info("Foco desviado para navegação de abas (Pressione 'i' ou Enter para voltar ao terminal)"));
+                return false;
             }
-        }
-        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return true;
-        }
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl+C é passado ao Yazi (cancelar operação) — não encerra a TUI.
-            let _ = dashboard.yazi_dock.write_input(b"\x03");
+
+            // Duplo Esc desvia o foco para as abas do HAL-9001
+            if key.code == KeyCode::Esc {
+                if dashboard.yazi_dock.check_double_esc() {
+                    dashboard.yazi_dock.set_focused(false);
+                    dashboard.push_toast(Toast::info("Foco desviado para navegação de abas"));
+                    return false;
+                }
+                // Primeiro Esc: encaminha 0x1B ao processo PTY
+                let _ = dashboard.yazi_dock.write_input(b"\x1B");
+                return false;
+            }
+
+            // Ctrl+Q fecha o HAL-9001
+            if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return true;
+            }
+
+            // Ctrl+C é repassado ao processo do terminal (cancelar operação/SIGINT)
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                let _ = dashboard.yazi_dock.write_input(b"\x03");
+                return false;
+            }
+
+            // Todas as demais teclas são repassadas como bytes crus ao PTY
+            if let Some(bytes) = crossterm_key_to_bytes(key) {
+                if let Err(e) = dashboard.yazi_dock.write_input(&bytes) {
+                    dashboard.message = Some(format!("terminal: {e}"));
+                    dashboard.push_toast(Toast::error(format!("falha ao enviar tecla ao terminal: {e}")));
+                }
+            }
             return false;
-        }
-        if let Some(bytes) = crossterm_key_to_bytes(key) {
-            if let Err(e) = dashboard.yazi_dock.write_input(&bytes) {
-                dashboard.message = Some(format!("yazi: {e}"));
-                dashboard.push_toast(Toast::error(format!("falha ao enviar tecla ao Yazi: {e}")));
+        } else {
+            // Modo Navegação: 'i', 'a' ou Enter entram em modo terminal focado
+            if key.code == KeyCode::Char('i') || key.code == KeyCode::Char('a') || key.code == KeyCode::Enter {
+                dashboard.yazi_dock.set_focused(true);
+                dashboard.push_toast(Toast::success("Terminal focado (Pressione Esc Esc ou F12 para desviar foco)"));
+                return false;
             }
+            // 's' alterna para o Shell ($SHELL)
+            if key.code == KeyCode::Char('s') {
+                dashboard.yazi_dock.set_mode(hall_9001::ui::yazi_dock::DockMode::Shell);
+                dashboard.yazi_dock.set_focused(true);
+                dashboard.push_toast(Toast::success("Terminal Shell ($SHELL) iniciado e focado"));
+                return false;
+            }
+            // 'y' alterna para o Yazi
+            if key.code == KeyCode::Char('y') {
+                dashboard.yazi_dock.set_mode(hall_9001::ui::yazi_dock::DockMode::Yazi);
+                dashboard.yazi_dock.set_focused(true);
+                dashboard.push_toast(Toast::success("Yazi File Manager iniciado e focado"));
+                return false;
+            }
+            // Caso contrário, cai na navegação padrão abaixo (1..5, Tab, q, etc.)
         }
-        return false;
     }
 
     match key.code {
@@ -291,6 +329,12 @@ async fn handle_key(
         KeyCode::Enter | KeyCode::Char('c') => {
             if dashboard.tab == Tab::Network {
                 connect_wifi(dashboard, backends, tx).await;
+            }
+            false
+        }
+        KeyCode::Char('x') => {
+            if dashboard.tab == Tab::Network {
+                disconnect_wifi(dashboard, backends, tx).await;
             }
             false
         }
@@ -649,6 +693,31 @@ async fn forget_wifi(
         let (message, level) = match result {
             Ok(()) => (format!("rede esquecida: {label}"), ToastLevel::Success),
             Err(e) => (format!("erro ao esquecer {label}: {e}"), ToastLevel::Error),
+        };
+        let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
+        let _ = tx.send(AppEvent::Refresh).await;
+    });
+}
+
+/// Desconecta a interface Wi-Fi ativa via NetworkManager.
+async fn disconnect_wifi(
+    _dashboard: &mut Dashboard,
+    backends: &Arc<Backends>,
+    tx: &mpsc::Sender<AppEvent>,
+) {
+    let backends = backends.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        use hall_9001::ui::toast::ToastLevel;
+        let Some(network) = &backends.network else {
+            let _ = tx.send(AppEvent::Toast(Toast::error("NetworkManager indisponível"))).await;
+            let _ = tx.send(AppEvent::Refresh).await;
+            return;
+        };
+        let result = network.disconnect_wireless().await;
+        let (message, level) = match result {
+            Ok(()) => ("Wi-Fi desconectado com sucesso".to_string(), ToastLevel::Success),
+            Err(e) => (format!("erro ao desconectar Wi-Fi: {e}"), ToastLevel::Error),
         };
         let _ = tx.send(AppEvent::Toast(Toast::new(message, level))).await;
         let _ = tx.send(AppEvent::Refresh).await;

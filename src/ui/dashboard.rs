@@ -309,9 +309,9 @@ impl Dashboard {
         }
     }
 
-    /// [1] Home — estilo Fastfetch: logo ASCII à esquerda, métricas à direita.
+    /// [1] Home — estilo Fastfetch: logo ASCII à esquerda, métricas à direita (responsivo).
     fn render_home(&self, area: Rect, buf: &mut Buffer) {
-        if area.width < 12 || area.height < 6 {
+        if area.width < 12 || area.height < 4 {
             return;
         }
         let accent = accent_color(self.config.accent);
@@ -327,14 +327,31 @@ impl Dashboard {
             Style::new().fg(accent).add_modifier(Modifier::BOLD),
         );
 
-        let body = Layout::horizontal([
-            Constraint::Percentage(45),
-            Constraint::Percentage(55),
-        ])
-        .split(Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+        let content_rect = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
 
-        self.render_home_logo(body[0], buf, accent);
-        self.render_home_metrics(body[1], buf, accent);
+        if area.width < 90 {
+            // Layout vertical para telas estreitas (< 90 colunas)
+            let logo_lines: Vec<&str> = self.config.logo.lines().filter(|l| !l.trim().is_empty()).collect();
+            let logo_height = (logo_lines.len() as u16).min(4);
+            let chunks = Layout::vertical([
+                Constraint::Length(logo_height),
+                Constraint::Min(1),
+            ])
+            .split(content_rect);
+
+            self.render_home_logo(chunks[0], buf, accent);
+            self.render_home_metrics(chunks[1], buf, accent);
+        } else {
+            // Layout horizontal balanceado (40% logo, 60% métricas)
+            let body = Layout::horizontal([
+                Constraint::Percentage(40),
+                Constraint::Percentage(60),
+            ])
+            .split(content_rect);
+
+            self.render_home_logo(body[0], buf, accent);
+            self.render_home_metrics(body[1], buf, accent);
+        }
     }
 
     /// Coluna esquerda: logo ASCII colorido.
@@ -446,21 +463,29 @@ impl Dashboard {
             );
             let value_span = Span::styled(value, Style::new().fg(TEXT));
             let line = Line::from(vec![key_span, Span::styled("  ", Style::new()), value_span]);
-            self.render_home_line(line, area.x, y, buf);
+            self.render_home_line(line, area.x, y, area.width, buf);
             y += 1;
         }
     }
 
-    /// Escreve uma linha respeitando os limites da área.
-    fn render_home_line(&self, line: Line<'static>, x: u16, y: u16, buf: &mut Buffer) {
+    /// Escreve uma linha respeitando os limites da área e truncando se necessário.
+    fn render_home_line(&self, line: Line<'static>, x: u16, y: u16, max_width: u16, buf: &mut Buffer) {
         let mut cx = x;
+        let limit_x = x.saturating_add(max_width);
         for span in &line.spans {
-            if span.content.is_empty() {
+            if span.content.is_empty() || cx >= limit_x {
                 continue;
             }
-            let width = span.content.chars().count() as u16;
-            buf.set_stringn(cx, y, &span.content, width as usize, span.style);
-            cx = cx.saturating_add(width);
+            let remaining = (limit_x - cx) as usize;
+            let width = span.content.chars().count();
+            let to_write = if width > remaining {
+                truncate(&span.content, remaining)
+            } else {
+                span.content.to_string()
+            };
+            let written_len = to_write.chars().count() as u16;
+            buf.set_stringn(cx, y, &to_write, remaining, span.style);
+            cx = cx.saturating_add(written_len);
         }
     }
 
@@ -638,13 +663,19 @@ impl Dashboard {
         }
     }
 
-    fn hints(&self) -> &'static str {
+    fn hints(&self) -> String {
         match self.tab {
-            Tab::Home => "[1-5] aba · [q] sair",
-            Tab::Storage => "[↑/↓] navegar · [m] montar/desmontar · [1-5] aba · [q] sair",
-            Tab::Network => "[↑/↓] navegar · [Enter/c] conectar · [d/f] esquecer rede · [1-5] aba · [q] sair",
-            Tab::Bluetooth => "[↑/↓] navegar · [b] conectar/desconectar · [1-5] aba · [q] sair",
-            Tab::Files => "teclas → Yazi · [Alt+1-5] aba · [Ctrl+Q] sair",
+            Tab::Home => "[1-5] aba · [q] sair".to_string(),
+            Tab::Storage => "[↑/↓] navegar · [m] montar/desmontar · [1-5] aba · [q] sair".to_string(),
+            Tab::Network => "[↑/↓] navegar · [c/Enter] conectar · [x] desconectar · [w] ligar/desligar · [d/f] esquecer · [1-5] aba · [q] sair".to_string(),
+            Tab::Bluetooth => "[↑/↓] navegar · [b] conectar/desconectar · [1-5] aba · [q] sair".to_string(),
+            Tab::Files => {
+                if self.yazi_dock.is_focused() {
+                    "[Esc Esc / F12] desviar foco para abas · [Ctrl+Q] sair".to_string()
+                } else {
+                    "[i/Enter] focar terminal · [s] shell · [y] yazi · [1-5] aba · [q] sair".to_string()
+                }
+            }
         }
     }
 

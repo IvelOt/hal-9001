@@ -11,6 +11,7 @@
 //!   `master_pty.resize()`, o que dispara o sinal `SIGWINCH` para o grupo de
 //!   processo do agente ajustar a própria tela.
 
+use std::env;
 use std::io::{ErrorKind, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,8 @@ pub enum AgentKind {
     Claude,
     /// Shell `bash` — terminal genérico.
     Bash,
+    /// Shell interativo do usuário (`$SHELL`, fallback `bash`/`zsh`).
+    Shell,
     /// Yazi — navegador de arquivos embarcado no PTY Dock (Aba Arquivos).
     Yazi,
 }
@@ -42,6 +45,7 @@ impl AgentKind {
             Self::OpenCode => "opencode",
             Self::Claude => "claude",
             Self::Bash => "bash",
+            Self::Shell => "bash",
             Self::Yazi => "yazi",
         }
     }
@@ -52,6 +56,7 @@ impl AgentKind {
             Self::OpenCode => "OpenCode",
             Self::Claude => "Claude",
             Self::Bash => "bash",
+            Self::Shell => "TERMINAL",
             Self::Yazi => "Yazi",
         }
     }
@@ -96,11 +101,32 @@ impl AgentCommand {
         Self::with_program(AgentKind::Yazi, program, Vec::new())
     }
 
-    /// Monta o `CommandBuilder` do `portable-pty` com o binário e argumentos.
+    /// Comando para abrir o **shell interativo do usuário** (`$SHELL`), com
+    /// fallback para `zsh` e depois `bash` quando a variável não está definida.
+    pub fn shell() -> Self {
+        let shell_path = env::var("SHELL").unwrap_or_else(|_| {
+            if std::path::Path::new("/usr/bin/zsh").exists() {
+                "/usr/bin/zsh".to_string()
+            } else {
+                "/bin/bash".to_string()
+            }
+        });
+        Self::with_program(AgentKind::Shell, shell_path, Vec::new())
+    }
+
+    /// Monta o `CommandBuilder` do `portable-pty` com o binário e argumentos,
+    /// configurando variáveis de ambiente de terminal completo.
     pub fn command_builder(&self) -> CommandBuilder {
         let mut builder = CommandBuilder::new(&self.program);
         for arg in &self.args {
             builder.arg(arg);
+        }
+        builder.env("TERM", "xterm-256color");
+        builder.env("COLORTERM", "truecolor");
+        if let Ok(lang) = env::var("LANG") {
+            builder.env("LANG", lang);
+        } else {
+            builder.env("LANG", "pt_BR.UTF-8");
         }
         builder
     }

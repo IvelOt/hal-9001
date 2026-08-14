@@ -1,14 +1,14 @@
-//! **PTY Dock** embarcado para o Yazi File Manager (Aba Arquivos).
+//! **PTY Dock** embarcado para o Yazi File Manager e Terminal Shell (Aba Arquivos).
 //!
-//! O Yazi roda dentro de um pseudo-terminal filho (`portable-pty`) interpretado
+//! Roda dentro de um pseudo-terminal filho (`portable-pty`) interpretado
 //! pelo parser ANSI `vt100`, embarcado no próprio container do Ratatui — no
-//! estilo `:terminal` do Neovim. A TUI **não suspende** o raw mode: teclas são
-//! convertidas em bytes crus e injetadas no processo, e a tela virtual é
-//! renderizada célula a célula dentro da aba.
+//! estilo `:terminal` do Neovim.
 //!
-//! Se o processo do Yazi terminar (ex.: usuário pressiona `q`), o dock pode ser
-//! reiniciado automaticamente ao focar a aba de Arquivos novamente
-//! ([`YaziDock::ensure_running`]).
+//! Possui dois modos de foco:
+//! * **Terminal Focado (`is_focused = true`)**: 100% das teclas são enviadas ao PTY.
+//!   Para sair do foco e navegar nas abas do HAL-9001, pressione `Esc Esc`, `F12` ou `Ctrl+Q`.
+//! * **Modo Navegação (`is_focused = false`)**: Teclas normais (`1-5`, `Tab`, `q`)
+//!   navegam na central. Pressione `i`, `a` ou `Enter` para focar novamente no terminal.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -19,42 +19,102 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 use crate::ai_agent::pty_session::{render_screen, AgentCommand, PtySession, PtyTarget};
-use crate::ui::{ACCENT, BG, DANGER, DIM, GRAY, TEXT};
+use crate::ui::{ACCENT, BG, CYAN, DANGER, DIM, GRAY, TEXT, WARN};
 
 /// Intervalo mínimo entre tentativas de reinício após uma falha de spawn.
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Dock que hospeda o Yazi num PTY embarcado (`portable-pty` + `vt100`).
+/// Modo de operação do dock de terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockMode {
+    /// Yazi — Gerenciador de arquivos gráfico no terminal.
+    Yazi,
+    /// Shell interativo do usuário (`$SHELL` / `zsh` / `bash`).
+    Shell,
+}
+
+impl DockMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yazi => "YAZI (GERENCIADOR DE ARQUIVOS)",
+            Self::Shell => "TERMINAL ($SHELL)",
+        }
+    }
+}
+
+/// Dock que hospeda o Yazi ou Terminal Shell num PTY embarcado (`portable-pty` + `vt100`).
 pub struct YaziDock {
-    /// Sessão PTY ativa do Yazi (reconstruída quando o processo termina).
+    /// Sessão PTY ativa.
     session: Option<Arc<PtySession>>,
-    /// Última dimensão (rows, cols) aplicada ao PTY — evita resizes redundantes.
+    /// Modo atual (Yazi ou Shell).
+    mode: DockMode,
+    /// Se o terminal está capturando ativamente todas as teclas do teclado.
+    is_focused: bool,
+    /// Timestamp do último Esc pressionado para detectar Esc duplo.
+    last_esc: Cell<Option<Instant>>,
+    /// Última dimensão (rows, cols) aplicada ao PTY.
     last_size: Cell<(u16, u16)>,
     /// Momento da última tentativa de início (backoff de reinício).
     last_attempt: Cell<Option<Instant>>,
-    /// Mensagem do último erro de inicialização (ex.: binário ausente).
+    /// Mensagem do último erro de inicialização.
     error: Option<String>,
 }
 
 impl YaziDock {
-    /// Cria um dock vazio (ainda sem processo do Yazi).
+    /// Cria um dock vazio com foco ativo por padrão.
     pub fn new() -> Self {
         Self {
             session: None,
+            mode: DockMode::Yazi,
+            is_focused: true,
+            last_esc: Cell::new(None),
             last_size: Cell::new((0, 0)),
             last_attempt: Cell::new(None),
             error: None,
         }
     }
 
-    /// Garante que uma sessão do Yazi esteja rodando.
-    ///
-    /// Reinicia automaticamente quando o processo anterior saiu (ex.: usuário
-    /// pressionou `q` dentro do Yazi) ou nunca foi iniciado. Falhas de spawn
-    /// respeitam um backoff de [`RETRY_INTERVAL`] para não spammar o fork.
+    /// Retorna se o terminal está em modo focado (capturando todas as teclas).
+    pub fn is_focused(&self) -> bool {
+        self.is_focused
+    }
+
+    /// Altera o estado de foco do terminal.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.is_focused = focused;
+    }
+
+    /// Alterna o modo entre Yazi e Shell interativo.
+    pub fn set_mode(&mut self, mode: DockMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.session = None; // Reinicia o processo com o novo modo
+            self.ensure_running();
+        }
+    }
+
+    /// Retorna o modo atual do dock.
+    pub fn mode(&self) -> DockMode {
+        self.mode
+    }
+
+    /// Registra um pressionamento de Esc e retorna `true` se foi um Esc duplo (dentro de 450ms).
+    pub fn check_double_esc(&self) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_esc.get() {
+            if now.duration_since(last) < Duration::from_millis(450) {
+                self.last_esc.set(None);
+                return true;
+            }
+        }
+        self.last_esc.set(Some(now));
+        false
+    }
+
+    /// Garante que o processo do PTY esteja rodando.
     pub fn ensure_running(&mut self) {
         let running = self
             .session
@@ -75,9 +135,13 @@ impl YaziDock {
         self.start();
     }
 
-    /// Dispara o processo do Yazi dentro de um novo PTY.
+    /// Dispara o processo dentro de um novo PTY.
     fn start(&mut self) {
-        let mut session = PtySession::new(AgentCommand::yazi());
+        let cmd = match self.mode {
+            DockMode::Yazi => AgentCommand::yazi(),
+            DockMode::Shell => AgentCommand::shell(),
+        };
+        let mut session = PtySession::new(cmd);
         match session.start() {
             Ok(()) => {
                 let (rows, cols) = self.last_size.get();
@@ -105,7 +169,7 @@ impl YaziDock {
         }
     }
 
-    /// Encaminha bytes crus (teclas) para o processo do Yazi.
+    /// Encaminha bytes crus (teclas) para o processo.
     pub fn write_input(&self, bytes: &[u8]) -> Result<()> {
         match &self.session {
             Some(session) => session.write_input(bytes),
@@ -113,14 +177,14 @@ impl YaziDock {
         }
     }
 
-    /// Aplica um fechamento sobre a tela virtual atual do Yazi, se ativo.
+    /// Aplica um fechamento sobre a tela virtual atual.
     pub fn with_screen<R>(&self, f: impl FnOnce(&vt100::Screen) -> R) -> Option<R> {
         self.session
             .as_ref()
             .map(|session| session.with_screen(f))
     }
 
-    /// `true` quando há um processo do Yazi vivo.
+    /// `true` quando há um processo vivo.
     pub fn is_running(&self) -> bool {
         self.session
             .as_ref()
@@ -140,7 +204,7 @@ impl Default for YaziDock {
     }
 }
 
-/// Widget que desenha o PTY Dock do Yazi num `Rect` do Ratatui.
+/// Widget que desenha o PTY Dock no Ratatui com moldura dinâmica de foco.
 pub struct YaziDockWidget<'a> {
     dock: &'a YaziDock,
 }
@@ -157,28 +221,54 @@ impl Widget for YaziDockWidget<'_> {
             return;
         }
 
+        let is_focused = self.dock.is_focused();
+        let mode_label = self.dock.mode().label();
+
+        let (border_color, title_spans) = if is_focused {
+            (
+                ACCENT,
+                vec![
+                    Span::styled(format!("  {mode_label} "), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                    Span::styled("· [FOCADO] ", Style::new().fg(CYAN).add_modifier(Modifier::BOLD)),
+                    Span::styled("(Pressione Esc Esc ou F12 para desviar foco) ", Style::new().fg(GRAY)),
+                ],
+            )
+        } else {
+            (
+                DIM,
+                vec![
+                    Span::styled(format!("  {mode_label} "), Style::new().fg(GRAY).add_modifier(Modifier::BOLD)),
+                    Span::styled("· [MODO NAVEGAÇÃO] ", Style::new().fg(WARN)),
+                    Span::styled("(Pressione 'i' ou Enter para focar) ", Style::new().fg(ACCENT)),
+                ],
+            )
+        };
+
         let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(DIM))
+            .border_type(if is_focused { BorderType::Thick } else { BorderType::Rounded })
+            .border_style(Style::new().fg(border_color))
             .style(Style::new().bg(BG))
-            .title(Line::from(
-                " ARQUIVOS · YAZI — PTY DOCK ",
-            ))
-            .title_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD));
+            .title(Line::from(title_spans));
+
         let inner = block.inner(area);
         block.render(area, buf);
 
+        // Limpa explicitamente a área interna antes de renderizar células do PTY
+        Clear.render(inner, buf);
+
+        // Atualiza a dimensão do PTY para as linhas/colunas exatas da área interna
+        self.dock.resize(inner.height, inner.width);
+
         if !self.dock.is_running() {
             let message = match self.dock.error() {
-                Some(e) => format!(" Falha ao iniciar o Yazi: {e}"),
-                None => " O Yazi não está em execução. Saindo e voltando à aba, ele reinicia."
-                    .to_string(),
+                Some(e) => format!(" Falha ao iniciar terminal: {e}"),
+                None => " O processo terminou. Pressione Enter para reiniciar.".to_string(),
             };
             render_placeholder(
                 &[
                     Line::from(Span::styled(message, Style::new().fg(DANGER))),
                     Line::from(Span::styled(
-                        " [Alt+1-5] trocar de aba · [Ctrl+Q] sair",
+                        " [1-5] trocar de aba · [i/Enter] focar · [Ctrl+Q] sair",
                         Style::new().fg(GRAY),
                     )),
                 ],
@@ -215,3 +305,4 @@ fn render_placeholder(lines: &[Line<'_>], area: Rect, buf: &mut Buffer) {
         }
     }
 }
+
