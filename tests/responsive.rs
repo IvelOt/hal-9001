@@ -1,0 +1,174 @@
+//! Testes de responsividade do harness: renderiza o cockpit (com foco no
+//! Overview) em múltiplas resoluções, garantindo 0 pânicos, 0 quebras de
+//! layout e centralização em telas largas — nos modos Padrão e Detalhado.
+
+use hal9001::app::App;
+use hal9001::backend::system::{
+    Battery, BatteryStatus, DetailInfo, Packages, SystemSnapshot, Volume,
+};
+use hal9001::config::Config;
+use hal9001::events::{Action, AppEvent};
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::Terminal;
+
+/// Resoluções cobertas: micro, padrão-80, moderno e ultrawide.
+const RESOLUTIONS: [(u16, u16); 4] = [(60, 15), (80, 24), (120, 35), (200, 50)];
+
+/// Snapshot rico o suficiente para exercitar todas as seções (padrão e detalhe).
+fn sample_snapshot() -> SystemSnapshot {
+    SystemSnapshot {
+        host: "hall".into(),
+        user: "operator".into(),
+        shell: "zsh".into(),
+        os: "Arch Linux".into(),
+        kernel: "6.18.43-1-lts".into(),
+        uptime_secs: 3 * 86_400 + 4 * 3_600 + 12 * 60,
+        cpu_name: "AMD Ryzen 7 5800X 8-Core Processor".into(),
+        cpu_usage: 37.0,
+        mem_used: 9 * 1024 * 1024 * 1024,
+        mem_total: 32 * 1024 * 1024 * 1024,
+        host_model: Some("ThinkPad X1 Carbon Gen 11".into()),
+        packages: Some(Packages {
+            total: 1560,
+            by_manager: vec![("pacman", 1500), ("flatpak", 60)],
+        }),
+        brightness: Some(0.6),
+        volume: Some(Volume {
+            level: 0.42,
+            muted: false,
+        }),
+        battery: Some(Battery {
+            percent: 76.0,
+            status: BatteryStatus::Discharging,
+            power_watts: Some(14.0),
+            health: Some(0.88),
+            cycle_count: Some(212),
+            technology: Some("Li-poly".into()),
+        }),
+        disk_used: Some(220 * 1024 * 1024 * 1024),
+        disk_total: Some(512 * 1024 * 1024 * 1024),
+        detail: DetailInfo {
+            board_vendor: Some("LENOVO".into()),
+            board_name: Some("21HM".into()),
+            bios_version: Some("N3AET50W".into()),
+            bios_date: Some("06/12/2023".into()),
+            gpu: Some("Intel Corporation Raptor Lake-P [Iris Xe Graphics]".into()),
+            cpu_arch: Some("x86_64".into()),
+            cpu_cores_physical: Some(8),
+            cpu_cores_logical: 16,
+            cpu_freq_ghz: Some(3.80),
+            cpu_temp_c: Some(48.0),
+            swap_used: 1024 * 1024 * 1024,
+            swap_total: 8 * 1024 * 1024 * 1024,
+            desktop: Some("sway".into()),
+            session_type: Some("wayland".into()),
+        },
+    }
+}
+
+/// Renderiza o Overview numa resolução e devolve o buffer resultante.
+fn render_overview(w: u16, h: u16, detailed: bool) -> Buffer {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.handle_event(AppEvent::System(Box::new(sample_snapshot())));
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::SelectTab(0), &tx); // Overview
+    if detailed {
+        app.dispatch(Action::ToggleDetail, &tx);
+    }
+
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// Menor coluna com conteúdo não-branco dentro de uma faixa vertical de linhas.
+fn min_content_col(buf: &Buffer, rows: std::ops::Range<u16>) -> Option<u16> {
+    let area = *buf.area();
+    let mut min_col: Option<u16> = None;
+    // Ignora as bordas do bloco (colunas 0 e width-1).
+    for y in rows {
+        if y >= area.height {
+            break;
+        }
+        for x in 1..area.width.saturating_sub(1) {
+            if buf[(x, y)].symbol().trim().is_empty() {
+                continue;
+            }
+            min_col = Some(min_col.map_or(x, |m| m.min(x)));
+            break;
+        }
+    }
+    min_col
+}
+
+#[test]
+fn renders_every_resolution_without_panic() {
+    for (w, h) in RESOLUTIONS {
+        for detailed in [false, true] {
+            // O próprio draw entra em pânico se algo estourar os limites.
+            let buf = render_overview(w, h, detailed);
+            assert_eq!(buf.area().width, w);
+            assert_eq!(buf.area().height, h);
+        }
+    }
+}
+
+#[test]
+fn wide_terminals_center_content() {
+    // Em telas largas o conteúdo não deve ficar colado na margem esquerda:
+    // a menor coluna com conteúdo, nas linhas internas, fica bem além da borda.
+    for (w, h) in [(120u16, 35u16), (200, 50)] {
+        let buf = render_overview(w, h, false);
+        // Ignora tabbar (linhas 0..3) e statusline; foca no miolo.
+        let min_col = min_content_col(&buf, 5..20).expect("deve haver conteúdo");
+        assert!(
+            min_col > 3,
+            "conteúdo colado à esquerda em {w} col (min_col={min_col})"
+        );
+    }
+}
+
+#[test]
+fn micro_terminal_collapses_beetle_but_still_renders() {
+    // 60x15: espaço apertado — não deve entrar em pânico e deve mostrar o
+    // painel de informações (procuramos o cabeçalho user@host).
+    let buf = render_overview(60, 15, false);
+    let joined = buffer_text(&buf);
+    assert!(
+        joined.contains("operator") || joined.contains("hall"),
+        "painel de informações ausente no micro terminal"
+    );
+}
+
+#[test]
+fn detailed_mode_shows_extra_fields_when_space_allows() {
+    // Em tela moderna, o modo detalhado expõe campos extras (ex.: BIOS, GPU).
+    let buf = render_overview(120, 40, true);
+    let text = buffer_text(&buf);
+    assert!(text.contains("BIOS") || text.contains("GPU") || text.contains("Núcleos"));
+    assert!(text.contains("Expandido"), "indicador de modo ausente");
+}
+
+#[test]
+fn footer_shows_mode_indicator() {
+    let normal = buffer_text(&render_overview(120, 40, false));
+    assert!(normal.contains("Normal"));
+    assert!(normal.contains("[.]"));
+}
+
+/// Concatena todos os símbolos do buffer numa string para buscas simples.
+fn buffer_text(buf: &Buffer) -> String {
+    let area = *buf.area();
+    let mut out = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            out.push_str(buf[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}

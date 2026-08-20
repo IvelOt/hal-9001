@@ -131,6 +131,7 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
         Line::from("j / k / ↑ / ↓            navegar listas"),
         Line::from("Enter                   ação primária do item"),
         Line::from("r                       refresh / rescan"),
+        Line::from(".                       Overview: detalhes normal/expandido"),
         Line::from("?                       abrir/fechar esta ajuda"),
         Line::from("q / Ctrl-c              sair"),
         Line::from(""),

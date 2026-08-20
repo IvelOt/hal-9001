@@ -39,7 +39,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ))
     };
 
-    let beetle = ascii::select("auto", area.width.saturating_sub(4));
+    let beetle = ascii::select("auto", area.width.saturating_sub(4)).unwrap_or("");
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));

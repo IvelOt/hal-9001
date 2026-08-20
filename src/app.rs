@@ -79,6 +79,8 @@ pub struct App {
     pub phase: Phase,
     pub active: Tab,
     pub show_help: bool,
+    /// Overview em modo detalhado (alternado pela tecla `.`).
+    pub detailed_overview: bool,
 
     /// Índice selecionado por aba (para listas navegáveis).
     pub selection: [usize; 8],
@@ -108,6 +110,7 @@ impl App {
             phase,
             active: Tab::Overview,
             show_help: false,
+            detailed_overview: false,
             selection: [0; 8],
             system: None,
             services: std::collections::HashMap::new(),
@@ -174,6 +177,7 @@ impl App {
                 self.selection[i] = self.selection[i].saturating_add(1);
             }
             Action::ToggleHelp => self.show_help = !self.show_help,
+            Action::ToggleDetail => self.detailed_overview = !self.detailed_overview,
             Action::Enter | Action::Refresh => {
                 // Repassa aos backends; cada worker filtra o que lhe interessa.
                 let _ = action_tx.send(action);

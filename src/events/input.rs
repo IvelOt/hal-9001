@@ -59,6 +59,7 @@ fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Up | KeyCode::Char('k') => Some(Action::Up),
         KeyCode::Enter => Some(Action::Enter),
         KeyCode::Char('r') => Some(Action::Refresh),
+        KeyCode::Char('.') => Some(Action::ToggleDetail),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         _ => Some(Action::Raw(key)),
     }

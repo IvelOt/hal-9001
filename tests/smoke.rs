@@ -89,9 +89,28 @@ fn render_all_tabs_and_splash_without_panic() {
                 percent: 82.0,
                 status: hal9001::backend::system::BatteryStatus::Charging,
                 power_watts: Some(12.5),
+                health: Some(0.91),
+                cycle_count: Some(142),
+                technology: Some("Li-poly".into()),
             }),
             disk_used: Some(120 * 1024 * 1024 * 1024),
             disk_total: Some(512 * 1024 * 1024 * 1024),
+            detail: hal9001::backend::system::DetailInfo {
+                board_vendor: Some("ACME".into()),
+                board_name: Some("X570".into()),
+                bios_version: Some("F35".into()),
+                bios_date: Some("2023-05-01".into()),
+                gpu: Some("Intel UHD Graphics".into()),
+                cpu_arch: Some("x86_64".into()),
+                cpu_cores_physical: Some(8),
+                cpu_cores_logical: 16,
+                cpu_freq_ghz: Some(3.4),
+                cpu_temp_c: Some(52.0),
+                swap_used: 512 * 1024 * 1024,
+                swap_total: 2 * 1024 * 1024 * 1024,
+                desktop: Some("sway".into()),
+                session_type: Some("wayland".into()),
+            },
         },
     )));
 
@@ -103,6 +122,13 @@ fn render_all_tabs_and_splash_without_panic() {
         terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
     }
     app.dispatch(hal9001::events::Action::ToggleHelp, &tx);
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+
+    // Modo detalhado do Overview (tecla `.`) também renderiza sem pânico.
+    app.dispatch(hal9001::events::Action::ToggleHelp, &tx); // fecha ajuda
+    app.dispatch(hal9001::events::Action::SelectTab(0), &tx);
+    app.dispatch(hal9001::events::Action::ToggleDetail, &tx);
+    assert!(app.detailed_overview);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 }
 
@@ -136,10 +162,16 @@ fn render_overview_desktop_degraded_without_panic() {
             battery: None,
             disk_used: None,
             disk_total: None,
+            detail: hal9001::backend::system::DetailInfo::default(),
         },
     )));
 
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+
+    // Também no modo detalhado (degradado: sem swap/bateria/DMI).
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(hal9001::events::Action::ToggleDetail, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 }
 

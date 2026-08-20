@@ -55,18 +55,29 @@ impl BatteryStatus {
         }
     }
 
-    /// Ícone compacto para a UI.
-    pub fn icon(self) -> &'static str {
+    /// Tag textual em maiúsculas, estilo neofetch clássico (`CHARGING`,
+    /// `DISCHARGING`, `FULL`, `NOT CHARGING`, `UNKNOWN`). Sem emojis.
+    pub fn tag(self) -> &'static str {
         match self {
-            BatteryStatus::Charging => "⚡",
-            BatteryStatus::Full => "🔌",
-            BatteryStatus::Discharging => "🔋",
-            BatteryStatus::NotCharging => "⏸",
-            BatteryStatus::Unknown => "?",
+            BatteryStatus::Charging => "CHARGING",
+            BatteryStatus::Full => "FULL",
+            BatteryStatus::Discharging => "DISCHARGING",
+            BatteryStatus::NotCharging => "NOT CHARGING",
+            BatteryStatus::Unknown => "UNKNOWN",
         }
     }
 
-    /// Rótulo textual.
+    /// Sinal ASCII da potência conforme o estado: `+` carregando, `-`
+    /// descarregando, vazio caso contrário.
+    pub fn power_sign(self) -> &'static str {
+        match self {
+            BatteryStatus::Charging => "+",
+            BatteryStatus::Discharging => "-",
+            _ => "",
+        }
+    }
+
+    /// Rótulo textual (pt-BR) para o modo detalhado.
     pub fn label(self) -> &'static str {
         match self {
             BatteryStatus::Charging => "Carregando",
@@ -79,19 +90,34 @@ impl BatteryStatus {
 }
 
 /// Bateria primária (BAT0/BAT1).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Battery {
     /// Percentual de carga em 0..=100.
     pub percent: f64,
     pub status: BatteryStatus,
     /// Potência instantânea em Watts, se disponível.
     pub power_watts: Option<f64>,
+    /// Saúde da bateria em 0.0..=1.0 (capacidade atual de fábrica ÷ projeto).
+    pub health: Option<f64>,
+    /// Contagem de ciclos de recarga, se exposta pelo firmware.
+    pub cycle_count: Option<u64>,
+    /// Tecnologia da célula (`Li-poly`, `Li-ion`, ...).
+    pub technology: Option<String>,
 }
 
 impl Battery {
     pub fn ratio(&self) -> f64 {
         (self.percent / 100.0).clamp(0.0, 1.0)
     }
+}
+
+/// Saúde da bateria: capacidade máxima atual ÷ capacidade de projeto, em
+/// 0.0..=1.0. `None` quando faltam leituras ou o projeto é zero.
+pub fn battery_health(full: f64, design: f64) -> Option<f64> {
+    if design <= 0.0 || full <= 0.0 {
+        return None;
+    }
+    Some((full / design).clamp(0.0, 1.5))
 }
 
 /// Volume do sink de áudio padrão.
@@ -138,6 +164,47 @@ pub struct SystemSnapshot {
     pub disk_used: Option<u64>,
     /// Espaço total do disco raiz `/` (bytes).
     pub disk_total: Option<u64>,
+
+    /// Campos extras exibidos apenas no modo detalhado (tecla `.`).
+    pub detail: DetailInfo,
+}
+
+/// Informações extras exibidas apenas no **modo detalhado** do Overview.
+///
+/// Todos os campos degradam graciosamente (`Option`/`0`) quando o dado não
+/// está disponível na plataforma.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DetailInfo {
+    // Placa-mãe & BIOS (DMI).
+    pub board_vendor: Option<String>,
+    pub board_name: Option<String>,
+    pub bios_version: Option<String>,
+    pub bios_date: Option<String>,
+
+    // GPU.
+    pub gpu: Option<String>,
+
+    // CPU detalhada.
+    pub cpu_arch: Option<String>,
+    pub cpu_cores_physical: Option<usize>,
+    pub cpu_cores_logical: usize,
+    pub cpu_freq_ghz: Option<f64>,
+    pub cpu_temp_c: Option<f64>,
+
+    // Memória virtual / swap.
+    pub swap_used: u64,
+    pub swap_total: u64,
+
+    // Ambiente gráfico.
+    pub desktop: Option<String>,
+    pub session_type: Option<String>,
+}
+
+impl DetailInfo {
+    /// Fração de swap usada em 0.0..=1.0.
+    pub fn swap_ratio(&self) -> f64 {
+        ratio(self.swap_used, self.swap_total)
+    }
 }
 
 /// Dados estáticos coletados uma única vez (caros ou imutáveis).
@@ -145,12 +212,14 @@ pub struct SystemSnapshot {
 struct StaticInfo {
     host_model: Option<String>,
     packages: Option<Packages>,
+    /// Parte estática do modo detalhado (DMI/BIOS/GPU/arquitetura).
+    detail: DetailInfo,
 }
 
 impl SystemSnapshot {
     /// Coleta a partir de um `System` já refreshado, mesclando dados estáticos
     /// e leituras dinâmicas de `/sys` e utilitários de áudio.
-    fn collect(sys: &System, disks: &Disks, stat: &StaticInfo) -> Self {
+    fn collect(sys: &System, disks: &Disks, stat: &StaticInfo, cpu_temp_c: Option<f64>) -> Self {
         let cpu_name = sys
             .cpus()
             .first()
@@ -161,6 +230,22 @@ impl SystemSnapshot {
         let (disk_used, disk_total) = read_root_disk(disks)
             .map(|(u, t)| (Some(u), Some(t)))
             .unwrap_or((None, None));
+
+        // Modo detalhado: parte estática (DMI/GPU/arch) + parte dinâmica.
+        let cpu_freq_mhz = sys.cpus().first().map(|c| c.frequency()).unwrap_or(0);
+        let detail = DetailInfo {
+            cpu_cores_logical: sys.cpus().len(),
+            cpu_cores_physical: sys.physical_core_count(),
+            cpu_freq_ghz: if cpu_freq_mhz > 0 {
+                Some(cpu_freq_mhz as f64 / 1000.0)
+            } else {
+                None
+            },
+            cpu_temp_c,
+            swap_used: sys.used_swap(),
+            swap_total: sys.total_swap(),
+            ..stat.detail.clone()
+        };
 
         SystemSnapshot {
             host: System::host_name().unwrap_or_else(|| "localhost".into()),
@@ -186,6 +271,7 @@ impl SystemSnapshot {
             battery: read_battery(Path::new("/sys/class/power_supply")),
             disk_used,
             disk_total,
+            detail,
         }
     }
 
@@ -292,6 +378,141 @@ fn count_dpkg() -> Option<u64> {
     }
     let text = String::from_utf8_lossy(&out.stdout);
     Some(count_installed_dpkg(&text))
+}
+
+// ---------------------------------------------------------------------------
+// Modo detalhado (tecla `.`)
+// ---------------------------------------------------------------------------
+
+/// Coleta a parte estática do modo detalhado (DMI/BIOS/GPU/arquitetura/DE).
+/// Chamado uma única vez; os campos dinâmicos (freq/temp/swap) são preenchidos
+/// a cada snapshot.
+fn read_static_detail() -> DetailInfo {
+    let dmi = Path::new("/sys/devices/virtual/dmi/id");
+    let (desktop, session_type) = detect_desktop();
+    DetailInfo {
+        board_vendor: read_dmi(dmi, "board_vendor"),
+        board_name: read_dmi(dmi, "board_name"),
+        bios_version: read_dmi(dmi, "bios_version"),
+        bios_date: read_dmi(dmi, "bios_date"),
+        gpu: read_gpu(),
+        cpu_arch: Some(std::env::consts::ARCH.to_string()),
+        desktop,
+        session_type,
+        ..DetailInfo::default()
+    }
+}
+
+/// Lê um campo DMI, descartando placeholders comuns de OEM.
+fn read_dmi(dir: &Path, field: &str) -> Option<String> {
+    let s = read_trimmed_file(&dir.join(field))?;
+    if s == "To be filled by O.E.M." || s == "Default string" || s == "Unknown" {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Detecta ambiente gráfico e tipo de sessão a partir de variáveis de ambiente.
+/// Retorna `(DE/WM, session_type)`.
+fn detect_desktop() -> (Option<String>, Option<String>) {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let desktop = env("XDG_CURRENT_DESKTOP")
+        .or_else(|| env("DESKTOP_SESSION"))
+        .or_else(|| env("XDG_SESSION_DESKTOP"))
+        .or_else(detect_wm_process);
+    (desktop, env("XDG_SESSION_TYPE"))
+}
+
+/// Checa processos conhecidos de window managers standalone.
+fn detect_wm_process() -> Option<String> {
+    for wm in ["sway", "i3", "hyprland", "bspwm", "dwm", "awesome", "xmonad"] {
+        if std::process::Command::new("pgrep")
+            .args(["-x", wm])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some(wm.to_string());
+        }
+    }
+    None
+}
+
+/// GPU via `lspci`; degrada para `None` quando o utilitário não existe.
+fn read_gpu() -> Option<String> {
+    let out = std::process::Command::new("lspci").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_lspci_gpu(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Extrai o nome da primeira controladora VGA/3D da saída do `lspci`.
+pub fn parse_lspci_gpu(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("vga compatible controller")
+            || lower.contains("3d controller")
+            || lower.contains("display controller")
+        {
+            // Formato: "00:02.0 VGA compatible controller: Intel Corporation ...".
+            // O separador classe→nome é o primeiro ": " (o slot usa ":" sem espaço).
+            if let Some((_, name)) = line.split_once(": ") {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Temperatura da CPU (°C) a partir de `/sys/class/thermal`, preferindo zonas
+/// cujo `type` indique CPU/pacote.
+pub fn read_cpu_temp(dir: &Path) -> Option<f64> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut zones: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("thermal_zone"))
+                .unwrap_or(false)
+        })
+        .collect();
+    zones.sort();
+
+    let mut fallback: Option<f64> = None;
+    for zone in zones {
+        let temp = read_trimmed_file(&zone.join("temp")).and_then(|t| parse_thermal_temp(&t));
+        let Some(temp) = temp else { continue };
+        let kind = read_trimmed_file(&zone.join("type"))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if kind.contains("x86_pkg")
+            || kind.contains("cpu")
+            || kind.contains("coretemp")
+            || kind.contains("k10temp")
+        {
+            return Some(temp);
+        }
+        fallback.get_or_insert(temp);
+    }
+    fallback
+}
+
+/// Converte millicelsius (`45000`) em °C (`45.0`); ignora valores absurdos.
+pub fn parse_thermal_temp(milli: &str) -> Option<f64> {
+    let raw: f64 = milli.trim().parse().ok()?;
+    let c = raw / 1000.0;
+    if (0.0..=150.0).contains(&c) {
+        Some(c)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +639,9 @@ pub fn read_battery(dir: &Path) -> Option<Battery> {
                         .map(|s| BatteryStatus::parse(&s))
                         .unwrap_or(BatteryStatus::Unknown),
                     power_watts: read_battery_power(&base),
+                    health: read_battery_health(&base),
+                    cycle_count: read_u64_file(&base.join("cycle_count")),
+                    technology: read_trimmed_file(&base.join("technology")),
                 });
             }
         }
@@ -444,6 +668,40 @@ fn read_battery_power(base: &Path) -> Option<f64> {
     }
     // (µA * µV) / 1e12 = W.
     Some((ua * uv) / 1_000_000_000_000.0)
+}
+
+/// Saúde a partir de `energy_full`/`energy_full_design` (µWh) ou, na falta,
+/// `charge_full`/`charge_full_design` (µAh).
+fn read_battery_health(base: &Path) -> Option<f64> {
+    for (full_name, design_name) in [
+        ("energy_full", "energy_full_design"),
+        ("charge_full", "charge_full_design"),
+    ] {
+        let full = read_u64_file(&base.join(full_name));
+        let design = read_u64_file(&base.join(design_name));
+        if let (Some(f), Some(d)) = (full, design) {
+            if let Some(h) = battery_health(f as f64, d as f64) {
+                return Some(h);
+            }
+        }
+    }
+    None
+}
+
+/// Lê um arquivo e devolve seu conteúdo `trim`ado, se não vazio.
+fn read_trimmed_file(path: &Path) -> Option<String> {
+    let s = std::fs::read_to_string(path).ok()?;
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Lê um arquivo contendo um único inteiro sem sinal.
+fn read_u64_file(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 /// Retorna `(usado, total)` do disco montado em `/`, se encontrado.
@@ -476,6 +734,7 @@ pub async fn run(
     let stat = StaticInfo {
         host_model: read_host_model(),
         packages: count_packages(),
+        detail: read_static_detail(),
     };
 
     let mut ticker = tokio::time::interval(Duration::from_millis(poll_ms.max(250)));
@@ -493,9 +752,11 @@ pub async fn run(
         sys.refresh_memory();
         disks.refresh();
 
+        let cpu_temp = read_cpu_temp(Path::new("/sys/class/thermal"));
+
         if tx
             .send(AppEvent::System(Box::new(SystemSnapshot::collect(
-                &sys, &disks, &stat,
+                &sys, &disks, &stat, cpu_temp,
             ))))
             .is_err()
         {

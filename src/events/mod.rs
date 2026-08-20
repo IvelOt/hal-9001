@@ -71,6 +71,8 @@ pub enum Action {
     Enter,
     Refresh,
     ToggleHelp,
+    /// Alterna o Overview entre exibição Padrão e Detalhada (tecla `.`).
+    ToggleDetail,
     /// Redesenho solicitado (ex.: resize). Sem efeito de estado.
     Redraw,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.

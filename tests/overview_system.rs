@@ -6,8 +6,9 @@
 use std::fs;
 
 use hal9001::backend::system::{
-    brightness_ratio, count_installed_dpkg, count_nonempty_lines, parse_amixer_volume,
-    parse_wpctl_volume, ratio, read_battery, read_brightness, BatteryStatus, Packages,
+    battery_health, brightness_ratio, count_installed_dpkg, count_nonempty_lines,
+    parse_amixer_volume, parse_lspci_gpu, parse_thermal_temp, parse_wpctl_volume, ratio,
+    read_battery, read_brightness, read_cpu_temp, BatteryStatus, Packages,
 };
 
 // --- ratios --------------------------------------------------------------
@@ -118,6 +119,66 @@ fn read_battery_power_from_current_voltage() {
 
     let b = read_battery(dir.path()).unwrap();
     assert!((b.power_watts.unwrap() - 12.0).abs() < 1e-6);
+}
+
+#[test]
+fn battery_health_and_details_from_sysfs() {
+    // saúde = full/design; ignora zero/negativos.
+    assert!((battery_health(4400.0, 5000.0).unwrap() - 0.88).abs() < 1e-9);
+    assert_eq!(battery_health(0.0, 5000.0), None);
+    assert_eq!(battery_health(4400.0, 0.0), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let bat = dir.path().join("BAT0");
+    fs::create_dir_all(&bat).unwrap();
+    fs::write(bat.join("capacity"), "76\n").unwrap();
+    fs::write(bat.join("status"), "Discharging\n").unwrap();
+    fs::write(bat.join("energy_full"), "44000000\n").unwrap();
+    fs::write(bat.join("energy_full_design"), "50000000\n").unwrap();
+    fs::write(bat.join("cycle_count"), "212\n").unwrap();
+    fs::write(bat.join("technology"), "Li-poly\n").unwrap();
+
+    let b = read_battery(dir.path()).unwrap();
+    assert!((b.health.unwrap() - 0.88).abs() < 1e-9);
+    assert_eq!(b.cycle_count, Some(212));
+    assert_eq!(b.technology.as_deref(), Some("Li-poly"));
+}
+
+// --- GPU / temperatura ---------------------------------------------------
+
+#[test]
+fn lspci_gpu_extraction() {
+    let out = "\
+00:00.0 Host bridge: Intel Corporation Device 1234
+00:02.0 VGA compatible controller: Intel Corporation Raptor Lake-P [Iris Xe Graphics]
+2e:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]";
+    // Pega a primeira controladora VGA/3D.
+    assert_eq!(
+        parse_lspci_gpu(out).as_deref(),
+        Some("Intel Corporation Raptor Lake-P [Iris Xe Graphics]")
+    );
+    assert_eq!(parse_lspci_gpu("no gpu here"), None);
+}
+
+#[test]
+fn thermal_temp_parsing_and_reading() {
+    assert!((parse_thermal_temp("45000").unwrap() - 45.0).abs() < 1e-9);
+    assert_eq!(parse_thermal_temp("999000"), None); // absurdo → descartado
+    assert_eq!(parse_thermal_temp("abc"), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    // Zona genérica primeiro, zona de CPU depois — deve preferir a de CPU.
+    let z0 = dir.path().join("thermal_zone0");
+    let z1 = dir.path().join("thermal_zone1");
+    fs::create_dir_all(&z0).unwrap();
+    fs::create_dir_all(&z1).unwrap();
+    fs::write(z0.join("type"), "acpitz\n").unwrap();
+    fs::write(z0.join("temp"), "40000\n").unwrap();
+    fs::write(z1.join("type"), "x86_pkg_temp\n").unwrap();
+    fs::write(z1.join("temp"), "55000\n").unwrap();
+
+    assert!((read_cpu_temp(dir.path()).unwrap() - 55.0).abs() < 1e-9);
+    assert_eq!(read_cpu_temp(std::path::Path::new("/no/such/zone")), None);
 }
 
 #[test]
