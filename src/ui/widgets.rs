@@ -3,7 +3,40 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use super::theme::Palette;
+
+/// Largura reservada ao rótulo das linhas `rótulo valor` do Overview.
+const LABEL_W: usize = 9;
+
+/// Trunca `s` para caber em `max` colunas de exibição, anexando `…` quando
+/// corta. Respeita a largura Unicode de cada caractere (CJK/emoji contam 2).
+pub fn truncate_str(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(s) <= max {
+        return s.to_string();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    // Reserva 1 coluna para a reticência.
+    let budget = max - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
+}
 
 /// Formata bytes em unidade humana (KiB/MiB/GiB).
 pub fn human_bytes(bytes: u64) -> String {
@@ -51,29 +84,51 @@ pub fn section_title<'a>(text: &str, pal: &Palette) -> Line<'a> {
     ])
 }
 
-/// Linha "rótulo: valor" com rótulo destacado.
-pub fn kv_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
+/// Linha "rótulo valor" com rótulo destacado. O valor é truncado com `…` para
+/// nunca ultrapassar `width` colunas (rótulo incluso), evitando o vazamento
+/// horizontal apontado no briefing.
+pub fn kv_line<'a>(label: &'a str, value: String, width: usize, pal: &Palette) -> Line<'a> {
+    let avail = width.saturating_sub(LABEL_W).max(1);
     Line::from(vec![
         Span::styled(
-            format!("{label:<9}"),
+            format!("{label:<LABEL_W$}"),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(value, Style::default().fg(pal.fg)),
+        Span::styled(truncate_str(&value, avail), Style::default().fg(pal.fg)),
     ])
 }
 
-/// Linha com barra de progresso textual: `CPU  [██████░░░░]  62%`.
-pub fn bar_line<'a>(label: &'a str, ratio: f64, width: usize, pal: &Palette) -> Line<'a> {
+/// Linha densa que combina, numa única linha, o rótulo, um `valor` métrico
+/// (ex.: `6.3 / 15.3 GiB`) e a barra de progresso com percentual — reduzindo à
+/// metade a altura das seções. O `valor` é alinhado numa coluna de `val_w`
+/// colunas (truncado com `…` se preciso) para que as barras fiquem alinhadas.
+/// Um `suffix` opcional (ex.: `[CHARGING +25W]`, `[MUTED]`) é anexado ao fim.
+#[allow(clippy::too_many_arguments)]
+pub fn metric_line<'a>(
+    label: &'a str,
+    value: &str,
+    val_w: usize,
+    ratio: f64,
+    bar_w: usize,
+    pal: &Palette,
+    suffix: Option<&str>,
+) -> Line<'a> {
     let ratio = ratio.clamp(0.0, 1.0);
-    let filled = (ratio * width as f64).round() as usize;
-    let empty = width.saturating_sub(filled);
+    let filled = (ratio * bar_w as f64).round() as usize;
+    let empty = bar_w.saturating_sub(filled);
     let color = pal.gauge_color(ratio);
 
-    Line::from(vec![
+    let val = truncate_str(value, val_w);
+    let pad = val_w.saturating_sub(UnicodeWidthStr::width(val.as_str()));
+
+    let mut spans = vec![
         Span::styled(
-            format!("{label:<9}"),
+            format!("{label:<LABEL_W$}"),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
+        Span::styled(val, Style::default().fg(pal.fg)),
+        // Espaçamento até a barra (padding do valor + 1 folga).
+        Span::raw(" ".repeat(pad + 1)),
         Span::styled("[", Style::default().fg(pal.dim)),
         Span::styled("█".repeat(filled), Style::default().fg(color)),
         Span::styled("░".repeat(empty), Style::default().fg(pal.dim)),
@@ -82,24 +137,14 @@ pub fn bar_line<'a>(label: &'a str, ratio: f64, width: usize, pal: &Palette) -> 
             format!("{:>3.0}%", ratio * 100.0),
             Style::default().fg(pal.fg),
         ),
-    ])
-}
-
-/// Como [`bar_line`], mas anexa um sufixo textual após o percentual — usado
-/// para status de bateria (⚡/🔋) ou indicador de mudo do volume.
-pub fn bar_line_suffix<'a>(
-    label: &'a str,
-    ratio: f64,
-    width: usize,
-    pal: &Palette,
-    suffix: &str,
-) -> Line<'a> {
-    let mut line = bar_line(label, ratio, width, pal);
-    line.spans.push(Span::styled(
-        format!("  {suffix}"),
-        Style::default().fg(pal.dim),
-    ));
-    line
+    ];
+    if let Some(s) = suffix {
+        spans.push(Span::styled(
+            format!("  {s}"),
+            Style::default().fg(pal.dim),
+        ));
+    }
+    Line::from(spans)
 }
 
 /// Faixa de 16 blocos representando a paleta de cores do terminal.

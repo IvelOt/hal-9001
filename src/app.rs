@@ -178,8 +178,16 @@ impl App {
             }
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::ToggleDetail => self.detailed_overview = !self.detailed_overview,
-            Action::Enter | Action::Refresh => {
+            Action::Enter
+            | Action::Refresh
+            | Action::BrightnessUp
+            | Action::BrightnessDown
+            | Action::VolumeUp
+            | Action::VolumeDown
+            | Action::ToggleMute => {
                 // Repassa aos backends; cada worker filtra o que lhe interessa.
+                // Brilho/volume são aplicados pela task `system`, que emite um
+                // toast e um snapshot atualizado imediatamente.
                 let _ = action_tx.send(action);
             }
             Action::Redraw => {}

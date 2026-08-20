@@ -211,6 +211,63 @@ fn footer_shows_mode_indicator() {
     assert!(normal.contains("[.]"));
 }
 
+#[test]
+fn footer_shows_control_hints() {
+    // O rodapé do Overview anuncia os controles interativos de brilho/volume.
+    let text = buffer_text(&render_overview(120, 40, false));
+    assert!(text.contains("[b/B]"), "atalho de brilho ausente");
+    assert!(text.contains("[v/V]"), "atalho de volume ausente");
+    assert!(text.contains("[m]"), "atalho de mudo ausente");
+}
+
+#[test]
+fn dense_lines_combine_metric_and_bar() {
+    // Requisito do briefing: a métrica (ex.: RAM `9.0 / 32.0 GiB`) e a barra de
+    // progresso convivem na MESMA linha do buffer, e não em duas separadas.
+    let buf = render_overview(120, 40, false);
+    let area = *buf.area();
+    let mut found = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        // Linha da RAM: rótulo + valor GiB + barra `[` + percentual `%`.
+        if row.contains("RAM") && row.contains("GiB") && row.contains('[') && row.contains('%') {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "linha densa RAM (valor + barra) não encontrada");
+}
+
+#[test]
+fn standard_terminal_keeps_box_and_footer_visible() {
+    // 80x24 (terminal padrão): a moldura do bloco (topo) e o rodapé de controles
+    // (base) — ambos em posições fixas — nunca são empurrados para fora.
+    for detailed in [false, true] {
+        let buf = render_overview(80, 24, detailed);
+        let text = buffer_text(&buf);
+        assert!(text.contains("Overview"), "título do bloco cortado (detailed={detailed})");
+        assert!(
+            text.contains("[b/B]") && text.contains("[m]"),
+            "rodapé de controles cortado (detailed={detailed})"
+        );
+    }
+
+    // No modo NORMAL o layout denso (~16 linhas) cabe por completo: as três
+    // seções e a paleta permanecem visíveis sem corte.
+    let text = buffer_text(&render_overview(80, 24, false));
+    for title in [
+        "AVAILABLE COMPUTE",
+        "SYSTEM & PLATFORM",
+        "PERIPHERALS & POWER",
+        "COLOR PALETTE",
+    ] {
+        assert!(text.contains(title), "seção '{title}' cortada no modo normal");
+    }
+}
+
 /// Concatena todos os símbolos do buffer numa string para buscas simples.
 fn buffer_text(buf: &Buffer) -> String {
     let area = *buf.area();

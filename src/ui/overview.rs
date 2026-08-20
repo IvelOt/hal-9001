@@ -23,7 +23,7 @@ use crate::backend::system::{DetailInfo, SystemSnapshot};
 
 use super::theme::Palette;
 use super::widgets::{
-    bar_line, bar_line_suffix, human_bytes, human_uptime, kv_line, palette_line, section_title,
+    human_bytes, human_uptime, kv_line, metric_line, palette_line, section_title, truncate_str,
 };
 
 /// Folga horizontal entre a coluna de identidade e a de informações.
@@ -160,19 +160,38 @@ fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>) {
     f.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-/// Statusline interna do Overview com o indicador do modo de detalhe.
+/// Statusline interna do Overview: indicador do modo de detalhe + atalhos de
+/// controle interativo (brilho/volume/mudo).
 fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let mode = if app.detailed_overview {
         "Expandido"
     } else {
         "Normal"
     };
-    let line = Line::from(vec![
-        Span::styled(" [.] ", Style::default().fg(pal.accent)),
-        Span::styled("Detalhes: ", Style::default().fg(pal.dim)),
-        Span::styled(mode, Style::default().fg(pal.fg)),
-    ]);
+    let hint = |key: &'static str, label: &'static str| {
+        [
+            Span::styled(format!(" [{key}] "), Style::default().fg(pal.accent)),
+            Span::styled(label, Style::default().fg(pal.dim)),
+        ]
+    };
+    let mut spans = Vec::new();
+    spans.extend(hint(".", "Detalhes:"));
+    spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
+    spans.extend(hint("b/B", "Brilho"));
+    spans.extend(hint("v/V", "Volume"));
+    spans.extend(hint("m", "Mudo"));
+    // Trunca a linha inteira à largura disponível para nunca vazar.
+    let mut line = Line::from(spans);
+    if line_width(&line) > area.width as usize {
+        let text = truncate_str(&spans_text(&line), area.width as usize);
+        line = Line::from(Span::styled(text, Style::default().fg(pal.dim)));
+    }
     f.render_widget(Paragraph::new(line), area);
+}
+
+/// Concatena o texto de todos os spans de uma linha.
+fn spans_text(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
 // --- Coluna de identidade (metadados) ------------------------------------
@@ -225,87 +244,136 @@ fn meta_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
 
 // --- Coluna de seções ----------------------------------------------------
 
+/// Larguras das colunas de informação, derivadas da largura disponível. As
+/// linhas densas (`métrica + barra`) usam `bar_w` para a barra e `val_w` para o
+/// valor alinhado; as linhas `rótulo valor` usam `width` para o truncamento.
+#[derive(Clone, Copy)]
+struct Cols {
+    /// Largura total disponível para a coluna de informações.
+    width: usize,
+    /// Largura da barra de progresso (blocos internos).
+    bar_w: usize,
+    /// Largura alinhada da coluna de valor nas linhas densas.
+    val_w: usize,
+}
+
+/// Largura-alvo máxima da coluna de informações. Impede que valores longos
+/// (GPU/BIOS/Host) estiquem a coluna até a borda em telas largas — preservando
+/// a folga que permite centralizar o bloco (`Flex::Center`).
+const MAX_INFO_W: usize = 48;
+
+impl Cols {
+    fn new(width: u16) -> Self {
+        // Limita a largura-alvo para manter a coluna compacta e centralizável.
+        let width = (width as usize).min(MAX_INFO_W);
+        let bar_w = (width / 4).clamp(6, 14);
+        // Reserva: rótulo(9) + barra(`[`+bar_w+`] `+`NNN%`) + 1 folga.
+        let reserved = 9 + bar_w + 7 + 1;
+        let val_w = width.saturating_sub(reserved).clamp(8, 40);
+        Self {
+            width,
+            bar_w,
+            val_w,
+        }
+    }
+}
+
 /// Monta as seções categorizadas da coluna direita.
+///
+/// O layout é **denso**: cada métrica (CPU/RAM/Swap/Disco/Bateria/Brilho/
+/// Volume) ocupa uma única linha combinando valor + barra, e as seções são
+/// separadas apenas pelos títulos (sem linhas em branco), mantendo o total em
+/// ~16 linhas no modo normal — cabendo em terminais de 24 linhas sem cortar a
+/// borda do bloco.
 fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) -> Vec<Line<'a>> {
-    let bar_w = (width as usize / 4).clamp(6, 20);
+    let cols = Cols::new(width);
     let detailed = app.detailed_overview;
     let mut out: Vec<Line> = Vec::new();
 
-    section_hardware(s, pal, bar_w, detailed, &mut out);
-    out.push(Line::from(""));
-    section_platform(s, pal, bar_w, detailed, &mut out);
-    out.push(Line::from(""));
-    section_power(s, pal, bar_w, detailed, &mut out);
-    out.push(Line::from(""));
+    section_hardware(s, pal, cols, detailed, &mut out);
+    section_platform(s, pal, cols, detailed, &mut out);
+    section_power(s, pal, cols, detailed, &mut out);
     out.push(section_title("Color Palette", pal));
     out.push(palette_line());
 
     out
 }
 
-/// Seção **Available Compute / Hardware**.
+/// Seção **Available Compute / Hardware** — linhas densas (métrica + barra).
 fn section_hardware(
     s: &SystemSnapshot,
     pal: &Palette,
-    bar_w: usize,
+    cols: Cols,
     detailed: bool,
     out: &mut Vec<Line>,
 ) {
     let d: &DetailInfo = &s.detail;
     out.push(section_title("Available Compute / Hardware", pal));
 
-    out.push(kv_line("CPU", s.cpu_name.clone(), pal));
-
-    // Núcleos / frequência / arquitetura.
+    // CPU: nome limpo + núcleos combinados numa única linha com a barra de uso.
     let cores = match d.cpu_cores_physical {
-        Some(p) => format!("{p}c / {}t", d.cpu_cores_logical),
+        Some(p) => format!("{p}c/{}t", d.cpu_cores_logical),
         None => format!("{}t", d.cpu_cores_logical),
     };
-    let mut cpu_det = cores;
-    if let Some(fq) = d.cpu_freq_ghz {
-        cpu_det.push_str(&format!(" @ {fq:.2} GHz"));
-    }
-    out.push(kv_line("Núcleos", cpu_det, pal));
-    out.push(bar_line("Uso CPU", s.cpu_ratio(), bar_w, pal));
-
-    // RAM.
-    out.push(kv_line(
-        "RAM",
-        format!("{} / {}", human_bytes(s.mem_used), human_bytes(s.mem_total)),
+    let cpu_val = format!("{} ({cores})", clean_cpu(&s.cpu_name));
+    out.push(metric_line(
+        "CPU",
+        &cpu_val,
+        cols.val_w,
+        s.cpu_ratio(),
+        cols.bar_w,
         pal,
+        None,
     ));
-    out.push(bar_line("Mem", s.mem_ratio(), bar_w, pal));
+
+    // RAM: uso / total + barra.
+    out.push(metric_line(
+        "RAM",
+        &format!("{} / {}", human_bytes(s.mem_used), human_bytes(s.mem_total)),
+        cols.val_w,
+        s.mem_ratio(),
+        cols.bar_w,
+        pal,
+        None,
+    ));
 
     if detailed {
         // Swap.
         if d.swap_total > 0 {
-            out.push(kv_line(
+            out.push(metric_line(
                 "Swap",
-                format!(
+                &format!(
                     "{} / {}",
                     human_bytes(d.swap_used),
                     human_bytes(d.swap_total)
                 ),
+                cols.val_w,
+                d.swap_ratio(),
+                cols.bar_w,
                 pal,
+                None,
             ));
-            out.push(bar_line("Swap", d.swap_ratio(), bar_w, pal));
         } else {
-            out.push(kv_line("Swap", "N/A".into(), pal));
+            out.push(kv_line("Swap", "N/A".into(), cols.width, pal));
         }
 
-        // Temperatura da CPU.
+        // Temperatura da CPU (+ frequência, quando houver).
         if let Some(t) = d.cpu_temp_c {
-            out.push(kv_line("Temp CPU", format!("{t:.0} °C"), pal));
+            let val = match d.cpu_freq_ghz {
+                Some(fq) => format!("{t:.0} °C @ {fq:.2} GHz"),
+                None => format!("{t:.0} °C"),
+            };
+            out.push(kv_line("Temp CPU", val, cols.width, pal));
         }
 
         // Placa-mãe.
         if let Some(board) = join_opt(d.board_vendor.as_deref(), d.board_name.as_deref()) {
-            out.push(kv_line("Placa", board, pal));
+            out.push(kv_line("Placa", board, cols.width, pal));
         }
 
-        // GPU.
+        // GPU (nome limpo).
         if let Some(gpu) = &d.gpu {
-            out.push(kv_line("GPU", gpu.clone(), pal));
+            out.push(kv_line("GPU", clean_gpu(gpu), cols.width, pal));
         }
     }
 }
@@ -314,23 +382,23 @@ fn section_hardware(
 fn section_platform(
     s: &SystemSnapshot,
     pal: &Palette,
-    bar_w: usize,
+    cols: Cols,
     detailed: bool,
     out: &mut Vec<Line>,
 ) {
     let d: &DetailInfo = &s.detail;
     out.push(section_title("System & Platform", pal));
 
-    out.push(kv_line("OS", s.os.clone(), pal));
+    out.push(kv_line("OS", s.os.clone(), cols.width, pal));
     if let Some(model) = &s.host_model {
-        out.push(kv_line("Host", model.clone(), pal));
+        out.push(kv_line("Host", model.clone(), cols.width, pal));
     }
-    out.push(kv_line("Kernel", s.kernel.clone(), pal));
+    out.push(kv_line("Kernel", s.kernel.clone(), cols.width, pal));
 
     if detailed {
         match (&d.bios_version, &d.bios_date) {
-            (Some(v), Some(dt)) => out.push(kv_line("BIOS", format!("{v} ({dt})"), pal)),
-            (Some(v), None) => out.push(kv_line("BIOS", v.clone(), pal)),
+            (Some(v), Some(dt)) => out.push(kv_line("BIOS", format!("{v} ({dt})"), cols.width, pal)),
+            (Some(v), None) => out.push(kv_line("BIOS", v.clone(), cols.width, pal)),
             _ => {}
         }
     }
@@ -341,6 +409,7 @@ fn section_platform(
             .as_ref()
             .map(|p| p.summary())
             .unwrap_or_else(|| "N/A".into()),
+        cols.width,
         pal,
     ));
 
@@ -349,27 +418,28 @@ fn section_platform(
         (true, Some(de)) => format!("{} · {de}", s.shell),
         _ => s.shell.clone(),
     };
-    out.push(kv_line("Shell", shell, pal));
+    out.push(kv_line("Shell", shell, cols.width, pal));
 
-    // Disco raiz.
+    // Disco raiz — linha densa quando há dados.
     match (s.disk_ratio(), s.disk_used, s.disk_total) {
-        (Some(r), Some(u), Some(t)) => {
-            out.push(kv_line(
-                "Disco /",
-                format!("{} / {}", human_bytes(u), human_bytes(t)),
-                pal,
-            ));
-            out.push(bar_line("Disco", r, bar_w, pal));
-        }
-        _ => out.push(kv_line("Disco /", "N/A".into(), pal)),
+        (Some(r), Some(u), Some(t)) => out.push(metric_line(
+            "Disco (/)",
+            &format!("{} / {}", human_bytes(u), human_bytes(t)),
+            cols.val_w,
+            r,
+            cols.bar_w,
+            pal,
+            None,
+        )),
+        _ => out.push(kv_line("Disco (/)", "N/A".into(), cols.width, pal)),
     }
 }
 
-/// Seção **Peripherals & Power**.
+/// Seção **Peripherals & Power** — bateria/brilho/volume em linhas densas.
 fn section_power(
     s: &SystemSnapshot,
     pal: &Palette,
-    bar_w: usize,
+    cols: Cols,
     detailed: bool,
     out: &mut Vec<Line>,
 ) {
@@ -379,7 +449,15 @@ fn section_power(
     match &s.battery {
         Some(b) => {
             let suffix = battery_suffix(b);
-            out.push(bar_line_suffix("Bateria", b.ratio(), bar_w, pal, &suffix));
+            out.push(metric_line(
+                "Bateria",
+                &format!("{:.0}%", b.percent),
+                cols.val_w,
+                b.ratio(),
+                cols.bar_w,
+                pal,
+                Some(&suffix),
+            ));
 
             if detailed {
                 let mut parts: Vec<String> = Vec::new();
@@ -393,26 +471,80 @@ fn section_power(
                     parts.push(tech.clone());
                 }
                 if !parts.is_empty() {
-                    out.push(kv_line("Bateria+", parts.join(" · "), pal));
+                    out.push(kv_line("Bateria+", parts.join(" · "), cols.width, pal));
                 }
             }
         }
-        None => out.push(kv_line("Bateria", "N/A (Desktop)".into(), pal)),
+        None => out.push(kv_line("Bateria", "N/A (Desktop)".into(), cols.width, pal)),
     }
 
     // Brilho.
     match s.brightness {
-        Some(r) => out.push(bar_line("Brilho", r, bar_w, pal)),
-        None => out.push(kv_line("Brilho", "N/A".into(), pal)),
+        Some(r) => out.push(metric_line(
+            "Brilho",
+            &format!("{:.0}%", r * 100.0),
+            cols.val_w,
+            r,
+            cols.bar_w,
+            pal,
+            None,
+        )),
+        None => out.push(kv_line("Brilho", "N/A".into(), cols.width, pal)),
     }
 
     // Volume — sem emojis; [MUTED] apenas quando mudo.
     match &s.volume {
-        Some(v) if v.muted => {
-            out.push(bar_line_suffix("Volume", v.ratio(), bar_w, pal, "[MUTED]"));
+        Some(v) => {
+            let suffix = if v.muted { Some("[MUTED]") } else { None };
+            out.push(metric_line(
+                "Volume",
+                &format!("{:.0}%", v.ratio() * 100.0),
+                cols.val_w,
+                v.ratio(),
+                cols.bar_w,
+                pal,
+                suffix,
+            ));
         }
-        Some(v) => out.push(bar_line("Volume", v.ratio(), bar_w, pal)),
-        None => out.push(kv_line("Volume", "N/A".into(), pal)),
+        None => out.push(kv_line("Volume", "N/A".into(), cols.width, pal)),
+    }
+}
+
+/// Encurta o nome da CPU removendo ruído de marketing (`(R)`, `(TM)`, `CPU`,
+/// `Processor`), colapsando espaços redundantes.
+fn clean_cpu(name: &str) -> String {
+    let cleaned = name
+        .replace("(R)", "")
+        .replace("(r)", "")
+        .replace("(TM)", "")
+        .replace("(tm)", "")
+        .replace(" CPU", "")
+        .replace(" Processor", "");
+    let joined = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.is_empty() {
+        name.to_string()
+    } else {
+        joined
+    }
+}
+
+/// Encurta o nome da GPU: prefere o nome comercial entre colchetes
+/// (`[Iris Xe Graphics]`) quando presente; senão remove `Corporation`.
+fn clean_gpu(name: &str) -> String {
+    if let Some(open) = name.find('[') {
+        if let Some(close_rel) = name[open + 1..].find(']') {
+            let inner = name[open + 1..open + 1 + close_rel].trim();
+            if !inner.is_empty() {
+                return inner.to_string();
+            }
+        }
+    }
+    let cleaned = name.replace(" Corporation", "");
+    let joined = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.is_empty() {
+        name.to_string()
+    } else {
+        joined
     }
 }
 

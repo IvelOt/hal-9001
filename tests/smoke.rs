@@ -2,7 +2,7 @@
 
 use hal9001::app::{App, Phase, Tab};
 use hal9001::config::Config;
-use hal9001::ui::widgets::{human_bytes, human_uptime};
+use hal9001::ui::widgets::{human_bytes, human_uptime, truncate_str};
 
 #[test]
 fn tabs_round_trip_by_index() {
@@ -180,4 +180,48 @@ fn human_helpers_format() {
     assert_eq!(human_bytes(512), "512 B");
     assert_eq!(human_bytes(1024), "1.0 KiB");
     assert_eq!(human_uptime(90_061), "1d 1h 1m");
+}
+
+#[test]
+fn truncate_str_adds_ellipsis_and_respects_width() {
+    // Cabe: devolvido sem alteração.
+    assert_eq!(truncate_str("curto", 10), "curto");
+    assert_eq!(truncate_str("exato", 5), "exato");
+    // Não cabe: corta e anexa reticência (largura final == max).
+    let t = truncate_str("Intel Corporation Raptor Lake-P", 12);
+    assert_eq!(t.chars().count(), 12);
+    assert!(t.ends_with('…'));
+    assert!(t.starts_with("Intel"));
+    // Degradação em larguras minúsculas.
+    assert_eq!(truncate_str("qualquer", 1), "…");
+    assert_eq!(truncate_str("qualquer", 0), "");
+}
+
+#[test]
+fn brightness_and_volume_actions_dispatch_without_panic() {
+    use hal9001::events::Action;
+
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let mut app = App::new(cfg);
+
+    // As ações de controle são repassadas aos backends (broadcast), sem mutar
+    // o estado da UI diretamente.
+    for action in [
+        Action::BrightnessUp,
+        Action::BrightnessDown,
+        Action::VolumeUp,
+        Action::VolumeDown,
+        Action::ToggleMute,
+    ] {
+        app.dispatch(action, &tx);
+    }
+
+    // Cinco ações devem ter sido difundidas.
+    let mut count = 0;
+    while rx.try_recv().is_ok() {
+        count += 1;
+    }
+    assert_eq!(count, 5);
 }

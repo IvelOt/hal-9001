@@ -60,6 +60,13 @@ fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Enter => Some(Action::Enter),
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('.') => Some(Action::ToggleDetail),
+        // Brilho: minúscula/`-` diminui, maiúscula/`+`/`=` aumenta.
+        KeyCode::Char('b') | KeyCode::Char('-') => Some(Action::BrightnessDown),
+        KeyCode::Char('B') | KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::BrightnessUp),
+        // Volume: minúscula/`[` diminui, maiúscula/`]` aumenta, `m` alterna mudo.
+        KeyCode::Char('v') | KeyCode::Char('[') => Some(Action::VolumeDown),
+        KeyCode::Char('V') | KeyCode::Char(']') => Some(Action::VolumeUp),
+        KeyCode::Char('m') => Some(Action::ToggleMute),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         _ => Some(Action::Raw(key)),
     }

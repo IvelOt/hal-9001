@@ -73,6 +73,16 @@ pub enum Action {
     ToggleHelp,
     /// Alterna o Overview entre exibição Padrão e Detalhada (tecla `.`).
     ToggleDetail,
+    /// Aumenta o brilho da tela em um passo (tecla `B`/`+`/`=`).
+    BrightnessUp,
+    /// Diminui o brilho da tela em um passo (tecla `b`/`-`).
+    BrightnessDown,
+    /// Aumenta o volume do áudio em um passo (tecla `V`/`]`).
+    VolumeUp,
+    /// Diminui o volume do áudio em um passo (tecla `v`/`[`).
+    VolumeDown,
+    /// Alterna o mudo do áudio padrão (tecla `m`).
+    ToggleMute,
     /// Redesenho solicitado (ex.: resize). Sem efeito de estado.
     Redraw,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.

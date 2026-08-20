@@ -6,9 +6,9 @@
 use std::fs;
 
 use hal9001::backend::system::{
-    battery_health, brightness_ratio, count_installed_dpkg, count_nonempty_lines,
-    parse_amixer_volume, parse_lspci_gpu, parse_thermal_temp, parse_wpctl_volume, ratio,
-    read_battery, read_brightness, read_cpu_temp, BatteryStatus, Packages,
+    battery_health, brightness_ratio, count_installed_dpkg, count_nonempty_lines, delta_arg,
+    pactl_delta_arg, parse_amixer_volume, parse_lspci_gpu, parse_thermal_temp, parse_wpctl_volume,
+    ratio, read_battery, read_brightness, read_cpu_temp, BatteryStatus, Packages, CONTROL_STEP,
 };
 
 // --- ratios --------------------------------------------------------------
@@ -77,6 +77,21 @@ fn amixer_volume_parsing() {
     let mv = parse_amixer_volume(muted).unwrap();
     assert!(mv.muted);
     assert_eq!(mv.level, 0.0);
+}
+
+// --- controles interativos (brilho / volume) -----------------------------
+
+#[test]
+fn control_delta_args_relative_syntax() {
+    // Passo padrão positivo/negativo no formato `brightnessctl`/`wpctl`/`amixer`.
+    assert_eq!(delta_arg(CONTROL_STEP), "5%+");
+    assert_eq!(delta_arg(-CONTROL_STEP), "5%-");
+    assert_eq!(delta_arg(10), "10%+");
+    assert_eq!(delta_arg(0), "0%+");
+
+    // `pactl` usa o sinal como prefixo.
+    assert_eq!(pactl_delta_arg(CONTROL_STEP), "+5%");
+    assert_eq!(pactl_delta_arg(-CONTROL_STEP), "-5%");
 }
 
 // --- bateria -------------------------------------------------------------

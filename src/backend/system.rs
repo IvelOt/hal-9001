@@ -11,7 +11,7 @@ use std::time::Duration;
 use sysinfo::{Disks, System};
 use tokio::sync::broadcast;
 
-use crate::events::{Action, AppEvent, EventTx};
+use crate::events::{Action, AppEvent, EventTx, Toast};
 
 /// Contagem de pacotes por gerenciador detectado.
 #[derive(Debug, Clone, Default)]
@@ -718,6 +718,129 @@ fn read_root_disk(disks: &Disks) -> Option<(u64, u64)> {
 }
 
 // ---------------------------------------------------------------------------
+// Controles interativos (brilho / volume)
+// ---------------------------------------------------------------------------
+
+/// Passo padrão (em %) de cada ajuste de brilho/volume.
+pub const CONTROL_STEP: i32 = 5;
+
+/// Monta o argumento de delta relativo (`5%+` / `5%-`) aceito por
+/// `brightnessctl`/`wpctl`/`amixer`. Deltas negativos viram `%-`.
+pub fn delta_arg(delta: i32) -> String {
+    if delta >= 0 {
+        format!("{delta}%+")
+    } else {
+        format!("{}%-", delta.abs())
+    }
+}
+
+/// Argumento de volume relativo para `pactl set-sink-volume` (`+5%` / `-5%`).
+pub fn pactl_delta_arg(delta: i32) -> String {
+    if delta >= 0 {
+        format!("+{delta}%")
+    } else {
+        format!("-{}%", delta.abs())
+    }
+}
+
+/// Executa um comando externo de forma assíncrona, retornando `Ok(())` apenas
+/// quando ele existe e termina com sucesso.
+async fn run_ok(cmd: &str, args: &[&str]) -> Result<(), String> {
+    let out = tokio::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{cmd} falhou (status {:?})", out.status.code()))
+    }
+}
+
+/// Ajusta o brilho da tela em `delta` % (relativo) via `brightnessctl` e
+/// devolve o novo percentual lido do sysfs. Degrada com `Err` quando não há
+/// backlight controlável (ex.: monitor externo) ou o utilitário está ausente.
+pub async fn adjust_brightness(delta: i32) -> Result<u8, String> {
+    run_ok("brightnessctl", &["set", &delta_arg(delta)]).await?;
+    read_brightness(Path::new("/sys/class/backlight"))
+        .map(|r| (r * 100.0).round() as u8)
+        .ok_or_else(|| "brilho indisponível".to_string())
+}
+
+/// Ajusta o volume do sink padrão em `delta` % (relativo), tentando `wpctl`
+/// (PipeWire), depois `amixer` (ALSA) e por fim `pactl` (PulseAudio). Devolve o
+/// novo percentual lido de volta.
+pub async fn adjust_volume(delta: i32) -> Result<u8, String> {
+    let rel = delta_arg(delta);
+    let applied = run_ok("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &rel])
+        .await
+        .is_ok()
+        || run_ok("amixer", &["sset", "Master", &rel]).await.is_ok()
+        || run_ok(
+            "pactl",
+            &["set-sink-volume", "@DEFAULT_SINK@", &pactl_delta_arg(delta)],
+        )
+        .await
+        .is_ok();
+    if !applied {
+        return Err("nenhum backend de áudio disponível".to_string());
+    }
+    read_volume()
+        .map(|v| (v.ratio() * 100.0).round() as u8)
+        .ok_or_else(|| "volume indisponível".to_string())
+}
+
+/// Alterna o mudo do sink padrão (`wpctl`/`amixer`/`pactl`) e devolve o novo
+/// estado (`true` = mudo).
+pub async fn toggle_mute() -> Result<bool, String> {
+    let applied = run_ok("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+        .await
+        .is_ok()
+        || run_ok("amixer", &["sset", "Master", "toggle"]).await.is_ok()
+        || run_ok("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "toggle"])
+            .await
+            .is_ok();
+    if !applied {
+        return Err("nenhum backend de áudio disponível".to_string());
+    }
+    read_volume()
+        .map(|v| v.muted)
+        .ok_or_else(|| "volume indisponível".to_string())
+}
+
+/// Aplica uma ação de controle (brilho/volume) e emite o toast correspondente.
+/// Retorna `true` quando um ajuste foi tentado (exigindo snapshot imediato).
+async fn apply_control(action: &Action, tx: &EventTx) -> bool {
+    let toast = match action {
+        Action::BrightnessUp => match adjust_brightness(CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("Brilho: {p}%")),
+            Err(e) => Toast::error(format!("Brilho: {e}")),
+        },
+        Action::BrightnessDown => match adjust_brightness(-CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("Brilho: {p}%")),
+            Err(e) => Toast::error(format!("Brilho: {e}")),
+        },
+        Action::VolumeUp => match adjust_volume(CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("Volume: {p}%")),
+            Err(e) => Toast::error(format!("Volume: {e}")),
+        },
+        Action::VolumeDown => match adjust_volume(-CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("Volume: {p}%")),
+            Err(e) => Toast::error(format!("Volume: {e}")),
+        },
+        Action::ToggleMute => match toggle_mute().await {
+            Ok(true) => Toast::info("Áudio: Mudo"),
+            Ok(false) => Toast::info("Áudio: Ativo"),
+            Err(e) => Toast::error(format!("Áudio: {e}")),
+        },
+        _ => return false,
+    };
+    let _ = tx.send(AppEvent::Toast(toast));
+    true
+}
+
+// ---------------------------------------------------------------------------
 // Task de polling
 // ---------------------------------------------------------------------------
 
@@ -740,28 +863,42 @@ pub async fn run(
     let mut ticker = tokio::time::interval(Duration::from_millis(poll_ms.max(250)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Primeiro refresh estabelece a baseline de CPU; o valor de uso só é
-    // significativo a partir do segundo tick.
-    loop {
-        ticker.tick().await;
-
-        // Drena ações pendentes (ex.: Refresh) sem bloquear.
-        while actions.try_recv().is_ok() {}
-
+    // Coleta um snapshot fresco e o publica; devolve `false` se o app encerrou.
+    let refresh = |sys: &mut System, disks: &mut Disks| -> Box<SystemSnapshot> {
         sys.refresh_cpu_usage();
         sys.refresh_memory();
         disks.refresh();
-
         let cpu_temp = read_cpu_temp(Path::new("/sys/class/thermal"));
+        Box::new(SystemSnapshot::collect(sys, disks, &stat, cpu_temp))
+    };
 
-        if tx
-            .send(AppEvent::System(Box::new(SystemSnapshot::collect(
-                &sys, &disks, &stat, cpu_temp,
-            ))))
-            .is_err()
-        {
-            // App encerrou: nada a fazer.
-            break;
+    // Primeiro refresh estabelece a baseline de CPU; o valor de uso só é
+    // significativo a partir do segundo tick.
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                let snap = refresh(&mut sys, &mut disks);
+                if tx.send(AppEvent::System(snap)).is_err() {
+                    // App encerrou: nada a fazer.
+                    break;
+                }
+            }
+            res = actions.recv() => match res {
+                Ok(action) => {
+                    // Ajustes de brilho/volume disparam um snapshot imediato
+                    // para refletir o novo valor sem esperar o próximo tick.
+                    if apply_control(&action, &tx).await {
+                        let snap = refresh(&mut sys, &mut disks);
+                        if tx.send(AppEvent::System(snap)).is_err() {
+                            break;
+                        }
+                    }
+                }
+                // Perdemos mensagens por lag: seguimos no próximo tick.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                // Todos os emissores sumiram: o app encerrou.
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
         }
     }
     Ok(())
