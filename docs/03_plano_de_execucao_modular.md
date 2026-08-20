@@ -60,23 +60,38 @@ Estado atual do repositório: **Módulo 0 concluído** (skeleton compilável). D
 - Parser VT mínimo; foco de input; leader de escape.
 - **Aceite:** rodar comandos interativos (`htop`, `vim`) dentro do deck.
 
+## Módulo 9 — Suporte Multiplataforma (Adaptador macOS / Darwin) 🍏
+
+- Backend condicional `#[cfg(target_os = "macos")]`:
+  - **Pacotes:** Homebrew (`brew list --formula`), Casks (`brew list --cask`) e Mac App Store (`mas`).
+  - **Energia & Bateria:** `pmset -g batt` / IOKit `IOPMPowerSource` com tempo restante e saúde.
+  - **Áudio:** `osascript` / CoreAudio nativo (leitura e ajuste de volume e mute).
+  - **Brilho:** IOKit `DisplayServices` / `brightness` CLI.
+  - **Rede & Wi-Fi:** `networksetup` / `airport` CLI.
+  - **Bluetooth:** `blueutil` CLI / `IOBluetooth` framework.
+  - **Armazenamento:** `diskutil list`, `diskutil mount`, `diskutil eject`.
+- Alvos de compilação: `aarch64-apple-darwin` (Apple Silicon M1/M2/M3/M4) e `x86_64-apple-darwin` (Intel Mac), gerando binário universal com `lipo`.
+- **Aceite:** compilação limpa em macOS, detecção de hardware Apple e Overview funcional.
+
 ---
 
 ## Ordem recomendada & dependências
 
 ```
-M0 ──▶ M1 ──▶ (M2, M3, M4, M5, M6 em paralelo) ──▶ M7 ──▶ M8
+M0 ──▶ M1 ──▶ (M2, M3, M4, M5, M6 em paralelo) ──▶ M7 ──▶ M8 ──▶ M9 (macOS)
                     │                                 ▲
                     └── PTY compartilhado (pty.rs) ───┘
 ```
 
 `pty.rs` é fundação comum de M6/M7/M8 — priorizar seu esqueleto cedo.
+M9 reaproveita 100% da TUI, motor assíncrono Tokio e modelos de dados, trocando apenas a camada de drivers de I/O em `src/backend/macos.rs`.
 
 ## Estratégia de Testes
 
-- **Unit:** parsing de `os-release`, keymap, cálculo de barras/percentuais, detecção de distro.
-- **Integração:** backends com *mock* de D-Bus (trait `Service` trocável) publicando `AppEvent`s determinísticos.
+- **Unit:** parsing de `os-release` / Darwin sysctl, keymap, cálculo de barras/percentuais, detecção de distro / macOS.
+- **Integração:** backends com *mock* de D-Bus (Linux) e mock de CLI (macOS) publicando `AppEvent`s determinísticos.
 - **Smoke:** `cargo run` em CI headless com `TERM=dumb` só para validar boot/teardown (sem alt-screen).
+- **Contêineres:** Validação periódica em imagens mínimas (Debian Slim, Fedora, Alpine e macOS CI runner).
 
 ## Definição de Pronto (por módulo)
 
