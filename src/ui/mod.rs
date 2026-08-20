@@ -49,13 +49,14 @@ pub fn draw(app: &App, f: &mut Frame) {
 }
 
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let titles: Vec<Line> = Tab::ALL
         .iter()
         .enumerate()
         .map(|(i, t)| {
             Line::from(vec![
                 Span::styled(format!("{} ", i + 1), Style::default().fg(pal.dim)),
-                Span::raw(t.title()),
+                Span::raw(t.title_in(app.lang)),
             ])
         })
         .collect();
@@ -68,9 +69,9 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 Some(arch) => format!("{} {arch}", s.os),
                 None => s.os.clone(),
             };
-            format!(" HAL-9001 · Assistente de Sistema ({plat}) ")
+            format!(" HAL-9001 · {} ({plat}) ", m.app_title_suffix)
         }
-        None => " HAL-9001 · Assistente de Sistema ".to_string(),
+        None => format!(" HAL-9001 · {} ", m.app_title_suffix),
     };
 
     let tabs = Tabs::new(titles)

@@ -8,6 +8,7 @@ pub mod ascii;
 pub mod backend;
 pub mod config;
 pub mod events;
+pub mod i18n;
 pub mod logging;
 pub mod ui;
 

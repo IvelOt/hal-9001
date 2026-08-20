@@ -6,6 +6,8 @@
 frame_ms = 33
 # Ícones nerd-font (fallback ASCII quando false).
 icons = true
+# Idioma da interface: "auto" (detecta do sistema), "pt-BR", "en-US", "es-ES".
+language = "auto"
 
 [theme]
 # Temas embutidos: "hal" (âmbar do Assistente de Sistema) | "mono".

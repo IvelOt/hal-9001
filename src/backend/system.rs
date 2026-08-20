@@ -170,13 +170,19 @@ impl PowerProfile {
         }
     }
 
-    /// Rótulo pt-BR para toasts/UI (`Economia`, `Equilibrado`, `Desempenho`).
-    pub fn label(self) -> &'static str {
+    /// Rótulo traduzido para toasts/UI conforme o idioma.
+    pub fn label_in(self, lang: crate::i18n::Language) -> &'static str {
+        let m = lang.messages();
         match self {
-            PowerProfile::PowerSaver => "Economia",
-            PowerProfile::Balanced => "Equilibrado",
-            PowerProfile::Performance => "Desempenho",
+            PowerProfile::PowerSaver => m.profile_power_saver,
+            PowerProfile::Balanced => m.profile_balanced,
+            PowerProfile::Performance => m.profile_performance,
         }
+    }
+
+    /// Rótulo padrão para toasts/UI (`Economia`, `Equilibrado`, `Desempenho`).
+    pub fn label(self) -> &'static str {
+        self.label_in(crate::i18n::Language::default())
     }
 
     /// Tag textual em maiúsculas, estilo neofetch, sem emojis:

@@ -35,7 +35,8 @@ const GAP: u16 = 4;
 const MIN_INFO: u16 = 34;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
-    let block = super::content_block("Overview", pal);
+    let m = app.lang.messages();
+    let block = super::content_block(m.tab_overview, pal);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -170,8 +171,13 @@ fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>, pha
 /// Statusline interna do Overview: indicador do modo de detalhe + atalhos de
 /// controle interativo (brilho/volume/mudo).
 fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let mode = if app.detailed_overview {
-        "Expandido"
+        if app.lang == crate::i18n::Language::EnUs {
+            "Expanded"
+        } else {
+            "Expandido"
+        }
     } else {
         "Normal"
     };
@@ -182,12 +188,19 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ]
     };
     let mut spans = Vec::new();
-    spans.extend(hint(".", "Detalhes:"));
+    let details_label = if app.lang == crate::i18n::Language::EnUs {
+        "Details:"
+    } else if app.lang == crate::i18n::Language::EsEs {
+        "Detalles:"
+    } else {
+        "Detalhes:"
+    };
+    spans.extend(hint(".", details_label));
     spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
-    spans.extend(hint("p", "Perfil"));
-    spans.extend(hint("b/B", "Brilho"));
-    spans.extend(hint("v/V", "Volume"));
-    spans.extend(hint("m", "Mudo"));
+    spans.extend(hint("p", m.label_power_profile));
+    spans.extend(hint("b/B", m.label_brightness));
+    spans.extend(hint("v/V", m.label_volume));
+    spans.extend(hint("m", m.hint_mute));
     // Trunca a linha inteira à largura disponível para nunca vazar.
     let mut line = Line::from(spans);
     if line_width(&line) > area.width as usize {
@@ -291,17 +304,16 @@ impl Cols {
 /// O layout é **denso**: cada métrica (CPU/RAM/Swap/Disco/Bateria/Brilho/
 /// Volume) ocupa uma única linha combinando valor + barra, e as seções são
 /// separadas apenas pelos títulos (sem linhas em branco), mantendo o total em
-/// ~16 linhas no modo normal — cabendo em terminais de 24 linhas sem cortar a
-/// borda do bloco.
 fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) -> Vec<Line<'a>> {
     let cols = Cols::new(width);
     let detailed = app.detailed_overview;
+    let m = app.lang.messages();
     let mut out: Vec<Line> = Vec::new();
 
-    section_hardware(s, pal, cols, detailed, &mut out);
-    section_platform(s, pal, cols, detailed, &mut out);
-    section_power(s, pal, cols, detailed, &mut out);
-    out.push(section_title("Color Palette", pal));
+    section_hardware(s, pal, cols, detailed, m, &mut out);
+    section_platform(s, pal, cols, detailed, m, &mut out);
+    section_power(s, pal, cols, detailed, m, &mut out);
+    out.push(section_title(m.sec_palette, pal));
     out.push(palette_line());
 
     out
@@ -313,10 +325,11 @@ fn section_hardware(
     pal: &Palette,
     cols: Cols,
     detailed: bool,
+    m: &'static crate::i18n::Messages,
     out: &mut Vec<Line>,
 ) {
     let d: &DetailInfo = &s.detail;
-    out.push(section_title("Available Compute / Hardware", pal));
+    out.push(section_title(m.sec_compute, pal));
 
     // CPU: nome limpo + núcleos combinados numa única linha com a barra de uso.
     let cores = match d.cpu_cores_physical {
@@ -336,7 +349,7 @@ fn section_hardware(
 
     // RAM: uso / total + barra.
     out.push(metric_line(
-        "RAM",
+        m.label_ram,
         &format!("{} / {}", human_bytes(s.mem_used), human_bytes(s.mem_total)),
         cols.val_w,
         s.mem_ratio(),
@@ -349,7 +362,7 @@ fn section_hardware(
         // Swap.
         if d.swap_total > 0 {
             out.push(metric_line(
-                "Swap",
+                m.label_swap,
                 &format!(
                     "{} / {}",
                     human_bytes(d.swap_used),
@@ -362,7 +375,7 @@ fn section_hardware(
                 None,
             ));
         } else {
-            out.push(kv_line("Swap", "N/A".into(), cols.width, pal));
+            out.push(kv_line(m.label_swap, "N/A".into(), cols.width, pal));
         }
 
         // Temperatura da CPU (+ frequência, quando houver).
@@ -371,17 +384,17 @@ fn section_hardware(
                 Some(fq) => format!("{t:.0} °C @ {fq:.2} GHz"),
                 None => format!("{t:.0} °C"),
             };
-            out.push(kv_line("Temp CPU", val, cols.width, pal));
+            out.push(kv_line(m.label_temperature, val, cols.width, pal));
         }
 
         // Placa-mãe.
         if let Some(board) = join_opt(d.board_vendor.as_deref(), d.board_name.as_deref()) {
-            out.push(kv_line("Placa", board, cols.width, pal));
+            out.push(kv_line(m.label_board, board, cols.width, pal));
         }
 
         // GPU (nome limpo).
         if let Some(gpu) = &d.gpu {
-            out.push(kv_line("GPU", clean_gpu(gpu), cols.width, pal));
+            out.push(kv_line(m.label_gpu, clean_gpu(gpu), cols.width, pal));
         }
     }
 }
@@ -392,27 +405,28 @@ fn section_platform(
     pal: &Palette,
     cols: Cols,
     detailed: bool,
+    m: &'static crate::i18n::Messages,
     out: &mut Vec<Line>,
 ) {
     let d: &DetailInfo = &s.detail;
-    out.push(section_title("System & Platform", pal));
+    out.push(section_title(m.sec_system, pal));
 
-    out.push(kv_line("OS", s.os.clone(), cols.width, pal));
+    out.push(kv_line(m.label_os, s.os.clone(), cols.width, pal));
     if let Some(model) = &s.host_model {
-        out.push(kv_line("Host", model.clone(), cols.width, pal));
+        out.push(kv_line(m.label_host, model.clone(), cols.width, pal));
     }
-    out.push(kv_line("Kernel", s.kernel.clone(), cols.width, pal));
+    out.push(kv_line(m.label_kernel, s.kernel.clone(), cols.width, pal));
 
     if detailed {
         match (&d.bios_version, &d.bios_date) {
-            (Some(v), Some(dt)) => out.push(kv_line("BIOS", format!("{v} ({dt})"), cols.width, pal)),
-            (Some(v), None) => out.push(kv_line("BIOS", v.clone(), cols.width, pal)),
+            (Some(v), Some(dt)) => out.push(kv_line(m.label_bios, format!("{v} ({dt})"), cols.width, pal)),
+            (Some(v), None) => out.push(kv_line(m.label_bios, v.clone(), cols.width, pal)),
             _ => {}
         }
     }
 
     out.push(kv_line(
-        "Pacotes",
+        m.label_packages,
         s.packages
             .as_ref()
             .map(|p| p.summary())
@@ -426,12 +440,12 @@ fn section_platform(
         (true, Some(de)) => format!("{} · {de}", s.shell),
         _ => s.shell.clone(),
     };
-    out.push(kv_line("Shell", shell, cols.width, pal));
+    out.push(kv_line(m.label_shell, shell, cols.width, pal));
 
     // Disco raiz — linha densa quando há dados.
     match (s.disk_ratio(), s.disk_used, s.disk_total) {
         (Some(r), Some(u), Some(t)) => out.push(metric_line(
-            "Disco (/)",
+            m.label_disk_root,
             &format!("{} / {}", human_bytes(u), human_bytes(t)),
             cols.val_w,
             r,
@@ -439,7 +453,7 @@ fn section_platform(
             pal,
             None,
         )),
-        _ => out.push(kv_line("Disco (/)", "N/A".into(), cols.width, pal)),
+        _ => out.push(kv_line(m.label_disk_root, "N/A".into(), cols.width, pal)),
     }
 }
 
@@ -449,16 +463,17 @@ fn section_power(
     pal: &Palette,
     cols: Cols,
     detailed: bool,
+    m: &'static crate::i18n::Messages,
     out: &mut Vec<Line>,
 ) {
-    out.push(section_title("Peripherals & Power", pal));
+    out.push(section_title(m.sec_peripherals, pal));
 
     // Bateria (ou N/A em desktop) — sufixo neofetch: [DISCHARGING -14W].
     match &s.battery {
         Some(b) => {
             let suffix = battery_suffix(b);
             out.push(metric_line(
-                "Bateria",
+                m.label_battery,
                 "",
                 cols.val_w,
                 b.ratio(),
@@ -483,15 +498,15 @@ fn section_power(
                 }
             }
         }
-        None => out.push(kv_line("Bateria", "N/A (Desktop)".into(), cols.width, pal)),
+        None => out.push(kv_line(m.label_battery, "N/A (Desktop)".into(), cols.width, pal)),
     }
 
     // Brilho.
     match s.brightness {
         Some(r) => out.push(metric_line(
-            "Brilho", "", cols.val_w, r, cols.bar_w, pal, None,
+            m.label_brightness, "", cols.val_w, r, cols.bar_w, pal, None,
         )),
-        None => out.push(kv_line("Brilho", "N/A".into(), cols.width, pal)),
+        None => out.push(kv_line(m.label_brightness, "N/A".into(), cols.width, pal)),
     }
 
     // Volume — sem emojis; [MUTED] apenas quando mudo.
@@ -499,7 +514,7 @@ fn section_power(
         Some(v) => {
             let suffix = if v.muted { Some("[MUTED]") } else { None };
             out.push(metric_line(
-                "Volume",
+                m.label_volume,
                 "",
                 cols.val_w,
                 v.ratio(),
@@ -508,19 +523,19 @@ fn section_power(
                 suffix,
             ));
         }
-        None => out.push(kv_line("Volume", "N/A".into(), cols.width, pal)),
+        None => out.push(kv_line(m.label_volume, "N/A".into(), cols.width, pal)),
     }
 
     // Perfil de energia — tag neofetch + dica de atalho; N/A gracioso quando
     // não há daemon/governor (ex.: desktop).
     match s.power_profile {
         Some(p) => out.push(kv_line(
-            "Perfil",
+            m.label_power_profile,
             format!("{} (p: alternar)", p.tag()),
             cols.width,
             pal,
         )),
-        None => out.push(kv_line("Perfil", "N/A".into(), cols.width, pal)),
+        None => out.push(kv_line(m.label_power_profile, "N/A".into(), cols.width, pal)),
     }
 }
 

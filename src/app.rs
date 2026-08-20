@@ -24,6 +24,8 @@ pub enum Tab {
     Terminal,
 }
 
+use crate::i18n::Language;
+
 impl Tab {
     pub const ALL: [Tab; 8] = [
         Tab::Overview,
@@ -44,18 +46,24 @@ impl Tab {
         Tab::ALL.get(i).copied().unwrap_or(Tab::Overview)
     }
 
-    /// Título curto para a tabbar (sem ícone).
-    pub fn title(self) -> &'static str {
+    /// Título traduzido para a tabbar no idioma informado.
+    pub fn title_in(self, lang: Language) -> &'static str {
+        let m = lang.messages();
         match self {
-            Tab::Overview => "Overview",
-            Tab::Network => "Wi-Fi",
-            Tab::Bluetooth => "Bluetooth",
-            Tab::Storage => "Discos",
-            Tab::Power => "Energia",
-            Tab::Updates => "Updates",
-            Tab::Files => "Arquivos",
-            Tab::Terminal => "Terminal",
+            Tab::Overview => m.tab_overview,
+            Tab::Network => m.tab_network,
+            Tab::Bluetooth => m.tab_bluetooth,
+            Tab::Storage => m.tab_storage,
+            Tab::Power => m.tab_power,
+            Tab::Updates => m.tab_updates,
+            Tab::Files => m.tab_files,
+            Tab::Terminal => m.tab_terminal,
         }
+    }
+
+    /// Título curto para a tabbar (fallback/padrão).
+    pub fn title(self) -> &'static str {
+        self.title_in(Language::default())
     }
 }
 
@@ -75,6 +83,8 @@ pub struct ServiceStatus {
 /// Estado global do aplicativo.
 pub struct App {
     pub config: Config,
+    /// Idioma ativo resolvido da interface.
+    pub lang: Language,
     pub should_quit: bool,
     pub phase: Phase,
     pub active: Tab,
@@ -104,8 +114,10 @@ impl App {
         } else {
             Phase::Running
         };
+        let lang = config.ui.resolved_language();
         Self {
             config,
+            lang,
             should_quit: false,
             phase,
             active: Tab::Overview,

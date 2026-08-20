@@ -24,17 +24,18 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let filled = (progress * bar_w as f64).round() as usize;
     let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_w - filled));
 
+    let m = app.lang.messages();
     let user = std::env::var("USER").unwrap_or_else(|_| "operador".into());
 
     // Nas primeiras ~2/3 do tempo: LOADING; depois: boas-vindas.
     let headline = if progress < 0.66 {
         Line::from(Span::styled(
-            format!("LOADING{dots}"),
+            format!("{}{dots}", m.splash_loading),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ))
     } else {
         Line::from(Span::styled(
-            format!("Bem-vindo, {user}!"),
+            format!("{}, {user}!", m.splash_welcome),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         ))
     };
@@ -55,7 +56,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     lines.push(Line::from(Span::styled(bar, Style::default().fg(pal.accent))));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "HAL-9001 · Assistente de Sistema",
+        m.splash_title,
         Style::default().fg(pal.dim),
     )));
 

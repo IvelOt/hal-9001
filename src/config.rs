@@ -15,6 +15,8 @@ pub struct Config {
     pub overview: OverviewConfig,
 }
 
+use crate::i18n::Language;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -22,6 +24,19 @@ pub struct UiConfig {
     pub frame_ms: u64,
     /// Habilita ícones nerd-font (fallback ASCII quando `false`).
     pub icons: bool,
+    /// Idioma da interface: `"auto"`, `"pt-BR"`, `"en-US"`, `"es-ES"`.
+    pub language: String,
+}
+
+impl UiConfig {
+    /// Resolve o idioma configurado, utilizando detecção automática por `$LANG` quando `"auto"`.
+    pub fn resolved_language(&self) -> Language {
+        if self.language.trim().eq_ignore_ascii_case("auto") || self.language.trim().is_empty() {
+            Language::detect()
+        } else {
+            Language::parse(&self.language).unwrap_or_else(Language::detect)
+        }
+    }
 }
 
 impl Default for UiConfig {
@@ -29,6 +44,7 @@ impl Default for UiConfig {
         Self {
             frame_ms: 33,
             icons: true,
+            language: "auto".to_string(),
         }
     }
 }
