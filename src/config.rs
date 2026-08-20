@@ -88,7 +88,8 @@ impl Default for SplashConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct OverviewConfig {
-    /// Seleção de ASCII art: `auto`, `A`, `B`, `C`.
+    /// Seleção da logo: `auto`, `main`, `medium`, `compact`, `none`.
+    /// (Aliases legados: `A`=main, `B`=compact, `C`=medium.)
     pub ascii: String,
 }
 

@@ -23,5 +23,6 @@ enabled = true
 min_ms = 1400
 
 [overview]
-# ASCII art do besouro: "auto" | "A" | "B" | "C".
+# Logo das engrenagens + olho do HAL:
+# "auto" | "main" | "medium" | "compact" | "none".
 ascii = "auto"

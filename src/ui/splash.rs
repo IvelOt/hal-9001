@@ -39,15 +39,13 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ))
     };
 
-    let beetle = ascii::select("auto", area.width.saturating_sub(4)).unwrap_or("");
+    // Logo das engrenagens com o olho do HAL, colorida e centralizada.
+    let size = ascii::select("auto", area.width.saturating_sub(4));
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
-    for l in beetle.lines() {
-        lines.push(Line::from(Span::styled(
-            l.to_string(),
-            Style::default().fg(pal.dim),
-        )));
+    if let Some(size) = size {
+        lines.extend(ascii::logo_lines(size));
     }
     lines.push(Line::from(""));
     lines.push(headline);

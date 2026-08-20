@@ -133,15 +133,66 @@ fn wide_terminals_center_content() {
 }
 
 #[test]
-fn micro_terminal_collapses_beetle_but_still_renders() {
-    // 60x15: espaço apertado — não deve entrar em pânico e deve mostrar o
-    // painel de informações (procuramos o cabeçalho user@host).
+fn micro_terminal_collapses_logo_but_still_renders() {
+    // 60x15: espaço apertado — a logo recolhe e mostramos só os metadados +
+    // seções (procuramos o cabeçalho user@host).
     let buf = render_overview(60, 15, false);
     let joined = buffer_text(&buf);
     assert!(
         joined.contains("operator") || joined.contains("hall"),
         "painel de informações ausente no micro terminal"
     );
+}
+
+/// Conta os dentes de engrenagem `#` — glifo exclusivo da logo (não aparece no
+/// texto das seções/metadados), servindo de impressão digital estável do
+/// tamanho renderizado.
+fn logo_gears(buf: &Buffer) -> usize {
+    let area = *buf.area();
+    let mut gears = 0usize;
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if buf[(x, y)].symbol() == "#" {
+                gears += 1;
+            }
+        }
+    }
+    gears
+}
+
+#[test]
+fn wide_terminal_renders_gear_logo_and_sections() {
+    // Em tela larga aparecem a logo das engrenagens (dentes + olho) e os
+    // títulos das seções estilo Hermes.
+    let buf = render_overview(120, 40, false);
+    assert!(logo_gears(&buf) > 0, "dentes de engrenagem ausentes");
+    assert!(buffer_text(&buf).contains('O'), "olho do HAL ausente");
+
+    let text = buffer_text(&buf);
+    for title in [
+        "AVAILABLE COMPUTE",
+        "SYSTEM & PLATFORM",
+        "PERIPHERALS & POWER",
+        "COLOR PALETTE",
+    ] {
+        assert!(text.contains(title), "seção ausente: {title}");
+    }
+}
+
+#[test]
+fn logo_does_not_shrink_in_detailed_mode() {
+    // Requisito do briefing: a logo NÃO encolhe ao ativar o modo detalhado.
+    // O tamanho renderizado (impressão digital de engrenagens/olho) deve ser
+    // idêntico nos modos Normal e Expandido.
+    for (w, h) in [(120u16, 40u16), (200, 50)] {
+        let normal = logo_gears(&render_overview(w, h, false));
+        let detailed = logo_gears(&render_overview(w, h, true));
+        assert!(normal > 0, "logo ausente em {w}x{h}");
+        assert_eq!(
+            normal, detailed,
+            "logo mudou de tamanho ao expandir em {w}x{h} (normal={normal}, detalhe={detailed})"
+        );
+    }
 }
 
 #[test]

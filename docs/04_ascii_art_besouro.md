@@ -1,73 +1,72 @@
-# 04 — ASCII Art do Besouro (Overview)
+# 04 — Logo das Engrenagens + Olho do HAL-9000 (Overview)
 
-Arts do **Besouro / Scarab** usadas na coluna esquerda do Overview (estilo neofetch).
-Todas testadas para alinhamento com `unicode-width` (usar apenas ASCII para largura previsível).
-A art é colorida por linha via *color spans* no tema (ver `ui/theme.rs`).
+A logo da coluna de **identidade** do Overview (estilo Hermes-Agent): anéis
+concêntricos de **engrenagens mecânicas** com o **olho vermelho do HAL-9000**
+incandescente ao centro (`src/ascii.rs`).
 
-> ⚠️ Ao editar, mantenha todas as linhas com a **mesma largura** (preencher com espaços) para não quebrar o layout de duas colunas.
+- **Somente ASCII** (largura previsível com `unicode-width`).
+- Todas as linhas de uma arte têm a **mesma largura** (preenchidas com espaços),
+  mantendo o olho central alinhado e a colorização radial simétrica.
+- Colorização **multi-span por glifo** (ver `ascii::logo_lines`).
+
+> ⚠️ Ao editar, mantenha todas as linhas de uma arte com a **mesma largura**.
 
 ---
 
-## Art A — "Scarab" (principal, ~24 col)
+## Mapa de cores (por glifo)
+
+| Glifo | Elemento             | Cor                       |
+|:-----:|----------------------|---------------------------|
+| `#`   | dentes do anel externo | bronze `Rgb(180,140,60)` |
+| `=`   | vales do anel externo  | cinza escuro `DarkGray`  |
+| `x`   | dentes do cubo interno | âmbar `Rgb(210,170,90)`  |
+| `+`   | vales do cubo interno  | ouro `Yellow`            |
+| `.`   | halo do olho           | `LightRed`               |
+| `o`   | íris do olho           | `Red`                    |
+| `O`   | núcleo incandescente   | `Rgb(255,50,50)`         |
+
+O olho do HAL é **sempre vermelho**, independente do tema.
+
+---
+
+## Tamanhos (`LogoSize`)
+
+| Tamanho   | Largura × Altura | Anéis            |
+|-----------|:----------------:|------------------|
+| `Main`    | ~33 × 17         | externo + interno |
+| `Medium`  | ~27 × 13         | externo + interno |
+| `Compact` | ~20 × 9          | anel único + olho |
 
 ```
-        . ~ ~ ~ .
-      /  \\ | /  \\
-     |    \\|/    |
-      \\   (o)   /
-   .--- \\ /-\\ / ---.
-  /      \\| |/      \\
- |    _.-'\\ /'-._    |
- |  .'     V     '.  |
-  \\/   .-'''-.   \\/
-   |   /  _  \\   |
-   |  |  (_)  |  |
-    \\  \\     /  /
-     '. '._.' .'
-       '-...-'
-       /     \\
-      '       '
-```
-
-## Art B — "Beetle Compacto" (~16 col, telas estreitas)
-
-```
-     , _ ,
-    ( o o )
-   /'` ' `'\\
-   |'''''''|
-   |\\     /|
-   ( \\___/ )
-    '.___.'
-    /     \\
-```
-
-## Art C — "Scarab Detalhado" (fallback largo, ~30 col)
-
-```
-          __/\\__
-         `==/\\==`
-     ___/  ||  \\___
-    /   \\  ||  /   \\
-   | /\\  \\ || / /\\ |
-   | ||   \\||/   || |
-    \\ \\   (**)   / /
-     \\ '--/  \\--' /
-      '.  |  |  .'
-    ____'.|  |.'____
-   /     /    \\     \\
-  '     |      |     '
-        '.    .'
-          '..'
+              =====
+        ==####=====####==
+      ====             ====
+    ##=     xxxx+++++     =##
+  ####   ++++x     ++xxx   ####
+ ===   x+++...........x+++   ===
+ ===  xxx ..ooooooooo.. +++  ===
+#==   ++ ..ooooOOOoooo.. ++   ==#
+###   ++ ..oooOOOOOooo.. xx   ###
+#==   ++ ..ooooOOOoooo.. ++   ==#
+ ===  xxx ..ooooooooo.. +++  ===
+ ===   x+++...........x+++   ===
+  ####   ++++x     ++xxx   ####
+    ##=     xxxx+++++     =##
+      ====             ====
+        ==####=====####==
+              =====
 ```
 
 ---
 
-## Regras de Seleção (em `ascii.rs`)
+## Regras de Seleção (`ascii::select` + `overview::pick_size`)
 
-- A art é escolhida por largura disponível da coluna esquerda:
-  - `>= 30` → Art C
-  - `>= 22` → Art A
-  - senão → Art B
-- `config.toml` pode fixar uma art (`overview.ascii = "A" | "B" | "C" | "auto"`).
-- Colorização: gradiente da paleta do tema aplicado por faixa de linhas (carapaça escura → destaque nas antenas/olhos).
+- O tamanho é escolhido pela **largura reservada** à coluna da logo
+  (`logo_budget = área − GAP − MIN_INFO`) e pela **altura** disponível,
+  degradando `Main → Medium → Compact → sem logo` até caber.
+- `MIN_INFO` é **fixo** (não depende dos campos detalhados): assim a largura da
+  logo permanece **estável ao alternar o modo detalhado** (`.`) — a logo nunca
+  encolhe, apenas as seções da direita revelam linhas extras.
+- `config.toml` pode fixar a logo:
+  `overview.ascii = "main" | "medium" | "compact" | "none" | "auto"`
+  (aliases legados: `A`=main, `B`=compact, `C`=medium).

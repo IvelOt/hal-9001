@@ -37,6 +37,20 @@ pub fn human_uptime(secs: u64) -> String {
     out
 }
 
+/// Título de seção estilo Hermes: rótulo em âmbar/amarelo, maiúsculo e negrito,
+/// com um marcador `▍` à esquerda para ancorar a coluna de informações.
+pub fn section_title<'a>(text: &str, pal: &Palette) -> Line<'a> {
+    Line::from(vec![
+        Span::styled("▍ ", Style::default().fg(pal.accent)),
+        Span::styled(
+            text.to_uppercase(),
+            Style::default()
+                .fg(pal.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
 /// Linha "rótulo: valor" com rótulo destacado.
 pub fn kv_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
     Line::from(vec![
