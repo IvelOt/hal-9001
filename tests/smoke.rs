@@ -2,7 +2,10 @@
 
 use hal9001::app::{App, Phase, Tab};
 use hal9001::config::Config;
-use hal9001::ui::widgets::{human_bytes, human_uptime, truncate_str};
+use hal9001::ui::theme::Palette;
+use hal9001::ui::widgets::{human_bytes, human_uptime, metric_line, truncate_str};
+use ratatui::text::Line;
+use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn tabs_round_trip_by_index() {
@@ -195,6 +198,47 @@ fn truncate_str_adds_ellipsis_and_respects_width() {
     // Degradação em larguras minúsculas.
     assert_eq!(truncate_str("qualquer", 1), "…");
     assert_eq!(truncate_str("qualquer", 0), "");
+}
+
+/// Coluna (0-based) onde a barra de progresso `[` começa numa `metric_line`,
+/// somando a largura de todos os spans anteriores ao span do colchete de abertura
+/// da barra (o único span cujo conteúdo é exatamente `"["`).
+fn gauge_col(line: &Line) -> usize {
+    let mut col = 0usize;
+    for span in &line.spans {
+        if span.content == "[" {
+            return col;
+        }
+        col += UnicodeWidthStr::width(span.content.as_ref());
+    }
+    panic!("barra não encontrada na linha");
+}
+
+#[test]
+fn metric_bars_align_regardless_of_status_suffix() {
+    // Requisito do briefing: o status ([CHARGING +25W], [MUTED]) fica ENTRE o
+    // rótulo/valor e a barra, e as barras ficam alinhadas verticalmente entre
+    // linhas com valores/status de larguras diferentes.
+    let pal = Palette::from_config(&Config::default());
+    let bateria = metric_line("Bateria", "", 18, 0.65, 12, &pal, Some("[CHARGING +25W]"));
+    let volume = metric_line("Volume", "", 18, 0.80, 12, &pal, Some("[MUTED]"));
+    let brilho = metric_line("Brilho", "", 18, 1.0, 12, &pal, None);
+    let ram = metric_line("RAM", "6.0 / 15.3 GiB", 18, 0.39, 12, &pal, None);
+
+    let base = gauge_col(&bateria);
+    for (name, line) in [
+        ("Volume", &volume),
+        ("Brilho", &brilho),
+        ("RAM", &ram),
+    ] {
+        assert_eq!(gauge_col(line), base, "barra desalinhada em {name}");
+    }
+
+    // O status aparece antes da barra (coluna do status < coluna da barra).
+    let text: String = bateria.spans.iter().map(|s| s.content.as_ref()).collect();
+    let status_at = text.find("[CHARGING").unwrap();
+    let bar_at = text.rfind('[').unwrap();
+    assert!(status_at < bar_at, "status deveria preceder a barra");
 }
 
 #[test]

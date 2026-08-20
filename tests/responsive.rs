@@ -1,4 +1,4 @@
-//! Testes de responsividade do harness: renderiza o cockpit (com foco no
+//! Testes de responsividade do harness: renderiza o Assistente de Sistema (com foco no
 //! Overview) em múltiplas resoluções, garantindo 0 pânicos, 0 quebras de
 //! layout e centralização em telas largas — nos modos Padrão e Detalhado.
 
@@ -202,6 +202,45 @@ fn detailed_mode_shows_extra_fields_when_space_allows() {
     let text = buffer_text(&buf);
     assert!(text.contains("BIOS") || text.contains("GPU") || text.contains("Núcleos"));
     assert!(text.contains("Expandido"), "indicador de modo ausente");
+}
+
+#[test]
+fn window_header_uses_assistente_de_sistema_naming() {
+    // Nomenclatura: o cabeçalho da janela usa "Assistente de Sistema" e nunca
+    // mais o termo "Cockpit".
+    let text = buffer_text(&render_overview(120, 40, false));
+    assert!(
+        text.contains("Assistente de Sistema"),
+        "cabeçalho sem a nova nomenclatura"
+    );
+    assert!(
+        !text.to_lowercase().contains("cockpit"),
+        "termo 'cockpit' ainda presente na UI"
+    );
+}
+
+#[test]
+fn battery_status_renders_before_bar_on_its_line() {
+    // O status da bateria fica ENTRE o rótulo e a barra: na linha da bateria, o
+    // texto do status precede o `[` da barra de progresso.
+    let buf = render_overview(120, 40, false);
+    let area = *buf.area();
+    let mut checked = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        if row.contains("Bateria") && row.contains("DISCHARGING") {
+            let status_at = row.find("DISCHARGING").unwrap();
+            // A barra usa blocos █/░; localiza o primeiro bloco preenchido/vazio.
+            let bar_at = row.find('█').or_else(|| row.find('░')).unwrap();
+            assert!(status_at < bar_at, "status deveria preceder a barra");
+            checked = true;
+            break;
+        }
+    }
+    assert!(checked, "linha da bateria com status não encontrada");
 }
 
 #[test]

@@ -129,8 +129,14 @@ fn draw_two_columns(
     .flex(Flex::Center)
     .split(vband);
 
-    draw_identity(f, cols[0], size, meta);
+    draw_identity(f, cols[0], size, meta, eye_phase(app));
     f.render_widget(Paragraph::new(Text::from(sections)), cols[2]);
+}
+
+/// Fase do pulso de respiração do Olho do HAL, derivada do tempo decorrido.
+/// Cicla 0→1→2→3 a cada 250 ms, produzindo uma pulsação sutil e contínua.
+fn eye_phase(app: &App) -> u8 {
+    ((app.elapsed_ms() / 250) % 4) as u8
 }
 
 /// Layout de coluna única (telas estreitas): metadados + seções, sem logo.
@@ -152,9 +158,10 @@ fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Fram
     f.render_widget(Paragraph::new(Text::from(lines)), col);
 }
 
-/// Desenha a coluna de identidade: logo colorida + metadados compactos.
-fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>) {
-    let mut lines = ascii::logo_lines(size);
+/// Desenha a coluna de identidade: logo colorida (com o pulso do olho na `phase`
+/// atual) + metadados compactos.
+fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>, phase: u8) {
+    let mut lines = ascii::logo_lines_phase(size, phase);
     lines.push(Line::from(""));
     lines.extend(meta);
     f.render_widget(Paragraph::new(Text::from(lines)), area);
@@ -267,8 +274,8 @@ impl Cols {
         // Limita a largura-alvo para manter a coluna compacta e centralizável.
         let width = (width as usize).min(MAX_INFO_W);
         let bar_w = (width / 4).clamp(6, 14);
-        // Reserva: rótulo(9) + barra(`[`+bar_w+`] `+`NNN%`) + 1 folga.
-        let reserved = 9 + bar_w + 7 + 1;
+        // Reserva: rótulo(10) + barra(`[`+bar_w+`] `+`NNN%`) + 1 folga.
+        let reserved = 10 + bar_w + 7 + 1;
         let val_w = width.saturating_sub(reserved).clamp(8, 40);
         Self {
             width,
@@ -451,7 +458,7 @@ fn section_power(
             let suffix = battery_suffix(b);
             out.push(metric_line(
                 "Bateria",
-                &format!("{:.0}%", b.percent),
+                "",
                 cols.val_w,
                 b.ratio(),
                 cols.bar_w,
@@ -481,13 +488,7 @@ fn section_power(
     // Brilho.
     match s.brightness {
         Some(r) => out.push(metric_line(
-            "Brilho",
-            &format!("{:.0}%", r * 100.0),
-            cols.val_w,
-            r,
-            cols.bar_w,
-            pal,
-            None,
+            "Brilho", "", cols.val_w, r, cols.bar_w, pal, None,
         )),
         None => out.push(kv_line("Brilho", "N/A".into(), cols.width, pal)),
     }
@@ -498,7 +499,7 @@ fn section_power(
             let suffix = if v.muted { Some("[MUTED]") } else { None };
             out.push(metric_line(
                 "Volume",
-                &format!("{:.0}%", v.ratio() * 100.0),
+                "",
                 cols.val_w,
                 v.ratio(),
                 cols.bar_w,

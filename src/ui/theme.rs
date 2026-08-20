@@ -29,7 +29,7 @@ impl Palette {
                 warn: Color::Gray,
                 err: Color::White,
             },
-            // "hal" (padrão): âmbar de cockpit sobre fundo escuro.
+            // "hal" (padrão): âmbar do Assistente de Sistema sobre fundo escuro.
             _ => Palette {
                 bg: Color::Reset,
                 fg: Color::Rgb(0xD8, 0xD8, 0xD2),

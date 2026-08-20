@@ -1,4 +1,4 @@
-//! Estado global do cockpit e roteamento de [`Action`]/[`AppEvent`].
+//! Estado global do Assistente de Sistema e roteamento de [`Action`]/[`AppEvent`].
 //!
 //! `App` é a única fonte da verdade consumida pelo render. A UI é uma função
 //! pura de `&App`.
@@ -11,7 +11,7 @@ use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
 
-/// Abas do cockpit, na ordem da tabbar.
+/// Abas do Assistente de Sistema, na ordem da tabbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Overview,

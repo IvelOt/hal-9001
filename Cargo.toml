@@ -3,7 +3,7 @@ name = "hall-9001"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
-description = "HAL-9001 — Central TUI de Controle do Sistema & Cockpit (Rust/ratatui)"
+description = "HAL-9001 — Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui)"
 license = "MIT"
 readme = "README.md"
 

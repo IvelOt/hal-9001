@@ -8,7 +8,7 @@ frame_ms = 33
 icons = true
 
 [theme]
-# Temas embutidos: "hal" (âmbar de cockpit) | "mono".
+# Temas embutidos: "hal" (âmbar do Assistente de Sistema) | "mono".
 name = "hal"
 
 [polling]

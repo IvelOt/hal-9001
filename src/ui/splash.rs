@@ -1,6 +1,6 @@
 //! Splash animada: `LOADING...` → `Bem-vindo, <user>!` sobre o besouro.
 
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
@@ -39,24 +39,33 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ))
     };
 
-    // Logo das engrenagens com o olho do HAL, colorida e centralizada.
+    // Logo das engrenagens com o olho do HAL, colorida, responsiva e com o pulso
+    // de respiração do olho (fase derivada do tempo decorrido). Em telas micro,
+    // `select` devolve `None` e a logo é recolhida, mantendo o texto centralizado.
     let size = ascii::select("auto", area.width.saturating_sub(4));
+    let phase = ((elapsed / 250) % 4) as u8;
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
     if let Some(size) = size {
-        lines.extend(ascii::logo_lines(size));
+        lines.extend(ascii::logo_lines_phase(size, phase));
+        lines.push(Line::from(""));
     }
-    lines.push(Line::from(""));
     lines.push(headline);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(bar, Style::default().fg(pal.accent))));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "HAL-9001 · System Cockpit",
+        "HAL-9001 · Assistente de Sistema",
         Style::default().fg(pal.dim),
     )));
 
+    // Centraliza o bloco vertical e horizontalmente (`Flex::Center` + alinhamento
+    // central do parágrafo), recortando à área quando o terminal é curto.
+    let content_h = (lines.len() as u16).min(area.height).max(1);
+    let band = Layout::vertical([Constraint::Length(content_h)])
+        .flex(Flex::Center)
+        .split(area)[0];
+
     let para = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
-    f.render_widget(para, area);
+    f.render_widget(para, band);
 }

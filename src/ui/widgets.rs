@@ -7,8 +7,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::Palette;
 
-/// Largura reservada ao rótulo das linhas `rótulo valor` do Overview.
-const LABEL_W: usize = 9;
+/// Largura reservada ao rótulo das linhas `rótulo valor` do Overview. Comporta
+/// o rótulo mais longo (`Disco (/)`, 9 col) com ao menos 1 col de folga.
+const LABEL_W: usize = 10;
 
 /// Trunca `s` para caber em `max` colunas de exibição, anexando `…` quando
 /// corta. Respeita a largura Unicode de cada caractere (CJK/emoji contam 2).
@@ -98,11 +99,14 @@ pub fn kv_line<'a>(label: &'a str, value: String, width: usize, pal: &Palette) -
     ])
 }
 
-/// Linha densa que combina, numa única linha, o rótulo, um `valor` métrico
-/// (ex.: `6.3 / 15.3 GiB`) e a barra de progresso com percentual — reduzindo à
-/// metade a altura das seções. O `valor` é alinhado numa coluna de `val_w`
-/// colunas (truncado com `…` se preciso) para que as barras fiquem alinhadas.
-/// Um `suffix` opcional (ex.: `[CHARGING +25W]`, `[MUTED]`) é anexado ao fim.
+/// Linha densa que combina, numa única linha, o rótulo, uma **coluna do meio**
+/// (o `valor` métrico como `6.3 / 15.3 GiB` e/ou um `suffix` de status como
+/// `[CHARGING +25W]`, `[MUTED]`) e a barra de progresso com percentual.
+///
+/// A coluna do meio é preenchida (padding) até `val_w` colunas para que as
+/// barras `[…]` fiquem **perfeitamente alinhadas verticalmente** entre todas as
+/// métricas — o status fica assim *entre* o rótulo/valor e a barra, conforme o
+/// briefing. Tanto o valor quanto o status são truncados com `…` se necessário.
 #[allow(clippy::too_many_arguments)]
 pub fn metric_line<'a>(
     label: &'a str,
@@ -118,16 +122,36 @@ pub fn metric_line<'a>(
     let empty = bar_w.saturating_sub(filled);
     let color = pal.gauge_color(ratio);
 
-    let val = truncate_str(value, val_w);
-    let pad = val_w.saturating_sub(UnicodeWidthStr::width(val.as_str()));
+    let mut spans: Vec<Span> = vec![Span::styled(
+        format!("{label:<LABEL_W$}"),
+        Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+    )];
 
-    let mut spans = vec![
-        Span::styled(
-            format!("{label:<LABEL_W$}"),
-            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(val, Style::default().fg(pal.fg)),
-        // Espaçamento até a barra (padding do valor + 1 folga).
+    // Coluna do meio: valor (fg) e, em seguida, o status (dim). Ambos partilham
+    // o orçamento `val_w`, garantindo o alinhamento das barras à direita.
+    let mut mid_w = 0usize;
+    if !value.is_empty() {
+        let val = truncate_str(value, val_w);
+        mid_w += UnicodeWidthStr::width(val.as_str());
+        spans.push(Span::styled(val, Style::default().fg(pal.fg)));
+    }
+    if let Some(s) = suffix {
+        let sep = usize::from(mid_w > 0);
+        let budget = val_w.saturating_sub(mid_w + sep);
+        let tag = truncate_str(s, budget);
+        if !tag.is_empty() {
+            if sep == 1 {
+                spans.push(Span::raw(" "));
+                mid_w += 1;
+            }
+            mid_w += UnicodeWidthStr::width(tag.as_str());
+            spans.push(Span::styled(tag, Style::default().fg(pal.dim)));
+        }
+    }
+
+    // Padding até a barra (folga da coluna do meio + 1 folga).
+    let pad = val_w.saturating_sub(mid_w);
+    spans.extend([
         Span::raw(" ".repeat(pad + 1)),
         Span::styled("[", Style::default().fg(pal.dim)),
         Span::styled("█".repeat(filled), Style::default().fg(color)),
@@ -137,13 +161,7 @@ pub fn metric_line<'a>(
             format!("{:>3.0}%", ratio * 100.0),
             Style::default().fg(pal.fg),
         ),
-    ];
-    if let Some(s) = suffix {
-        spans.push(Span::styled(
-            format!("  {s}"),
-            Style::default().fg(pal.dim),
-        ));
-    }
+    ]);
     Line::from(spans)
 }
 

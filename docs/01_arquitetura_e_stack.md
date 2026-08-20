@@ -1,6 +1,6 @@
 # 01 — Arquitetura & Stack Tecnológica
 
-> HAL-9001 — Central TUI de Controle do Sistema & Cockpit
+> HAL-9001 — Central TUI de Controle do Sistema & Assistente de Sistema
 
 ## 1. Filosofia de Design
 

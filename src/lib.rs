@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::events::input::InputStream;
 use crate::events::{Action, AppEvent};
 
-/// Executa o loop principal do cockpit até o usuário sair.
+/// Executa o loop principal do Assistente de Sistema até o usuário sair.
 ///
 /// - `event_rx`: dados vindos dos backends (`AppEvent`).
 /// - `action_tx`: comandos difundidos para os backends (`Action`).

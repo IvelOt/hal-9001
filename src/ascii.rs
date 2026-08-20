@@ -109,27 +109,59 @@ const RING_TEETH: Color = Color::Rgb(180, 140, 60); // bronze  ('#')
 const RING_GAP: Color = Color::DarkGray; //             cinza   ('=')
 const HUB_TEETH: Color = Color::Rgb(210, 170, 90); //   âmbar   ('x')
 const HUB_GAP: Color = Color::Yellow; //                ouro    ('+')
-const EYE_HALO: Color = Color::LightRed; //             halo    ('.')
-const EYE_IRIS: Color = Color::Red; //                  íris    ('o')
-const EYE_CORE: Color = Color::Rgb(255, 50, 50); //     núcleo  ('O')
 
-/// Cor de um glifo da logo, ou `None` para espaço (sem span).
-fn glyph_color(c: char) -> Option<Color> {
+/// Tons incandescentes do Olho do HAL-9000 (halo `.`, íris `o`, núcleo `O`)
+/// para cada fase do pulso de respiração. A **fase 0** reproduz exatamente a
+/// paleta estática histórica (halo `LightRed`, íris `Red`, núcleo vermelho
+/// vivo), preservando os testes de colorização; as fases seguintes intensificam
+/// e depois recuam suavemente, dando a impressão de um olho cibernético ativo.
+fn eye_colors(phase: u8) -> (Color, Color, Color) {
+    match phase % 4 {
+        // (halo '.', íris 'o', núcleo 'O')
+        0 => (Color::LightRed, Color::Red, Color::Rgb(255, 50, 50)),
+        1 => (
+            Color::Rgb(255, 130, 110),
+            Color::Rgb(255, 80, 70),
+            Color::Rgb(255, 80, 80),
+        ),
+        2 => (
+            Color::Rgb(255, 165, 150),
+            Color::Rgb(255, 110, 95),
+            Color::Rgb(255, 110, 110),
+        ),
+        _ => (
+            Color::Rgb(255, 130, 110),
+            Color::Rgb(255, 80, 70),
+            Color::Rgb(255, 80, 80),
+        ),
+    }
+}
+
+/// Cor de um glifo da logo, ou `None` para espaço (sem span). Os glifos do olho
+/// (`.`/`o`/`O`) usam os tons da `phase` atual do pulso; os anéis são fixos.
+fn glyph_color(c: char, eye: (Color, Color, Color)) -> Option<Color> {
     match c {
         '#' => Some(RING_TEETH),
         '=' => Some(RING_GAP),
         'x' => Some(HUB_TEETH),
         '+' => Some(HUB_GAP),
-        '.' => Some(EYE_HALO),
-        'o' => Some(EYE_IRIS),
-        'O' => Some(EYE_CORE),
+        '.' => Some(eye.0),
+        'o' => Some(eye.1),
+        'O' => Some(eye.2),
         _ => None,
     }
 }
 
-/// Constrói as linhas coloridas (multi-span) da logo, agrupando glifos
-/// consecutivos de mesma cor num único span.
+/// Constrói as linhas coloridas (multi-span) da logo na fase estática (0).
 pub fn logo_lines(size: LogoSize) -> Vec<Line<'static>> {
+    logo_lines_phase(size, 0)
+}
+
+/// Constrói as linhas coloridas (multi-span) da logo para uma dada `phase` do
+/// pulso do Olho do HAL, agrupando glifos consecutivos de mesma cor num único
+/// span. A fase deriva de `app.elapsed_ms()` (ex.: `(elapsed_ms / 250) % 4`).
+pub fn logo_lines_phase(size: LogoSize, phase: u8) -> Vec<Line<'static>> {
+    let eye = eye_colors(phase);
     size.art()
         .iter()
         .map(|raw| {
@@ -149,7 +181,7 @@ pub fn logo_lines(size: LogoSize) -> Vec<Line<'static>> {
             };
 
             for c in raw.chars() {
-                let color = glyph_color(c);
+                let color = glyph_color(c, eye);
                 if color != cur {
                     flush(&mut spans, &mut buf, cur);
                     cur = color;

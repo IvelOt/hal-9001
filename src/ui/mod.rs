@@ -60,6 +60,19 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         })
         .collect();
 
+    // Título da janela: nome do assistente + SO/arch quando já houver snapshot.
+    // Ex.: `HAL-9001 · Assistente de Sistema (Arch Linux x86_64)`.
+    let title = match &app.system {
+        Some(s) => {
+            let plat = match &s.detail.cpu_arch {
+                Some(arch) => format!("{} {arch}", s.os),
+                None => s.os.clone(),
+            };
+            format!(" HAL-9001 · Assistente de Sistema ({plat}) ")
+        }
+        None => " HAL-9001 · Assistente de Sistema ".to_string(),
+    };
+
     let tabs = Tabs::new(titles)
         .select(app.active.index())
         .block(
@@ -67,7 +80,7 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(pal.dim))
                 .title(Span::styled(
-                    " HAL-9001 ",
+                    title,
                     Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
                 )),
         )
