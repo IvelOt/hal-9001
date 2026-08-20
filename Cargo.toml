@@ -1,0 +1,55 @@
+[package]
+name = "hall-9001"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "HAL-9001 — Central TUI de Controle do Sistema & Cockpit (Rust/ratatui)"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "hal9001"
+path = "src/main.rs"
+
+[lib]
+name = "hal9001"
+path = "src/lib.rs"
+
+[dependencies]
+# --- TUI / terminal ---
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+unicode-width = "0.2"
+
+# --- async runtime ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "signal"] }
+tokio-util = "0.7"
+futures = "0.3"
+
+# --- system introspection ---
+sysinfo = "0.32"
+
+# --- D-Bus (NetworkManager / bluez / UDisks2 / UPower) ---
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# --- embedded PTY (Terminal Deck / Yazi) ---
+portable-pty = "0.8"
+
+# --- config / serde ---
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# --- utils ---
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

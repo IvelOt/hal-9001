@@ -1,0 +1,27 @@
+# HAL-9001 — configuração de exemplo.
+# Copie para ~/.config/hal9001/config.toml e ajuste ao seu gosto.
+
+[ui]
+# Intervalo entre frames de render (ms). ~33 ≈ 30fps.
+frame_ms = 33
+# Ícones nerd-font (fallback ASCII quando false).
+icons = true
+
+[theme]
+# Temas embutidos: "hal" (âmbar de cockpit) | "mono".
+name = "hal"
+
+[polling]
+system_ms = 1500
+network_ms = 5000
+power_ms = 5000
+storage_ms = 8000
+
+[splash]
+enabled = true
+# Tempo mínimo da splash antes de revelar o Overview (ms).
+min_ms = 1400
+
+[overview]
+# ASCII art do besouro: "auto" | "A" | "B" | "C".
+ascii = "auto"
