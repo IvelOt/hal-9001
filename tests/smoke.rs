@@ -63,7 +63,7 @@ fn render_all_tabs_and_splash_without_panic() {
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 
     // Feed a system snapshot so the Overview has real data to lay out.
-    app.handle_event(hal9001::events::AppEvent::System(
+    app.handle_event(hal9001::events::AppEvent::System(Box::new(
         hal9001::backend::system::SystemSnapshot {
             host: "testhost".into(),
             user: "tester".into(),
@@ -75,8 +75,25 @@ fn render_all_tabs_and_splash_without_panic() {
             cpu_usage: 42.0,
             mem_used: 4 * 1024 * 1024 * 1024,
             mem_total: 16 * 1024 * 1024 * 1024,
+            host_model: Some("ACME Laptop 9000".into()),
+            packages: Some(hal9001::backend::system::Packages {
+                total: 1234,
+                by_manager: vec![("pacman", 1200), ("flatpak", 34)],
+            }),
+            brightness: Some(0.7),
+            volume: Some(hal9001::backend::system::Volume {
+                level: 0.65,
+                muted: false,
+            }),
+            battery: Some(hal9001::backend::system::Battery {
+                percent: 82.0,
+                status: hal9001::backend::system::BatteryStatus::Charging,
+                power_watts: Some(12.5),
+            }),
+            disk_used: Some(120 * 1024 * 1024 * 1024),
+            disk_total: Some(512 * 1024 * 1024 * 1024),
         },
-    ));
+    )));
 
     // Promote to running and render every tab + help overlay.
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
@@ -86,6 +103,43 @@ fn render_all_tabs_and_splash_without_panic() {
         terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
     }
     app.dispatch(hal9001::events::Action::ToggleHelp, &tx);
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+}
+
+#[test]
+fn render_overview_desktop_degraded_without_panic() {
+    // Máquina "desktop": sem bateria, brilho, volume, disco ou pacotes.
+    // A UI deve renderizar "N/A" sem entrar em pânico.
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+
+    app.handle_event(hal9001::events::AppEvent::System(Box::new(
+        hal9001::backend::system::SystemSnapshot {
+            host: "desktop".into(),
+            user: "op".into(),
+            shell: "bash".into(),
+            os: "Linux".into(),
+            kernel: "6.0".into(),
+            uptime_secs: 120,
+            cpu_name: "Desktop CPU".into(),
+            cpu_usage: 5.0,
+            mem_used: 1024,
+            mem_total: 8192,
+            host_model: None,
+            packages: None,
+            brightness: None,
+            volume: None,
+            battery: None,
+            disk_used: None,
+            disk_total: None,
+        },
+    )));
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 }
 

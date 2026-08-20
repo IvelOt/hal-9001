@@ -71,6 +71,23 @@ pub fn bar_line<'a>(label: &'a str, ratio: f64, width: usize, pal: &Palette) -> 
     ])
 }
 
+/// Como [`bar_line`], mas anexa um sufixo textual após o percentual — usado
+/// para status de bateria (⚡/🔋) ou indicador de mudo do volume.
+pub fn bar_line_suffix<'a>(
+    label: &'a str,
+    ratio: f64,
+    width: usize,
+    pal: &Palette,
+    suffix: &str,
+) -> Line<'a> {
+    let mut line = bar_line(label, ratio, width, pal);
+    line.spans.push(Span::styled(
+        format!("  {suffix}"),
+        Style::default().fg(pal.dim),
+    ));
+    line
+}
+
 /// Faixa de 16 blocos representando a paleta de cores do terminal.
 pub fn palette_line<'a>() -> Line<'a> {
     use ratatui::style::Color;

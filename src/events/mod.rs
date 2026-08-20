@@ -46,8 +46,9 @@ impl Toast {
 /// Eventos produzidos pelos backends e consumidos pelo `App`.
 #[derive(Debug, Clone)]
 pub enum AppEvent {
-    /// Novo snapshot de sistema (sysinfo).
-    System(SystemSnapshot),
+    /// Novo snapshot de sistema (sysinfo). Boxed por ser bem maior que os
+    /// demais variantes, evitando inflar o tamanho do enum.
+    System(Box<SystemSnapshot>),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.

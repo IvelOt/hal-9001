@@ -139,7 +139,7 @@ impl App {
     /// Consome um evento de backend, mutando o estado.
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::System(snap) => self.system = Some(snap),
+            AppEvent::System(snap) => self.system = Some(*snap),
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
             AppEvent::ServiceDegraded { name, reason } => {
                 self.services

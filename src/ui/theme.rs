@@ -42,6 +42,20 @@ impl Palette {
         }
     }
 
+    /// Cor do besouro conforme a posição vertical `t` em 0.0..=1.0, produzindo
+    /// um gradiente do topo (mais escuro) à base (mais claro) quando o acento é
+    /// RGB. Temas de cor nomeada (ex.: `mono`) mantêm o acento fixo.
+    pub fn gradient(&self, t: f64) -> Color {
+        match self.accent {
+            Color::Rgb(r, g, b) => {
+                let f = 0.65 + 0.5 * t.clamp(0.0, 1.0);
+                let scale = |c: u8| ((c as f64 * f).round() as u32).min(255) as u8;
+                Color::Rgb(scale(r), scale(g), scale(b))
+            }
+            other => other,
+        }
+    }
+
     /// Cor de uma barra conforme a fração preenchida (verde→amarelo→vermelho).
     pub fn gauge_color(&self, ratio: f64) -> Color {
         if ratio >= 0.85 {
