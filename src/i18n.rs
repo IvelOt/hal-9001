@@ -140,6 +140,7 @@ pub struct Messages {
     pub hint_brightness: &'static str,
     pub hint_volume: &'static str,
     pub hint_mute: &'static str,
+    pub hint_config: &'static str,
     pub hint_quit: &'static str,
     pub hint_help: &'static str,
 
@@ -214,6 +215,7 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     hint_brightness: "[b/B] Brilho",
     hint_volume: "[v/V] Volume",
     hint_mute: "[m] Mudo",
+    hint_config: "[c] Config",
     hint_quit: "[q] Sair",
     hint_help: "[?] Ajuda",
 
@@ -287,6 +289,7 @@ pub static MESSAGES_EN_US: Messages = Messages {
     hint_brightness: "[b/B] Brightness",
     hint_volume: "[v/V] Volume",
     hint_mute: "[m] Mute",
+    hint_config: "[c] Config",
     hint_quit: "[q] Quit",
     hint_help: "[?] Help",
 
@@ -316,7 +319,7 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     tab_files: "Archivos",
     tab_terminal: "Terminal",
 
-    sec_compute: "Disponibilidad de Hardware",
+    sec_compute: "Disponibilidade de Hardware",
     sec_system: "Sistema y Plataforma",
     sec_peripherals: "Periféricos y Energía",
     sec_palette: "Paleta de Colores",
@@ -360,6 +363,7 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     hint_brightness: "[b/B] Brillo",
     hint_volume: "[v/V] Volumen",
     hint_mute: "[m] Silenciar",
+    hint_config: "[c] Config",
     hint_quit: "[q] Salir",
     hint_help: "[?] Ayuda",
 

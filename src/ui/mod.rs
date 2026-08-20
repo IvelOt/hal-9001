@@ -4,6 +4,7 @@ pub mod theme;
 pub mod widgets;
 
 pub mod bluetooth;
+pub mod config_modal;
 pub mod files;
 pub mod network;
 pub mod overview;
@@ -45,6 +46,9 @@ pub fn draw(app: &App, f: &mut Frame) {
 
     if app.show_help {
         draw_help(app, &pal, f);
+    }
+    if app.show_config {
+        config_modal::draw(app, &pal, f);
     }
 }
 
@@ -146,6 +150,7 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
         Line::from("Enter                   ação primária do item"),
         Line::from("r                       refresh / rescan"),
         Line::from(".                       Overview: detalhes normal/expandido"),
+        Line::from("c / F2                  abrir configurações / settings"),
         Line::from("?                       abrir/fechar esta ajuda"),
         Line::from("q / Ctrl-c              sair"),
         Line::from(""),

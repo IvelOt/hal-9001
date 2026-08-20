@@ -1,11 +1,12 @@
-//! Carregamento e defaults do `config.toml`.
+//! Carregamento, defaults e persistência do `config.toml`.
 //!
-//! Procura, em ordem: `$HAL9001_CONFIG`, `~/.config/hal9001/config.toml`,
-//! `./config.toml`. Se nada existir ou o parse falhar, usa os defaults.
+//! Procura, em ordem: `$HAL9001_CONFIG`, `~/.config/hall-9001/config.toml`,
+//! `~/.config/hal9001/config.toml`, `./config.toml`. Se nada existir ou o parse
+//! falhar, usa os defaults.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub ui: UiConfig,
@@ -17,7 +18,7 @@ pub struct Config {
 
 use crate::i18n::Language;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
     /// Intervalo entre frames de render (ms). ~33ms ≈ 30fps.
@@ -49,7 +50,7 @@ impl Default for UiConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
     /// Nome do tema embutido: `hal` (padrão), `mono`.
@@ -64,7 +65,7 @@ impl Default for ThemeConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PollingConfig {
     pub system_ms: u64,
@@ -84,7 +85,7 @@ impl Default for PollingConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SplashConfig {
     /// Tempo mínimo da splash antes de revelar o Overview (ms).
@@ -101,7 +102,7 @@ impl Default for SplashConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverviewConfig {
     /// Seleção da logo: `auto`, `main`, `medium`, `compact`, `none`.
@@ -135,19 +136,36 @@ impl Config {
         Config::default()
     }
 
+    /// Salva a configuração atual no diretório de configuração do usuário (`~/.config/hall-9001/config.toml`).
+    pub fn save(&self) -> Result<std::path::PathBuf, String> {
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| format!("erro ao serializar config: {e}"))?;
+        let target_dir = directories::ProjectDirs::from("com", "hal9001", "hall-9001")
+            .map(|dirs| dirs.config_dir().to_path_buf())
+            .unwrap_or_else(|| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+                std::path::PathBuf::from(home).join(".config/hall-9001")
+            });
+        let _ = std::fs::create_dir_all(&target_dir);
+        let target_file = target_dir.join("config.toml");
+        std::fs::write(&target_file, toml_str)
+            .map_err(|e| format!("erro ao salvar {target_file:?}: {e}"))?;
+        Ok(target_file)
+    }
+
     fn candidate_paths() -> Vec<std::path::PathBuf> {
         let mut paths = Vec::new();
         if let Ok(p) = std::env::var("HAL9001_CONFIG") {
             paths.push(std::path::PathBuf::from(p));
         }
-        if let Some(dirs) = directories::BaseDirs::new() {
-            paths.push(
-                dirs.config_dir()
-                    .join("hal9001")
-                    .join("config.toml"),
-            );
+        if let Some(dirs) = directories::ProjectDirs::from("com", "hal9001", "hall-9001") {
+            paths.push(dirs.config_dir().join("config.toml"));
         }
-        paths.push(std::path::PathBuf::from("config.toml"));
+        if let Ok(home) = std::env::var("HOME") {
+            paths.push(std::path::PathBuf::from(&home).join(".config/hall-9001/config.toml"));
+            paths.push(std::path::PathBuf::from(&home).join(".config/hal9001/config.toml"));
+        }
+        paths.push(std::path::PathBuf::from("./config.toml"));
         paths
     }
 }

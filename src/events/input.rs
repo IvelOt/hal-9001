@@ -57,9 +57,14 @@ fn map_key(key: KeyEvent) -> Option<Action> {
         }
         KeyCode::Down | KeyCode::Char('j') => Some(Action::Down),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::Up),
+        KeyCode::Left | KeyCode::Char('h') => Some(Action::Left),
+        KeyCode::Right | KeyCode::Char('l') => Some(Action::Right),
         KeyCode::Enter => Some(Action::Enter),
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('.') => Some(Action::ToggleDetail),
+        // Configurações interativas: `c`/`C` ou F2.
+        KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::F(2) => Some(Action::ToggleConfig),
+        KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SaveConfig),
         // Brilho: minúscula/`-` diminui, maiúscula/`+`/`=` aumenta.
         KeyCode::Char('b') | KeyCode::Char('-') => Some(Action::BrightnessDown),
         KeyCode::Char('B') | KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::BrightnessUp),
@@ -70,6 +75,7 @@ fn map_key(key: KeyEvent) -> Option<Action> {
         // Perfil de energia: `p`/`P` cicla Economia→Equilibrado→Desempenho.
         KeyCode::Char('p') | KeyCode::Char('P') => Some(Action::CyclePowerProfile),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
+        KeyCode::Esc => Some(Action::ToggleConfig),
         _ => Some(Action::Raw(key)),
     }
 }

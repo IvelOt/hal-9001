@@ -201,6 +201,7 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     spans.extend(hint("b/B", m.label_brightness));
     spans.extend(hint("v/V", m.label_volume));
     spans.extend(hint("m", m.hint_mute));
+    spans.extend(hint("c", m.hint_config));
     // Trunca a linha inteira à largura disponível para nunca vazar.
     let mut line = Line::from(spans);
     if line_width(&line) > area.width as usize {

@@ -68,9 +68,15 @@ pub enum Action {
     SelectTab(usize),
     Up,
     Down,
+    Left,
+    Right,
     Enter,
     Refresh,
     ToggleHelp,
+    /// Abre/fecha o modal interativo de configurações (tecla `c`/`C`).
+    ToggleConfig,
+    /// Salva as configurações em disco (tecla `s` no modal).
+    SaveConfig,
     /// Alterna o Overview entre exibição Padrão e Detalhada (tecla `.`).
     ToggleDetail,
     /// Aumenta o brilho da tela em um passo (tecla `B`/`+`/`=`).

@@ -89,6 +89,10 @@ pub struct App {
     pub phase: Phase,
     pub active: Tab,
     pub show_help: bool,
+    /// Modal interativo de configurações (alternado pela tecla `c`/`C`).
+    pub show_config: bool,
+    /// Índice da linha selecionada no modal de configurações (0..5).
+    pub config_cursor: usize,
     /// Overview em modo detalhado (alternado pela tecla `.`).
     pub detailed_overview: bool,
 
@@ -122,6 +126,8 @@ impl App {
             phase,
             active: Tab::Overview,
             show_help: false,
+            show_config: false,
+            config_cursor: 0,
             detailed_overview: false,
             selection: [0; 8],
             system: None,
@@ -163,11 +169,138 @@ impl App {
         }
     }
 
+    /// Navega para o campo anterior no modal de configuração.
+    pub fn config_prev_field(&mut self) {
+        self.config_cursor = if self.config_cursor == 0 {
+            5
+        } else {
+            self.config_cursor - 1
+        };
+    }
+
+    /// Navega para o próximo campo no modal de configuração.
+    pub fn config_next_field(&mut self) {
+        self.config_cursor = (self.config_cursor + 1) % 6;
+    }
+
+    /// Cicla o valor da opção selecionada para a esquerda/anterior.
+    pub fn config_prev_value(&mut self) {
+        self.cycle_config_value(false);
+    }
+
+    /// Cicla o valor da opção selecionada para a direita/próximo.
+    pub fn config_next_value(&mut self) {
+        self.cycle_config_value(true);
+    }
+
+    fn cycle_config_value(&mut self, forward: bool) {
+        match self.config_cursor {
+            0 => {
+                // Language: ["auto", "pt-BR", "en-US", "es-ES"]
+                let options = ["auto", "pt-BR", "en-US", "es-ES"];
+                let cur = options
+                    .iter()
+                    .position(|&s| s.eq_ignore_ascii_case(&self.config.ui.language))
+                    .unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % options.len()
+                } else {
+                    (cur + options.len() - 1) % options.len()
+                };
+                self.config.ui.language = options[next].to_string();
+                self.lang = self.config.ui.resolved_language();
+            }
+            1 => {
+                // Theme: ["hal", "mono"]
+                let options = ["hal", "mono"];
+                let cur = options
+                    .iter()
+                    .position(|&s| s.eq_ignore_ascii_case(&self.config.theme.name))
+                    .unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % options.len()
+                } else {
+                    (cur + options.len() - 1) % options.len()
+                };
+                self.config.theme.name = options[next].to_string();
+            }
+            2 => {
+                // Logo: ["auto", "main", "medium", "compact", "none"]
+                let options = ["auto", "main", "medium", "compact", "none"];
+                let cur = options
+                    .iter()
+                    .position(|&s| s.eq_ignore_ascii_case(&self.config.overview.ascii))
+                    .unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % options.len()
+                } else {
+                    (cur + options.len() - 1) % options.len()
+                };
+                self.config.overview.ascii = options[next].to_string();
+            }
+            3 => {
+                // Icons: [true, false]
+                self.config.ui.icons = !self.config.ui.icons;
+            }
+            4 => {
+                // FPS / frame_ms: [33 (30fps), 16 (60fps), 66 (15fps)]
+                let options = [33u64, 16, 66];
+                let cur = options
+                    .iter()
+                    .position(|&ms| ms == self.config.ui.frame_ms)
+                    .unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % options.len()
+                } else {
+                    (cur + options.len() - 1) % options.len()
+                };
+                self.config.ui.frame_ms = options[next];
+            }
+            5 => {
+                // Splash: [true, false]
+                self.config.splash.enabled = !self.config.splash.enabled;
+            }
+            _ => {}
+        }
+    }
+
+    /// Salva a configuração atual em disco e notifica via toast.
+    pub fn save_config(&mut self) {
+        match self.config.save() {
+            Ok(path) => {
+                let msg = match self.lang {
+                    Language::EnUs => format!("Settings saved to {}", path.display()),
+                    Language::EsEs => format!("Configuración guardada en {}", path.display()),
+                    Language::PtBr => format!("Configurações salvas em {}", path.display()),
+                };
+                self.toast = Some((Toast::info(msg), Instant::now()));
+            }
+            Err(e) => {
+                self.toast = Some((Toast::error(format!("Erro ao salvar: {e}")), Instant::now()));
+            }
+        }
+    }
+
     /// Traduz uma ação de input em mutação de estado e/ou broadcast a backends.
     pub fn dispatch(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
         // Durante a splash, qualquer tecla pula para o dashboard.
         if self.phase == Phase::Splash {
             self.phase = Phase::Running;
+        }
+
+        // Se o modal de configurações estiver aberto, captura a navegação e controles.
+        if self.show_config {
+            match action {
+                Action::Quit => self.should_quit = true,
+                Action::ToggleConfig => self.show_config = false,
+                Action::Up => self.config_prev_field(),
+                Action::Down => self.config_next_field(),
+                Action::Left => self.config_prev_value(),
+                Action::Right | Action::Enter => self.config_next_value(),
+                Action::SaveConfig => self.save_config(),
+                _ => {}
+            }
+            return;
         }
 
         match action {
@@ -188,7 +321,20 @@ impl App {
                 let i = self.active.index();
                 self.selection[i] = self.selection[i].saturating_add(1);
             }
-            Action::ToggleHelp => self.show_help = !self.show_help,
+            Action::Left | Action::Right => {}
+            Action::ToggleHelp => {
+                self.show_help = !self.show_help;
+                if self.show_help {
+                    self.show_config = false;
+                }
+            }
+            Action::ToggleConfig => {
+                self.show_config = !self.show_config;
+                if self.show_config {
+                    self.show_help = false;
+                }
+            }
+            Action::SaveConfig => self.save_config(),
             Action::ToggleDetail => self.detailed_overview = !self.detailed_overview,
             Action::Enter
             | Action::Refresh
