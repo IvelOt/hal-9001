@@ -4,7 +4,7 @@
 
 use hal9001::app::App;
 use hal9001::backend::system::{
-    Battery, BatteryStatus, DetailInfo, Packages, SystemSnapshot, Volume,
+    Battery, BatteryStatus, DetailInfo, Packages, PowerProfile, SystemSnapshot, Volume,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent};
@@ -48,6 +48,7 @@ fn sample_snapshot() -> SystemSnapshot {
         }),
         disk_used: Some(220 * 1024 * 1024 * 1024),
         disk_total: Some(512 * 1024 * 1024 * 1024),
+        power_profile: Some(PowerProfile::Performance),
         detail: DetailInfo {
             board_vendor: Some("LENOVO".into()),
             board_name: Some("21HM".into()),
@@ -257,6 +258,25 @@ fn footer_shows_control_hints() {
     assert!(text.contains("[b/B]"), "atalho de brilho ausente");
     assert!(text.contains("[v/V]"), "atalho de volume ausente");
     assert!(text.contains("[m]"), "atalho de mudo ausente");
+}
+
+#[test]
+fn footer_shows_power_profile_hint() {
+    // O rodapé anuncia o atalho `[p]` do perfil de energia.
+    let text = buffer_text(&render_overview(120, 40, false));
+    assert!(text.contains("[p]"), "atalho de perfil ausente");
+    assert!(text.contains("Perfil"), "rótulo de perfil ausente no rodapé");
+}
+
+#[test]
+fn power_profile_row_renders_active_tag() {
+    // A seção Periféricos & Energia mostra a tag do perfil ativo (aqui,
+    // Desempenho → [PERFORMANCE]).
+    let text = buffer_text(&render_overview(120, 40, false));
+    assert!(
+        text.contains("[PERFORMANCE]"),
+        "tag do perfil de energia ausente"
+    );
 }
 
 #[test]

@@ -134,6 +134,81 @@ impl Volume {
     }
 }
 
+/// Perfil de energia ativo (power-profiles-daemon / scaling governor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerProfile {
+    /// `power-saver` — Economia.
+    PowerSaver,
+    /// `balanced` — Equilibrado.
+    Balanced,
+    /// `performance` — Desempenho.
+    Performance,
+}
+
+impl PowerProfile {
+    /// Deriva o perfil a partir do id do `power-profiles-daemon`
+    /// (`power-saver`/`balanced`/`performance`) ou de um scaling governor do
+    /// sysfs (`powersave`/`schedutil`/`performance`/...). Degrada para `None`.
+    pub fn parse(raw: &str) -> Option<PowerProfile> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "power-saver" | "power_saver" | "powersave" | "economia" => {
+                Some(PowerProfile::PowerSaver)
+            }
+            "balanced" | "equilibrado" | "schedutil" | "ondemand" | "conservative"
+            | "userspace" => Some(PowerProfile::Balanced),
+            "performance" | "desempenho" => Some(PowerProfile::Performance),
+            _ => None,
+        }
+    }
+
+    /// Id textual aceito por `powerprofilesctl set` (`power-saver`, ...).
+    pub fn id(self) -> &'static str {
+        match self {
+            PowerProfile::PowerSaver => "power-saver",
+            PowerProfile::Balanced => "balanced",
+            PowerProfile::Performance => "performance",
+        }
+    }
+
+    /// Rótulo pt-BR para toasts/UI (`Economia`, `Equilibrado`, `Desempenho`).
+    pub fn label(self) -> &'static str {
+        match self {
+            PowerProfile::PowerSaver => "Economia",
+            PowerProfile::Balanced => "Equilibrado",
+            PowerProfile::Performance => "Desempenho",
+        }
+    }
+
+    /// Tag textual em maiúsculas, estilo neofetch, sem emojis:
+    /// `[POWER-SAVER]`, `[BALANCED]`, `[PERFORMANCE]`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            PowerProfile::PowerSaver => "[POWER-SAVER]",
+            PowerProfile::Balanced => "[BALANCED]",
+            PowerProfile::Performance => "[PERFORMANCE]",
+        }
+    }
+
+    /// Scaling governor equivalente, usado no fallback via sysfs.
+    pub fn governor(self) -> &'static str {
+        match self {
+            PowerProfile::PowerSaver => "powersave",
+            PowerProfile::Balanced => "schedutil",
+            PowerProfile::Performance => "performance",
+        }
+    }
+
+    /// Próximo perfil no ciclo `PowerSaver` → `Balanced` → `Performance` →
+    /// `PowerSaver`.
+    pub fn next(&self) -> PowerProfile {
+        match self {
+            PowerProfile::PowerSaver => PowerProfile::Balanced,
+            PowerProfile::Balanced => PowerProfile::Performance,
+            PowerProfile::Performance => PowerProfile::PowerSaver,
+        }
+    }
+}
+
 /// Snapshot enxuto e pronto-para-render do estado do sistema.
 #[derive(Debug, Clone)]
 pub struct SystemSnapshot {
@@ -164,6 +239,8 @@ pub struct SystemSnapshot {
     pub disk_used: Option<u64>,
     /// Espaço total do disco raiz `/` (bytes).
     pub disk_total: Option<u64>,
+    /// Perfil de energia ativo (`None` em máquinas sem daemon/governor legível).
+    pub power_profile: Option<PowerProfile>,
 
     /// Campos extras exibidos apenas no modo detalhado (tecla `.`).
     pub detail: DetailInfo,
@@ -271,6 +348,7 @@ impl SystemSnapshot {
             battery: read_battery(Path::new("/sys/class/power_supply")),
             disk_used,
             disk_total,
+            power_profile: read_power_profile(),
             detail,
         }
     }
@@ -717,8 +795,30 @@ fn read_root_disk(disks: &Disks) -> Option<(u64, u64)> {
         })
 }
 
+/// Lê o perfil de energia ativo via `powerprofilesctl get`, com fallback para o
+/// scaling governor do sysfs e, por fim, `None` (ex.: desktop sem daemon).
+fn read_power_profile() -> Option<PowerProfile> {
+    for bin in ["powerprofilesctl", "/usr/sbin/powerprofilesctl"] {
+        if let Ok(out) = std::process::Command::new(bin).arg("get").output() {
+            if out.status.success() {
+                if let Some(p) = PowerProfile::parse(&String::from_utf8_lossy(&out.stdout)) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    read_governor_profile(Path::new(
+        "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+    ))
+}
+
+/// Deriva um [`PowerProfile`] a partir de um arquivo de scaling governor.
+pub fn read_governor_profile(path: &Path) -> Option<PowerProfile> {
+    PowerProfile::parse(&read_trimmed_file(path)?)
+}
+
 // ---------------------------------------------------------------------------
-// Controles interativos (brilho / volume)
+// Controles interativos (brilho / volume / perfil de energia)
 // ---------------------------------------------------------------------------
 
 /// Passo padrão (em %) de cada ajuste de brilho/volume.
@@ -809,6 +909,55 @@ pub async fn toggle_mute() -> Result<bool, String> {
         .ok_or_else(|| "volume indisponível".to_string())
 }
 
+/// Aplica um perfil de energia via `powerprofilesctl set` (com fallback para
+/// `/usr/sbin/` e, por fim, escrita do scaling governor no sysfs). `Ok(())`
+/// apenas quando algum backend aceitou a mudança.
+async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
+    for bin in ["powerprofilesctl", "/usr/sbin/powerprofilesctl"] {
+        if run_ok(bin, &["set", profile.id()]).await.is_ok() {
+            return Ok(());
+        }
+    }
+    if write_scaling_governor(profile.governor()) {
+        return Ok(());
+    }
+    Err("nenhum backend de perfil de energia disponível".to_string())
+}
+
+/// Escreve `governor` em todos os `cpu*/cpufreq/scaling_governor` legíveis.
+/// Retorna `true` se ao menos uma CPU aceitou a escrita (exige privilégio).
+fn write_scaling_governor(governor: &str) -> bool {
+    let base = Path::new("/sys/devices/system/cpu");
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return false;
+    };
+    let mut applied = false;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // Aceita apenas cpuN (evita cpufreq/, cpuidle/, ...).
+        if !(name.starts_with("cpu") && name[3..].chars().all(|c| c.is_ascii_digit()))
+            || name.len() <= 3
+        {
+            continue;
+        }
+        let path = entry.path().join("cpufreq/scaling_governor");
+        if std::fs::write(&path, governor).is_ok() {
+            applied = true;
+        }
+    }
+    applied
+}
+
+/// Lê o perfil de energia atual, avança para o [`PowerProfile::next`] e o
+/// aplica. Devolve o novo perfil ou uma mensagem de erro.
+pub async fn cycle_power_profile() -> Result<PowerProfile, String> {
+    let current = read_power_profile().unwrap_or(PowerProfile::Balanced);
+    let next = current.next();
+    apply_power_profile(next).await?;
+    Ok(next)
+}
+
 /// Aplica uma ação de controle (brilho/volume) e emite o toast correspondente.
 /// Retorna `true` quando um ajuste foi tentado (exigindo snapshot imediato).
 async fn apply_control(action: &Action, tx: &EventTx) -> bool {
@@ -833,6 +982,10 @@ async fn apply_control(action: &Action, tx: &EventTx) -> bool {
             Ok(true) => Toast::info("Áudio: Mudo"),
             Ok(false) => Toast::info("Áudio: Ativo"),
             Err(e) => Toast::error(format!("Áudio: {e}")),
+        },
+        Action::CyclePowerProfile => match cycle_power_profile().await {
+            Ok(p) => Toast::info(format!("Perfil de Energia: {}", p.label())),
+            Err(e) => Toast::error(format!("Perfil de Energia: {e}")),
         },
         _ => return false,
     };

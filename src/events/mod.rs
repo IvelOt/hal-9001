@@ -83,6 +83,8 @@ pub enum Action {
     VolumeDown,
     /// Alterna o mudo do áudio padrão (tecla `m`).
     ToggleMute,
+    /// Cicla o perfil de energia (Economia→Equilibrado→Desempenho, tecla `p`/`P`).
+    CyclePowerProfile,
     /// Redesenho solicitado (ex.: resize). Sem efeito de estado.
     Redraw,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.

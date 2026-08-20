@@ -98,6 +98,7 @@ fn render_all_tabs_and_splash_without_panic() {
             }),
             disk_used: Some(120 * 1024 * 1024 * 1024),
             disk_total: Some(512 * 1024 * 1024 * 1024),
+            power_profile: Some(hal9001::backend::system::PowerProfile::Balanced),
             detail: hal9001::backend::system::DetailInfo {
                 board_vendor: Some("ACME".into()),
                 board_name: Some("X570".into()),
@@ -165,6 +166,7 @@ fn render_overview_desktop_degraded_without_panic() {
             battery: None,
             disk_used: None,
             disk_total: None,
+            power_profile: None,
             detail: hal9001::backend::system::DetailInfo::default(),
         },
     )));
@@ -258,14 +260,15 @@ fn brightness_and_volume_actions_dispatch_without_panic() {
         Action::VolumeUp,
         Action::VolumeDown,
         Action::ToggleMute,
+        Action::CyclePowerProfile,
     ] {
         app.dispatch(action, &tx);
     }
 
-    // Cinco ações devem ter sido difundidas.
+    // Seis ações devem ter sido difundidas.
     let mut count = 0;
     while rx.try_recv().is_ok() {
         count += 1;
     }
-    assert_eq!(count, 5);
+    assert_eq!(count, 6);
 }

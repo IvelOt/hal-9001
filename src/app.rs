@@ -184,7 +184,8 @@ impl App {
             | Action::BrightnessDown
             | Action::VolumeUp
             | Action::VolumeDown
-            | Action::ToggleMute => {
+            | Action::ToggleMute
+            | Action::CyclePowerProfile => {
                 // Repassa aos backends; cada worker filtra o que lhe interessa.
                 // Brilho/volume são aplicados pela task `system`, que emite um
                 // toast e um snapshot atualizado imediatamente.

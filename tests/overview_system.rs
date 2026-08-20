@@ -222,3 +222,31 @@ fn packages_summary_formats() {
     assert_eq!(p.summary(), "1234 (pacman+flatpak)");
     assert_eq!(Packages::default().summary(), "N/A");
 }
+
+#[test]
+fn power_profile_parsing_and_cycling() {
+    use hal9001::backend::system::PowerProfile;
+
+    assert_eq!(PowerProfile::parse("power-saver"), Some(PowerProfile::PowerSaver));
+    assert_eq!(PowerProfile::parse("powersave"), Some(PowerProfile::PowerSaver));
+    assert_eq!(PowerProfile::parse("balanced"), Some(PowerProfile::Balanced));
+    assert_eq!(PowerProfile::parse("schedutil"), Some(PowerProfile::Balanced));
+    assert_eq!(PowerProfile::parse("performance"), Some(PowerProfile::Performance));
+    assert_eq!(PowerProfile::parse("unknown-value"), None);
+
+    assert_eq!(PowerProfile::PowerSaver.next(), PowerProfile::Balanced);
+    assert_eq!(PowerProfile::Balanced.next(), PowerProfile::Performance);
+    assert_eq!(PowerProfile::Performance.next(), PowerProfile::PowerSaver);
+
+    assert_eq!(PowerProfile::PowerSaver.id(), "power-saver");
+    assert_eq!(PowerProfile::Balanced.id(), "balanced");
+    assert_eq!(PowerProfile::Performance.id(), "performance");
+
+    assert_eq!(PowerProfile::PowerSaver.label(), "Economia");
+    assert_eq!(PowerProfile::Balanced.label(), "Equilibrado");
+    assert_eq!(PowerProfile::Performance.label(), "Desempenho");
+
+    assert_eq!(PowerProfile::PowerSaver.tag(), "[POWER-SAVER]");
+    assert_eq!(PowerProfile::Balanced.tag(), "[BALANCED]");
+    assert_eq!(PowerProfile::Performance.tag(), "[PERFORMANCE]");
+}

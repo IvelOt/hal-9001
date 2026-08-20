@@ -67,6 +67,8 @@ fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('v') | KeyCode::Char('[') => Some(Action::VolumeDown),
         KeyCode::Char('V') | KeyCode::Char(']') => Some(Action::VolumeUp),
         KeyCode::Char('m') => Some(Action::ToggleMute),
+        // Perfil de energia: `p`/`P` cicla Economia→Equilibrado→Desempenho.
+        KeyCode::Char('p') | KeyCode::Char('P') => Some(Action::CyclePowerProfile),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         _ => Some(Action::Raw(key)),
     }

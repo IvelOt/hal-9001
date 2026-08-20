@@ -184,6 +184,7 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
     spans.extend(hint(".", "Detalhes:"));
     spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
+    spans.extend(hint("p", "Perfil"));
     spans.extend(hint("b/B", "Brilho"));
     spans.extend(hint("v/V", "Volume"));
     spans.extend(hint("m", "Mudo"));
@@ -508,6 +509,18 @@ fn section_power(
             ));
         }
         None => out.push(kv_line("Volume", "N/A".into(), cols.width, pal)),
+    }
+
+    // Perfil de energia — tag neofetch + dica de atalho; N/A gracioso quando
+    // não há daemon/governor (ex.: desktop).
+    match s.power_profile {
+        Some(p) => out.push(kv_line(
+            "Perfil",
+            format!("{} (p: alternar)", p.tag()),
+            cols.width,
+            pal,
+        )),
+        None => out.push(kv_line("Perfil", "N/A".into(), cols.width, pal)),
     }
 }
 
