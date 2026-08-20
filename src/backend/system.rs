@@ -795,9 +795,56 @@ fn read_root_disk(disks: &Disks) -> Option<(u64, u64)> {
         })
 }
 
-/// Lê o perfil de energia ativo via `powerprofilesctl get`, com fallback para o
-/// scaling governor do sysfs e, por fim, `None` (ex.: desktop sem daemon).
+/// Lê o perfil de energia ativo via `busctl`/`dbus-send`/`powerprofilesctl`, com
+/// fallback para o scaling governor do sysfs e, por fim, `None` (ex.: desktop
+/// sem daemon).
 fn read_power_profile() -> Option<PowerProfile> {
+    // 1. Tenta busctl (D-Bus nativo sem depender de runtime python).
+    if let Ok(out) = std::process::Command::new("busctl")
+        .args([
+            "get-property",
+            "net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "net.hadess.PowerProfiles",
+            "ActiveProfile",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let trimmed = s.trim().trim_start_matches("s ").trim_matches('"').trim();
+            if let Some(p) = PowerProfile::parse(trimmed) {
+                return Some(p);
+            }
+        }
+    }
+
+    // 2. Tenta dbus-send (D-Bus padrão).
+    if let Ok(out) = std::process::Command::new("dbus-send")
+        .args([
+            "--system",
+            "--print-reply",
+            "--dest=net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "org.freedesktop.DBus.Properties.Get",
+            "string:net.hadess.PowerProfiles",
+            "string:ActiveProfile",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some((_, val)) = s.rsplit_once("string \"") {
+                if let Some((profile_str, _)) = val.split_once('"') {
+                    if let Some(p) = PowerProfile::parse(profile_str) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Tenta CLI powerprofilesctl.
     for bin in ["powerprofilesctl", "/usr/sbin/powerprofilesctl"] {
         if let Ok(out) = std::process::Command::new(bin).arg("get").output() {
             if out.status.success() {
@@ -807,6 +854,8 @@ fn read_power_profile() -> Option<PowerProfile> {
             }
         }
     }
+
+    // 4. Fallback sysfs governor.
     read_governor_profile(Path::new(
         "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
     ))
@@ -909,18 +958,62 @@ pub async fn toggle_mute() -> Result<bool, String> {
         .ok_or_else(|| "volume indisponível".to_string())
 }
 
-/// Aplica um perfil de energia via `powerprofilesctl set` (com fallback para
-/// `/usr/sbin/` e, por fim, escrita do scaling governor no sysfs). `Ok(())`
-/// apenas quando algum backend aceitou a mudança.
+/// Aplica um perfil de energia via `busctl`/`dbus-send`/`powerprofilesctl set`
+/// (com fallback para escrita do scaling governor no sysfs). `Ok(())` apenas
+/// quando algum backend aceitou a mudança.
 async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
+    // 1. Tenta busctl (D-Bus nativo do systemd).
+    if run_ok(
+        "busctl",
+        &[
+            "set-property",
+            "net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "net.hadess.PowerProfiles",
+            "ActiveProfile",
+            "s",
+            profile.id(),
+        ],
+    )
+    .await
+    .is_ok()
+    {
+        return Ok(());
+    }
+
+    // 2. Tenta dbus-send (D-Bus padrão).
+    let variant = format!("variant:string:\"{}\"", profile.id());
+    if run_ok(
+        "dbus-send",
+        &[
+            "--system",
+            "--print-reply",
+            "--dest=net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "org.freedesktop.DBus.Properties.Set",
+            "string:net.hadess.PowerProfiles",
+            "string:ActiveProfile",
+            &variant,
+        ],
+    )
+    .await
+    .is_ok()
+    {
+        return Ok(());
+    }
+
+    // 3. Tenta CLI powerprofilesctl.
     for bin in ["powerprofilesctl", "/usr/sbin/powerprofilesctl"] {
         if run_ok(bin, &["set", profile.id()]).await.is_ok() {
             return Ok(());
         }
     }
+
+    // 4. Fallback sysfs governor.
     if write_scaling_governor(profile.governor()) {
         return Ok(());
     }
+
     Err("nenhum backend de perfil de energia disponível".to_string())
 }
 
