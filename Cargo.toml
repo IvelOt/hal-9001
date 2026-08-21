@@ -36,6 +36,9 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 sha2 = "0.10"
 libc = "0.2"
 
+# --- Formatação FAT32 100% Rust puro (zero dependências externas de host) ---
+fatfs = "0.3.6"
+
 # --- embedded PTY (Terminal Deck / Yazi) ---
 portable-pty = "0.8"
 

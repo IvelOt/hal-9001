@@ -6,9 +6,10 @@
 
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
-    build_ventoy_entries, compute_speed_eta, detect_ventoy, is_iso_or_img, is_system_disk,
-    parse_proc_mounts, parse_proc_swaps, resolve_block_object_path, ventoy_data_partition,
-    BusType, DriveInfo, FsKind, PartitionInfo, StorageRow, StorageSnapshot,
+    build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
+    is_iso_or_img, is_system_disk, parse_proc_mounts, parse_proc_swaps,
+    resolve_block_object_path, ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo,
+    StorageRow, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId};
@@ -1122,6 +1123,77 @@ fn render_ventoy_iso_manager_modal_in_every_stage_without_panic() {
         app.storage_modal = base(stage);
         terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Formatador FAT32 100% Rust puro (`fatfs`) — zero dependências externas de
+// host (nenhuma invocação de `mkfs.vfat`/`dosfstools`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_fat32_pure_rust_produces_a_mountable_fat32_volume_with_label() {
+    // Arquivo regular usado como "dispositivo de bloco" — nenhum binário
+    // externo é invocado em nenhum momento deste teste.
+    let file = tempfile::NamedTempFile::new().unwrap();
+    file.as_file().set_len(64 * 1024 * 1024).unwrap(); // 64 MiB.
+    let path = file.path().to_str().unwrap();
+
+    format_fat32_pure_rust(path, "meu label").expect("formatação FAT32 deveria ter sucesso");
+
+    let dev = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let fs = fatfs::FileSystem::new(dev, fatfs::FsOptions::new())
+        .expect("volume formatado deveria ser montável pela própria fatfs");
+
+    assert_eq!(fs.fat_type(), fatfs::FatType::Fat32);
+    // O rótulo é normalizado para maiúsculas e preenchido/truncado em 11
+    // bytes, conforme a especificação FAT.
+    assert_eq!(fs.volume_label(), "MEU LABEL");
+
+    // Volume recém-formatado: raiz vazia (sem arquivos além de `.`/`..`
+    // implícitos do FAT32, que a fatfs não lista).
+    let root_entries: Vec<_> = fs.root_dir().iter().collect();
+    assert!(
+        root_entries.is_empty(),
+        "esperava diretório raiz vazio logo após a formatação"
+    );
+}
+
+#[test]
+fn format_fat32_pure_rust_allows_writing_files_after_format() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    file.as_file().set_len(64 * 1024 * 1024).unwrap();
+    let path = file.path().to_str().unwrap();
+
+    format_fat32_pure_rust(path, "PENDRIVE").unwrap();
+
+    let dev = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let fs = fatfs::FileSystem::new(dev, fatfs::FsOptions::new()).unwrap();
+    let root = fs.root_dir();
+
+    use std::io::{Read as _, Write as _};
+    let mut f = root.create_file("hello.txt").unwrap();
+    f.write_all(b"hal-9001").unwrap();
+    drop(f);
+
+    let mut f = root.open_file("hello.txt").unwrap();
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).unwrap();
+    assert_eq!(buf, b"hal-9001");
+}
+
+#[test]
+fn format_fat32_pure_rust_fails_gracefully_for_a_missing_path() {
+    let err = format_fat32_pure_rust("/nonexistent/hal9001-test-device", "X")
+        .expect_err("caminho inexistente deveria falhar, não pânico");
+    assert!(!err.to_string().is_empty());
 }
 
 // ---------------------------------------------------------------------------

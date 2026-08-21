@@ -234,6 +234,22 @@ impl StorageSnapshot {
     pub fn drive_by_id<'a>(&'a self, id: &DeviceId) -> Option<&'a DriveInfo> {
         self.drives.iter().find(|d| &d.id == id)
     }
+
+    /// Nó de dispositivo (`/dev/sdX`) do bloco no caminho de objeto
+    /// `block_path` (o disco inteiro de um drive, ou uma de suas partições)
+    /// — usado para abrir o dispositivo diretamente no formatador FAT32 em
+    /// Rust puro, que não passa pelo `Block.Format` do UDisks2.
+    pub fn dev_node_for_block_path(&self, block_path: &str) -> Option<String> {
+        for drive in &self.drives {
+            if drive.block_path.as_deref() == Some(block_path) {
+                return Some(drive.dev_node.clone());
+            }
+            if let Some(p) = drive.partitions.iter().find(|p| p.id.0 == block_path) {
+                return Some(p.dev_node.clone());
+            }
+        }
+        None
+    }
 }
 
 /// Prefixo de caminho de objeto D-Bus de um dispositivo de bloco do UDisks2 —
@@ -306,22 +322,67 @@ fn mkfs_hint(fs_type: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// `true` quando o erro cru do `Block.Format` (D-Bus) indica que o `mkfs.*`
+/// correspondente não está instalado no host (executável ausente do PATH do
+/// UDisks2/`udisksd`).
+fn is_missing_mkfs_error(err: &anyhow::Error) -> bool {
+    let lower = err.to_string().to_ascii_lowercase();
+    lower.contains("not found")
+        || lower.contains("no such file or directory")
+        || lower.contains("command not found")
+        || lower.contains("failed to execute")
+}
+
 /// Traduz o erro cru do `Block.Format` (D-Bus) numa mensagem de toast clara.
 /// Quando o erro indica que o `mkfs.*` correspondente não está instalado no
 /// host, devolve uma instrução acionável em vez do erro D-Bus bruto.
 fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
-    let raw = err.to_string();
-    let lower = raw.to_ascii_lowercase();
-    let looks_like_missing_binary = lower.contains("not found")
-        || lower.contains("no such file or directory")
-        || lower.contains("command not found")
-        || lower.contains("failed to execute");
-    if looks_like_missing_binary {
+    if is_missing_mkfs_error(err) {
         if let Some((bin, pkg)) = mkfs_hint(fs_type) {
             return format!("{bin} ausente — instale {pkg}");
         }
     }
-    format!("Falha ao formatar: {raw}")
+    format!("Falha ao formatar: {err}")
+}
+
+/// `true` quando `fs_type` (como enviado ao `Block.Format`) identifica um
+/// sistema de arquivos FAT — o único formato para o qual o HAL-9001 tem um
+/// formatador 100% Rust puro (`fatfs`) como fallback ao `mkfs.vfat` do host.
+fn is_fat_fs_type(fs_type: &str) -> bool {
+    matches!(fs_type.trim().to_ascii_lowercase().as_str(), "vfat" | "fat32" | "fat")
+}
+
+/// Converte um rótulo arbitrário no formato de 11 bytes exigido pelo campo
+/// `VolumeLabel` da BPB do FAT: maiúsculas ASCII, truncado/preenchido com
+/// espaços.
+fn fat_volume_label(label: &str) -> [u8; 11] {
+    let mut buf = [b' '; 11];
+    for (i, b) in label.bytes().take(11).enumerate() {
+        buf[i] = b.to_ascii_uppercase();
+    }
+    buf
+}
+
+/// Formata `dev_node` (nó de bloco, ex.: `/dev/sdz` ou `/dev/sdz1`) como
+/// FAT32 usando exclusivamente a crate `fatfs` — 100% Rust puro, sem invocar
+/// nenhum binário externo do host (`mkfs.vfat`/`dosfstools`).
+///
+/// Formata o volume diretamente no nó de bloco recebido (disco inteiro ou
+/// partição já existente) em vez de escrever uma tabela de partição MBR
+/// própria: o nó já foi resolvido pelo UDisks2/`resolve_block_object_path`
+/// exatamente como o `mkfs.vfat` do host o receberia, então o mesmo alvo é
+/// reaproveitado aqui sem duplicar a lógica de particionamento.
+pub fn format_fat32_pure_rust(dev_node: &str, label: &str) -> anyhow::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dev_node)?;
+    let options = fatfs::FormatVolumeOptions::new()
+        .fat_type(fatfs::FatType::Fat32)
+        .volume_label(fat_volume_label(label));
+    fatfs::format_volume(&mut file, options)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 /// Uma entrada `.iso`/`.img` encontrada na raiz da partição de dados de um
@@ -1384,6 +1445,43 @@ async fn handle_action(
             tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info("Formatação concluída"),
+                Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {
+                    // O host não tem `dosfstools` instalado — cai de volta
+                    // para o formatador FAT32 100% Rust puro (`fatfs`), sem
+                    // NUNCA expor ao usuário um erro pedindo para instalar
+                    // pacotes externos no sistema operacional.
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — usando formatador FAT32 Rust puro");
+                    match snap.dev_node_for_block_path(&block_path) {
+                        Some(dev_node) => {
+                            let label_owned = label.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                format_fat32_pure_rust(&dev_node, &label_owned)
+                            })
+                            .await;
+                            match result {
+                                Ok(Ok(())) => {
+                                    // Notifica o UDisks2/kernel para
+                                    // rescanear o dispositivo — a
+                                    // formatação foi feita diretamente no
+                                    // nó de bloco, por fora do D-Bus.
+                                    let _ = udisks_call(
+                                        conn,
+                                        &block_path,
+                                        "org.freedesktop.UDisks2.Block",
+                                        "Rescan",
+                                    )
+                                    .await;
+                                    Toast::info("Formatação concluída (FAT32 Rust puro)")
+                                }
+                                Ok(Err(e)) => {
+                                    Toast::error(format!("Falha ao formatar (FAT32 Rust puro): {e}"))
+                                }
+                                Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
+                            }
+                        }
+                        None => Toast::error(format_error_message(&fs_type, &e)),
+                    }
+                }
                 Err(e) => Toast::error(format_error_message(&fs_type, &e)),
             };
             let _ = tx.send(AppEvent::Toast(toast));
