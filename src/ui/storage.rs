@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{
     App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice, StorageModal,
-    VentoyIsoManagerStage, VentoyIsoManagerState, VentoyModalState, VentoyStage,
+    SudoPromptState, VentoyIsoManagerStage, VentoyIsoManagerState, VentoyModalState, VentoyStage,
 };
 use crate::backend::storage::{BusType, DriveInfo, PartitionInfo, StorageRow};
 
@@ -391,6 +391,49 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     }
 }
 
+/// Modal nativo (senha mascarada com `•`) de autenticação sudo — desenhado
+/// por cima de qualquer outra tela/modal (ver `ui::draw`). Substitui o
+/// antigo prompt real de `pkexec`/`sudo` herdado do terminal.
+pub fn draw_sudo_prompt(_app: &App, pal: &Palette, f: &mut Frame, s: &SudoPromptState) {
+    let area = super::centered(56, 30, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block("Autenticacao sudo", pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(kv("Operacao", &s.label, pal));
+    lines.push(Line::from(""));
+
+    let masked: String = "*".repeat(s.password.chars().count());
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Senha sudo: ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{masked}▏"),
+            Style::default().fg(pal.bg).bg(pal.accent),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    if let Some(err) = &s.error {
+        lines.push(Line::from(Span::styled(
+            err.as_str(),
+            Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "[Enter] Confirmar   [Esc] Cancelar",
+        Style::default().fg(pal.dim),
+    )));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 pub(crate) fn modal_block<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
@@ -736,7 +779,12 @@ pub(crate) fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
 // Gerenciador de ISOs do Ventoy (Part 4 do picker/Ventoy manager).
 // ---------------------------------------------------------------------------
 
-fn draw_ventoy_iso_manager_modal(app: &App, pal: &Palette, f: &mut Frame, s: &VentoyIsoManagerState) {
+fn draw_ventoy_iso_manager_modal(
+    app: &App,
+    pal: &Palette,
+    f: &mut Frame,
+    s: &VentoyIsoManagerState,
+) {
     let m = app.lang.messages();
     let area = super::centered(70, 60, f.area());
     f.render_widget(Clear, area);
@@ -744,7 +792,10 @@ fn draw_ventoy_iso_manager_modal(app: &App, pal: &Palette, f: &mut Frame, s: &Ve
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut lines: Vec<Line> = vec![kv(m.storage_ventoy_target_label, &s.target_label, pal), Line::from("")];
+    let mut lines: Vec<Line> = vec![
+        kv(m.storage_ventoy_target_label, &s.target_label, pal),
+        Line::from(""),
+    ];
 
     match &s.stage {
         VentoyIsoManagerStage::Loading => {

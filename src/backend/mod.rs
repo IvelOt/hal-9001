@@ -16,14 +16,14 @@ pub mod updates;
 use tokio::sync::broadcast;
 
 use crate::config::Config;
-use crate::events::{Action, EventTx, TerminalCtlTx};
+use crate::events::{Action, EventTx, SudoPasswordTx};
 
 /// Sobe todas as tasks de backend.
 pub fn spawn_all(
     config: &Config,
     tx: EventTx,
     action_tx: &broadcast::Sender<Action>,
-    term_tx: TerminalCtlTx,
+    sudo_tx: SudoPasswordTx,
 ) {
     // Serviço com dados reais.
     tokio::spawn(system::run(
@@ -37,7 +37,7 @@ pub fn spawn_all(
         config.polling.storage_ms,
         tx.clone(),
         action_tx.subscribe(),
-        term_tx,
+        sudo_tx,
     ));
 
     // Stubs — sobem e registram estado "pendente" (Módulos 2, 3, 5).

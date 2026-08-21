@@ -54,6 +54,12 @@ pub fn draw(app: &App, f: &mut Frame) {
     if app.show_config {
         config_modal::draw(app, &pal, f);
     }
+    // Prioridade máxima de render: o modal nativo de senha de sudo aparece
+    // por cima de qualquer outro modal (ex.: instalação do Ventoy em curso),
+    // em qualquer aba.
+    if let Some(sudo_prompt) = &app.sudo_prompt {
+        storage::draw_sudo_prompt(app, &pal, f, sudo_prompt);
+    }
 }
 
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {

@@ -115,24 +115,30 @@ pub enum AppEvent {
     },
 }
 
-/// Solicitação de um backend para suspender temporariamente o modo raw/
-/// alt-screen do terminal (ex.: antes de rodar `pkexec`/`sudo` de forma
-/// interativa, para que o prompt de senha não corrompa a grade do Ratatui).
+/// Solicitação do backend de Storage para obter a senha de sudo através do
+/// campo/modal nativo da TUI (mascarado com `•`), em vez de suspender o
+/// terminal para exibir o prompt real de `pkexec`/`sudo` (fluxo antigo,
+/// substituído pela execução via `sudo -S` com a senha enviada por stdin).
 ///
-/// Trafega num canal dedicado (`TerminalCtlTx`), separado de `AppEvent`,
-/// porque `oneshot::Sender`/`Receiver` não implementam `Clone`/`Debug` — e
-/// `AppEvent` precisa de ambos. O loop principal (`lib::run`) consome este
-/// canal: restaura o terminal, sinaliza `ack`, aguarda `restore` ser
-/// preenchido pelo backend (indicando que o comando elevado terminou), e só
-/// então reinicializa o terminal.
-pub struct SuspendTerminalRequest {
-    pub ack: tokio::sync::oneshot::Sender<()>,
-    pub restore: tokio::sync::oneshot::Receiver<()>,
+/// Trafega num canal dedicado (`SudoPasswordTx`), separado de `AppEvent`,
+/// porque `oneshot::Sender` não implementa `Clone`/`Debug` — e `AppEvent`
+/// precisa de ambos. O loop principal (`lib::run`) consome este canal e
+/// repassa a solicitação ao `App`, que abre o modal; ao confirmar (`Enter`)
+/// ou cancelar (`Esc`), o `App` responde diretamente pelo oneshot guardado em
+/// `respond` — `Some(senha)` ou `None` (cancelado pelo usuário).
+pub struct SudoPasswordRequest {
+    /// Rótulo da operação/dispositivo exibido no modal (ex.: "Formatar
+    /// /dev/sdb1").
+    pub label: String,
+    /// `Some(mensagem)` quando esta solicitação é uma nova tentativa após
+    /// senha incorreta na tentativa anterior — exibida como erro no modal.
+    pub retry_error: Option<String>,
+    pub respond: tokio::sync::oneshot::Sender<Option<String>>,
 }
 
-/// Sender usado pelos backends para solicitar a suspensão temporária do
-/// terminal (ver [`SuspendTerminalRequest`]).
-pub type TerminalCtlTx = tokio::sync::mpsc::UnboundedSender<SuspendTerminalRequest>;
+/// Sender usado pelo backend de Storage para solicitar a senha de sudo (ver
+/// [`SudoPasswordRequest`]).
+pub type SudoPasswordTx = tokio::sync::mpsc::UnboundedSender<SudoPasswordRequest>;
 
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
 /// canal `broadcast`.
@@ -220,7 +226,9 @@ pub enum Action {
     StorageVentoyIsoManagerOpen,
     /// Lista (ou relista) as ISOs presentes na partição de dados do Ventoy
     /// identificado por `device_id`, montando-a primeiro se necessário.
-    StorageVentoyListIsos { device_id: String },
+    StorageVentoyListIsos {
+        device_id: String,
+    },
     /// Copia `src_path` para a partição de dados do pendrive Ventoy
     /// identificado, com progresso em streaming. Rejeitada quando o alvo é
     /// um disco de sistema.

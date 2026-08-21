@@ -28,16 +28,23 @@ impl InputStream {
     /// atalhos globais (`m`, `r`, dígitos de aba, etc.) ficam suspensos; em
     /// `text_mode` (campo de caminho de ISO, rótulo ou confirmação digitada),
     /// todo caractere vira `Action::StorageModalChar`.
+    ///
+    /// `sudo_prompt_open` tem prioridade máxima sobre tudo isso: enquanto o
+    /// modal nativo de senha de sudo estiver aberto, todo o teclado (mesmo
+    /// fora da aba Storage) vira digitação mascarada nesse campo.
     pub async fn next(
         &mut self,
         active: Tab,
         storage_modal_open: bool,
         text_mode: bool,
+        sudo_prompt_open: bool,
     ) -> Option<Action> {
         loop {
             match self.inner.next().await {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    if let Some(action) = map_key(key, active, storage_modal_open, text_mode) {
+                    if let Some(action) =
+                        map_key(key, active, storage_modal_open, text_mode, sudo_prompt_open)
+                    {
                         return Some(action);
                     }
                     // Tecla ignorada; continua aguardando.
@@ -64,12 +71,26 @@ fn map_key(
     active: Tab,
     storage_modal_open: bool,
     text_mode: bool,
+    sudo_prompt_open: bool,
 ) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     // Ctrl+C sempre encerra, mesmo dentro de um campo de texto de modal.
     if ctrl && key.code == KeyCode::Char('c') {
         return Some(Action::Quit);
+    }
+
+    // Modal nativo de senha de sudo: prioridade máxima, funciona em qualquer
+    // aba — todo caractere digitado vira `Action::StorageModalChar` (exibido
+    // mascarado pela UI), `Enter` confirma, `Esc` cancela a operação.
+    if sudo_prompt_open {
+        return match key.code {
+            KeyCode::Char(c) => Some(Action::StorageModalChar(c)),
+            KeyCode::Backspace => Some(Action::StorageModalBackspace),
+            KeyCode::Enter => Some(Action::Enter),
+            KeyCode::Esc => Some(Action::ToggleConfig),
+            _ => None,
+        };
     }
 
     // Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a partir

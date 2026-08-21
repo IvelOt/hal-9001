@@ -17,7 +17,9 @@ use tokio::sync::broadcast;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
-use crate::events::{Action, AppEvent, DeviceId, EventTx, SuspendTerminalRequest, TerminalCtlTx, Toast};
+use crate::events::{
+    Action, AppEvent, DeviceId, EventTx, SudoPasswordRequest, SudoPasswordTx, Toast,
+};
 
 /// Tamanho do buffer de I/O para checksum e gravação de blocos (4 MiB),
 /// conforme especificado no Épico H.
@@ -269,7 +271,10 @@ const DRIVE_PREFIX: &str = "/org/freedesktop/UDisks2/drives/";
 /// `Drive` (`/org/freedesktop/UDisks2/drives/...`), é preciso localizar o
 /// bloco "raiz" correspondente (o disco inteiro, sem entrada de partição) via
 /// [`DriveInfo::block_path`].
-pub fn resolve_block_object_path(snapshot: &StorageSnapshot, target_id: &DeviceId) -> Option<String> {
+pub fn resolve_block_object_path(
+    snapshot: &StorageSnapshot,
+    target_id: &DeviceId,
+) -> Option<String> {
     if target_id.0.starts_with(BLOCK_DEVICE_PREFIX) {
         return Some(target_id.0.clone());
     }
@@ -355,7 +360,9 @@ pub fn is_permission_denied_error(err: &anyhow::Error) -> bool {
             return true;
         }
     }
-    err.to_string().to_ascii_lowercase().contains("permission denied")
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("permission denied")
 }
 
 /// `true` quando o erro cru do `Block.Format`/`Block.OpenDevice` (D-Bus)
@@ -374,9 +381,9 @@ pub fn is_not_authorized_error(err: &anyhow::Error) -> bool {
 
 /// Monta o binário `mkfs.*` e os argumentos necessários para formatar
 /// `dev_node` como `fs_type` com o rótulo `label`, para uso pelo fallback de
-/// elevação interativa (`run_elevated_interactive`) quando o `Block.Format`
-/// do UDisks2 é recusado por falta de agente Polkit. Devolve `None` quando
-/// `fs_type` não tem um `mkfs.*` mapeado (ver [`mkfs_hint`]).
+/// elevação via `sudo -S`/`sudo -n` (ver [`format_via_sudo`]) quando o
+/// `Block.Format` do UDisks2 é recusado por falta de agente Polkit. Devolve
+/// `None` quando `fs_type` não tem um `mkfs.*` mapeado (ver [`mkfs_hint`]).
 pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(String, Vec<String>)> {
     let (bin, _pkg) = mkfs_hint(fs_type)?;
     let mut args = Vec::new();
@@ -422,64 +429,218 @@ pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(Strin
     Some((bin.to_string(), args))
 }
 
-/// `true` quando `name` está disponível em algum diretório do `$PATH` —
-/// usado para preferir `pkexec` (autenticação gráfica/Polkit) e cair para
-/// `sudo` apenas quando `pkexec` não estiver instalado no host.
-fn binary_in_path(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+// ---------------------------------------------------------------------------
+// Elevação via `sudo -S` (senha pelo modal nativo da TUI, sem suspender o
+// terminal) — substitui o antigo fluxo de `pkexec`/`sudo` com stdio herdado.
+// ---------------------------------------------------------------------------
+
+/// `true` quando `sudo -n true` passa sem exigir senha — cache de
+/// autenticação válido, `NOPASSWD` no sudoers, ou processo já rodando como
+/// root. Usado para decidir se o modal de senha precisa ser exibido.
+async fn sudo_cached() -> bool {
+    tokio::process::Command::new("sudo")
+        .args(["-n", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
         .unwrap_or(false)
 }
 
-/// Executa `program` com `args` sob elevação interativa (`pkexec`, caindo
-/// para `sudo` quando `pkexec` não está instalado), com stdin/stdout/stderr
-/// **herdados** do processo do HAL-9001 — para que o usuário veja e responda
-/// ao prompt de senha do Polkit/`sudo` diretamente no terminal real, sem
-/// nenhuma camada de captura no meio.
-///
-/// Antes de spawnar o comando, envia um [`SuspendTerminalRequest`] pelo
-/// canal `term_tx` e aguarda o loop principal confirmar (`ack`) que já saiu
-/// do modo raw/alt-screen do Ratatui — só então o comando é iniciado, o que
-/// evita que o prompt de senha seja escrito por cima da grade da TUI ainda
-/// ativa (a corrupção de TTY relatada pelo capitão). Ao final (sucesso ou
-/// falha), sinaliza `restore` para que o loop principal reinicialize a TUI —
-/// mesmo em caso de erro, nunca deixa o terminal preso fora do raw mode.
-async fn run_elevated_interactive(
-    term_tx: &TerminalCtlTx,
-    program: &str,
-    args: &[String],
-) -> anyhow::Result<std::process::ExitStatus> {
-    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-    let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
-    term_tx
-        .send(SuspendTerminalRequest {
-            ack: ack_tx,
-            restore: restore_rx,
+/// Pede a senha de sudo ao usuário via modal nativo da TUI (canal
+/// `sudo_tx`), devolvendo `None` quando o usuário cancela (`Esc`).
+async fn request_sudo_password(
+    sudo_tx: &SudoPasswordTx,
+    label: &str,
+    retry_error: Option<String>,
+) -> Option<String> {
+    let (respond, respond_rx) = tokio::sync::oneshot::channel();
+    if sudo_tx
+        .send(SudoPasswordRequest {
+            label: label.to_string(),
+            retry_error,
+            respond,
         })
-        .map_err(|_| anyhow::anyhow!("loop principal indisponível para suspender o terminal"))?;
-    let _ = ack_rx.await;
+        .is_err()
+    {
+        return None;
+    }
+    respond_rx.await.ok().flatten()
+}
 
-    let elevator = if binary_in_path("pkexec") { "pkexec" } else { "sudo" };
-    let status = tokio::process::Command::new(elevator)
-        .arg(program)
-        .args(args)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
+/// `true` quando o texto de stderr do `sudo` indica senha incorreta/recusada
+/// — o gatilho para o `App` reabrir o modal com "Senha incorreta" e permitir
+/// nova tentativa, em vez de tratar como falha definitiva do comando.
+pub fn is_sudo_auth_failure(stderr_text: &str) -> bool {
+    let lower = stderr_text.to_ascii_lowercase();
+    lower.contains("incorrect password")
+        || lower.contains("sorry, try again")
+        || lower.contains("senha incorreta")
+        || lower.contains("no password was provided")
+        || lower.contains("a password is required")
+}
 
-    // Restaura a TUI independentemente do resultado do comando.
-    let _ = restore_tx.send(());
+/// Resultado (linhas de progresso + status final) de um comando rodado sob
+/// `sudo` via [`spawn_sudo`].
+struct SudoRun {
+    lines: tokio::sync::mpsc::UnboundedReceiver<String>,
+    handle: tokio::task::JoinHandle<anyhow::Result<(std::process::ExitStatus, String)>>,
+}
 
-    Ok(status?)
+/// Lê `reader` byte a byte, quebrando em "linhas" tanto por `\n` quanto por
+/// `\r` (necessário para acompanhar saídas como `dd status=progress`, que
+/// atualiza a mesma linha via `\r`), encaminhando cada uma para `line_tx` e
+/// devolvendo o texto completo acumulado (usado para detectar falha de
+/// autenticação em stderr).
+async fn read_stream_lines<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: R,
+    line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> String {
+    let mut buf = [0u8; 4096];
+    let mut partial: Vec<u8> = Vec::new();
+    let mut full = String::new();
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        for &b in &buf[..n] {
+            if b == b'\n' || b == b'\r' {
+                if !partial.is_empty() {
+                    let line = String::from_utf8_lossy(&partial).to_string();
+                    full.push_str(&line);
+                    full.push('\n');
+                    let _ = line_tx.send(line);
+                    partial.clear();
+                }
+            } else {
+                partial.push(b);
+            }
+        }
+    }
+    if !partial.is_empty() {
+        let line = String::from_utf8_lossy(&partial).to_string();
+        full.push_str(&line);
+        let _ = line_tx.send(line);
+    }
+    full
+}
+
+/// Roda `program` com `args` sob `sudo`, devolvendo progresso em streaming
+/// (linha a linha, `\n` ou `\r`) via `SudoRun::lines` e o status final +
+/// texto de stderr (para detecção de senha incorreta) via `SudoRun::handle`.
+///
+/// Quando `password` é `Some`, executa `sudo -S -k -- program args...`,
+/// escrevendo `senha\n` no stdin do processo (nunca herda o stdin/stdout/
+/// stderr do HAL-9001 — a TUI nunca é suspensa). Quando `password` é `None`
+/// (cache de sudo válido, ver [`sudo_cached`]), executa `sudo -n -- program
+/// args...`, que nunca imprime prompt.
+fn spawn_sudo(
+    password: Option<String>,
+    program: String,
+    args: Vec<String>,
+) -> anyhow::Result<SudoRun> {
+    let (line_tx, line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let handle = tokio::spawn(async move {
+        let mut cmd = tokio::process::Command::new("sudo");
+        if password.is_some() {
+            cmd.arg("-S").arg("-k").arg("--");
+        } else {
+            cmd.arg("-n").arg("--");
+        }
+        cmd.arg(&program).args(&args);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn()?;
+
+        if let Some(pw) = password {
+            let mut stdin = child.stdin.take().expect("stdin piped");
+            stdin.write_all(pw.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.shutdown().await?;
+        } else {
+            drop(child.stdin.take());
+        }
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        let (_stdout_text, stderr_text) = tokio::join!(
+            read_stream_lines(stdout, line_tx.clone()),
+            read_stream_lines(stderr, line_tx),
+        );
+        let status = child.wait().await?;
+        Ok((status, stderr_text))
+    });
+    Ok(SudoRun {
+        lines: line_rx,
+        handle,
+    })
+}
+
+/// Monta os argumentos de invocação do `sudo` para `program`/`args`, de
+/// acordo com a disponibilidade de cache (`cached`) — função pura, usada por
+/// [`spawn_sudo`] e testável isoladamente.
+pub fn sudo_invocation(cached: bool, program: &str, args: &[String]) -> Vec<String> {
+    let mut v = Vec::new();
+    if cached {
+        v.push("-n".to_string());
+    } else {
+        v.push("-S".to_string());
+        v.push("-k".to_string());
+    }
+    v.push("--".to_string());
+    v.push(program.to_string());
+    v.extend(args.iter().cloned());
+    v
+}
+
+/// Extrai o total de bytes já copiados de uma linha de progresso do `dd`
+/// (`status=progress`), ex.: `"104857600 bytes (105 MB, 100 MiB) copied, 1 s,
+/// 100 MB/s"` → `Some(104857600)`. Função pura, testável sem I/O real.
+pub fn parse_dd_bytes_copied(line: &str) -> Option<u64> {
+    let trimmed = line.trim_start();
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let rest = trimmed[digits.len()..].trim_start();
+    if !rest.starts_with("byte") {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Pede a senha (a menos que o cache de `sudo -n true` já seja válido na
+/// primeira tentativa) e devolve `Some(senha)`/`None` (cache válido) para a
+/// próxima chamada de [`spawn_sudo`], ou `Err` quando o usuário cancela
+/// (`Esc`) — propagada pelos laços de repetição de `format_via_sudo`/
+/// `flash_elevated`/`ventoy_task` como falha definitiva da operação.
+async fn next_sudo_attempt(
+    sudo_tx: &SudoPasswordTx,
+    label: &str,
+    retry_error: &mut Option<String>,
+) -> Result<Option<String>, String> {
+    if retry_error.is_none() && sudo_cached().await {
+        return Ok(None);
+    }
+    match request_sudo_password(sudo_tx, label, retry_error.take()).await {
+        Some(pw) => Ok(Some(pw)),
+        None => Err("operação cancelada pelo usuário".to_string()),
+    }
 }
 
 /// `true` quando `fs_type` (como enviado ao `Block.Format`) identifica um
 /// sistema de arquivos FAT — o único formato para o qual o HAL-9001 tem um
 /// formatador 100% Rust puro (`fatfs`) como fallback ao `mkfs.vfat` do host.
 fn is_fat_fs_type(fs_type: &str) -> bool {
-    matches!(fs_type.trim().to_ascii_lowercase().as_str(), "vfat" | "fat32" | "fat")
+    matches!(
+        fs_type.trim().to_ascii_lowercase().as_str(),
+        "vfat" | "fat32" | "fat"
+    )
 }
 
 /// Converte um rótulo arbitrário no formato de 11 bytes exigido pelo campo
@@ -543,9 +704,9 @@ pub struct VentoyIsoEntry {
 /// de dados). A checagem por rótulo é suficiente e evita heurísticas frágeis
 /// por tipo de filesystem.
 pub fn detect_ventoy(partitions: &[PartitionInfo]) -> bool {
-    partitions.iter().any(|p| {
-        p.label.eq_ignore_ascii_case("ventoy") || p.label.eq_ignore_ascii_case("vtoyefi")
-    })
+    partitions
+        .iter()
+        .any(|p| p.label.eq_ignore_ascii_case("ventoy") || p.label.eq_ignore_ascii_case("vtoyefi"))
 }
 
 /// Partição de dados do Ventoy (onde ficam as ISOs) — a partição do drive
@@ -1197,22 +1358,13 @@ fn resolve_ventoy_script_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Executa `scripts/ventoy.sh <dev_node>`, repassando cada linha de saída
-/// (stdout/stderr) como progresso e emitindo o resultado final ao término.
-/// `scripts/ventoy.sh` se auto-eleva via `pkexec bash "$0" "$@"` (ou `sudo`)
-/// quando não roda como root (ver `scripts/ventoy.sh:47-55`). Sem um agente
-/// Polkit gráfico ativo na sessão, o `pkexec` cai para seu agente de
-/// autenticação em modo texto, que lê/escreve diretamente no terminal
-/// controlador — algo que corrompe a grade do Ratatui se o processo estiver
-/// com stdio capturado (`piped`) sob o raw mode/alt-screen ainda ativos.
-///
-/// Por isso, ao contrário do antigo fluxo (stdout/stderr `piped`, repassados
-/// linha a linha como `StorageVentoyProgress`), esta task suspende a TUI
-/// (via `run_elevated_interactive`-style handshake) e herda todo o stdio do
-/// script: o usuário vê o prompt de senha e a saída do `ventoy.sh` no
-/// terminal real, sem intermediação. Ao terminar, a TUI é restaurada e o
-/// próximo tick do poller já republica o snapshot da árvore de discos.
-async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx, term_tx: TerminalCtlTx) {
+/// Executa `sudo -S -k -- bash scripts/ventoy.sh <dev_node>` (ou `sudo -n --`
+/// quando o cache de autenticação já é válido), repassando cada linha de
+/// saída (stdout/stderr) como progresso via `StorageVentoyProgress` e pedindo
+/// a senha ao usuário pelo modal nativo da TUI quando necessário — nunca
+/// suspende o terminal nem herda seu stdio, então nunca corrompe a grade do
+/// Ratatui.
+async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx, sudo_tx: SudoPasswordTx) {
     let Some(script) = resolve_ventoy_script_path() else {
         let _ = tx.send(AppEvent::StorageVentoyDone {
             device_id,
@@ -1220,59 +1372,94 @@ async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx, term_tx: 
         });
         return;
     };
+    let label = format!("Instalar Ventoy em {dev_node}");
+    let args = vec![script.to_string_lossy().to_string(), dev_node];
+    let mut retry_error: Option<String> = None;
 
-    let _ = tx.send(AppEvent::StorageVentoyProgress {
-        device_id: device_id.clone(),
-        line: "suspendendo a TUI para autenticação Polkit/sudo interativa...".to_string(),
-    });
-
-    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-    let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
-    if term_tx
-        .send(SuspendTerminalRequest {
-            ack: ack_tx,
-            restore: restore_rx,
-        })
-        .is_err()
-    {
-        let _ = tx.send(AppEvent::StorageVentoyDone {
-            device_id,
-            result: Err("loop principal indisponível para suspender o terminal".to_string()),
-        });
-        return;
-    }
-    let _ = ack_rx.await;
-
-    let status = tokio::process::Command::new("bash")
-        .arg(&script)
-        .arg(&dev_node)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-        .await;
-
-    // Restaura a TUI independentemente do resultado do script.
-    let _ = restore_tx.send(());
-
-    let result = match status {
-        Ok(st) if st.success() => Ok("Ventoy instalado com sucesso".to_string()),
-        Ok(st) => Err(format!("ventoy.sh terminou com código {st}")),
-        Err(e) => Err(format!("falha ao executar ventoy.sh: {e}")),
+    let result = loop {
+        let password = match next_sudo_attempt(&sudo_tx, &label, &mut retry_error).await {
+            Ok(pw) => pw,
+            Err(msg) => break Err(msg),
+        };
+        let mut run = match spawn_sudo(password, "bash".to_string(), args.clone()) {
+            Ok(r) => r,
+            Err(e) => break Err(format!("falha ao executar ventoy.sh: {e}")),
+        };
+        while let Some(line) = run.lines.recv().await {
+            let _ = tx.send(AppEvent::StorageVentoyProgress {
+                device_id: device_id.clone(),
+                line,
+            });
+        }
+        match run.handle.await {
+            Ok(Ok((status, _stderr_text))) if status.success() => {
+                break Ok("Ventoy instalado com sucesso".to_string())
+            }
+            Ok(Ok((_status, stderr_text))) if is_sudo_auth_failure(&stderr_text) => {
+                retry_error = Some("Senha incorreta".to_string());
+                continue;
+            }
+            Ok(Ok((status, stderr_text))) => {
+                break Err(format!("ventoy.sh terminou com {status}: {stderr_text}"))
+            }
+            Ok(Err(e)) => break Err(format!("falha ao executar ventoy.sh: {e}")),
+            Err(e) => break Err(format!("falha ao executar ventoy.sh: {e}")),
+        }
     };
     let _ = tx.send(AppEvent::StorageVentoyDone { device_id, result });
 }
 
+/// Roda `bin` (um `mkfs.*` resolvido por [`mkfs_command`]) sobre `dev_node`
+/// via `sudo -S`/`sudo -n`, pedindo a senha pelo modal nativo da TUI quando
+/// necessário e repetindo em caso de senha incorreta.
+async fn format_via_sudo(
+    dev_node: &str,
+    bin: &str,
+    args: &[String],
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<(), String> {
+    let label = format!("Formatar {dev_node} ({bin})");
+    let mut retry_error: Option<String> = None;
+    loop {
+        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+            Ok(pw) => pw,
+            Err(msg) => return Err(msg),
+        };
+        let mut run =
+            spawn_sudo(password, bin.to_string(), args.to_vec()).map_err(|e| e.to_string())?;
+        while let Some(line) = run.lines.recv().await {
+            let _ = tx.send(AppEvent::Toast(Toast::info(line)));
+        }
+        let (status, stderr_text) = run
+            .handle
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        if is_sudo_auth_failure(&stderr_text) {
+            retry_error = Some("Senha incorreta".to_string());
+            continue;
+        }
+        return Err(format!("{status}: {stderr_text}"));
+    }
+}
+
 /// Fallback de gravação de ISO usado quando o processo do HAL-9001 não tem
 /// permissão direta sobre `dev_node` (não é root nem pertence ao grupo
-/// `disk`): roda `dd` sob elevação interativa (`pkexec`/`sudo`), herdando o
-/// stdio real do terminal (suspenso durante a operação) — o próprio `dd`
-/// imprime seu progresso (`status=progress`) diretamente no terminal.
+/// `disk`): roda `dd` sob `sudo -S`/`sudo -n`, com a senha pedida via modal
+/// nativo da TUI quando necessário, convertendo cada linha de
+/// `status=progress` em `AppEvent::StorageFlashProgress`.
 async fn flash_elevated(
     iso_path: &str,
     dev_node: &str,
-    term_tx: &TerminalCtlTx,
+    total_bytes: u64,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
 ) -> anyhow::Result<()> {
+    let label = format!("Gravar ISO em {dev_node}");
     let args = vec![
         format!("if={iso_path}"),
         format!("of={dev_node}"),
@@ -1280,10 +1467,57 @@ async fn flash_elevated(
         "status=progress".to_string(),
         "conv=fsync".to_string(),
     ];
-    let status = run_elevated_interactive(term_tx, "dd", &args).await?;
-    if !status.success() {
-        anyhow::bail!("dd elevado terminou com {status}");
+    let mut retry_error: Option<String> = None;
+
+    loop {
+        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+            Ok(pw) => pw,
+            Err(msg) => anyhow::bail!(msg),
+        };
+        let mut run = spawn_sudo(password, "dd".to_string(), args.clone())?;
+
+        let mut last_bytes = 0u64;
+        let mut window_started = tokio::time::Instant::now();
+        let mut last_emit = tokio::time::Instant::now();
+        while let Some(line) = run.lines.recv().await {
+            let Some(bytes) = parse_dd_bytes_copied(&line) else {
+                continue;
+            };
+            if last_emit.elapsed() >= PROGRESS_THROTTLE {
+                let (speed_mbps, eta_secs) = compute_speed_eta(
+                    bytes.saturating_sub(last_bytes),
+                    window_started.elapsed().as_secs_f64(),
+                    bytes,
+                    total_bytes,
+                );
+                let _ = tx.send(AppEvent::StorageFlashProgress {
+                    bytes_written: bytes,
+                    total_bytes,
+                    speed_mbps,
+                    eta_secs,
+                });
+                last_bytes = bytes;
+                window_started = tokio::time::Instant::now();
+                last_emit = tokio::time::Instant::now();
+            }
+        }
+        let (status, stderr_text) = run.handle.await??;
+        if status.success() {
+            break;
+        }
+        if is_sudo_auth_failure(&stderr_text) {
+            retry_error = Some("Senha incorreta".to_string());
+            continue;
+        }
+        anyhow::bail!("dd elevado terminou com {status}: {stderr_text}");
     }
+
+    let _ = tx.send(AppEvent::StorageFlashProgress {
+        bytes_written: total_bytes,
+        total_bytes,
+        speed_mbps: 0.0,
+        eta_secs: 0,
+    });
     // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
     // insegura; apenas força o flush de todos os buffers do kernel.
     unsafe {
@@ -1298,16 +1532,20 @@ async fn flash_task(
     dev_node: String,
     cancel: Arc<AtomicBool>,
     tx: EventTx,
-    term_tx: TerminalCtlTx,
+    sudo_tx: SudoPasswordTx,
 ) {
+    let total_bytes = tokio::fs::metadata(&iso_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
     let result = match flash_inner(&iso_path, &dev_node, &cancel, &tx).await {
         Ok(()) => Ok("gravação concluída com sucesso".to_string()),
         Err(e) if is_permission_denied_error(&e) => {
             tracing::warn!(target: "hal9001::storage", device = %device_id, "permissão negada ao abrir dispositivo de bloco — usando fallback de dd elevado");
             let _ = tx.send(AppEvent::Toast(Toast::info(
-                "permissão negada — solicitando elevação (pkexec/sudo) para gravar o dispositivo",
+                "permissão negada — solicitando elevação (sudo) para gravar o dispositivo",
             )));
-            flash_elevated(&iso_path, &dev_node, &term_tx)
+            flash_elevated(&iso_path, &dev_node, total_bytes, &sudo_tx, &tx)
                 .await
                 .map(|()| "gravação concluída com sucesso (elevado)".to_string())
                 .map_err(|e| e.to_string())
@@ -1509,7 +1747,7 @@ pub async fn run(
     poll_ms: u64,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
-    term_tx: TerminalCtlTx,
+    sudo_tx: SudoPasswordTx,
 ) -> anyhow::Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(poll_ms.max(1000)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1544,7 +1782,7 @@ pub async fn run(
             res = actions.recv() => match res {
                 Ok(action) => {
                     if let Some(c) = &conn {
-                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels, &term_tx).await;
+                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels, &sudo_tx).await;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -1563,7 +1801,7 @@ async fn handle_action(
     snapshot: &Option<StorageSnapshot>,
     tx: &EventTx,
     flash_cancels: &mut HashMap<String, Arc<AtomicBool>>,
-    term_tx: &TerminalCtlTx,
+    sudo_tx: &SudoPasswordTx,
 ) {
     match action {
         Action::StorageMount(id) => {
@@ -1622,7 +1860,9 @@ async fn handle_action(
             } else {
                 match unmount(conn, &id.0).await {
                     Ok(()) => Toast::info("Dispositivo desmontado"),
-                    Err(e) => Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}")),
+                    Err(e) => {
+                        Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}"))
+                    }
                 }
             };
             let _ = tx.send(AppEvent::Toast(toast));
@@ -1735,59 +1975,48 @@ async fn handle_action(
                                     .await;
                                     Toast::info("Formatação concluída (FAT32 Rust puro)")
                                 }
-                                Ok(Err(e)) => {
-                                    Toast::error(format!("Falha ao formatar (FAT32 Rust puro): {e}"))
-                                }
+                                Ok(Err(e)) => Toast::error(format!(
+                                    "Falha ao formatar (FAT32 Rust puro): {e}"
+                                )),
                                 Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
                             }
                         }
-                        Err(e) => Toast::error(format!(
-                            "Falha ao abrir dispositivo via OpenDevice: {e}"
-                        )),
+                        Err(e) => {
+                            Toast::error(format!("Falha ao abrir dispositivo via OpenDevice: {e}"))
+                        }
                     }
                 }
                 Err(e) if is_not_authorized_error(&e) => {
                     // Sem agente Polkit gráfico ativo na sessão (TTY pura):
                     // o `Block.Format`/`OpenDevice` do UDisks2 recusa a
                     // chamada com `NotAuthorized`. Cai para um helper
-                    // `mkfs.*` executado sob elevação interativa
-                    // (`pkexec`/`sudo`), suspendendo a TUI durante o prompt
-                    // de senha.
-                    tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format recusado (NotAuthorized) — usando fallback de mkfs elevado");
+                    // `mkfs.*` executado via `sudo -S`/`sudo -n`, com a senha
+                    // pedida pelo modal nativo da TUI quando necessário.
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format recusado (NotAuthorized) — usando fallback de mkfs via sudo");
                     match snap.dev_node_for_block_path(&block_path) {
-                        Some(dev_node) => {
-                            match mkfs_command(&fs_type, &label, &dev_node) {
-                                Some((bin, args)) => {
-                                    let _ = tx.send(AppEvent::Toast(Toast::info(format!(
-                                        "sem agente Polkit ativo — solicitando elevação para {bin}"
-                                    ))));
-                                    match run_elevated_interactive(term_tx, &bin, &args).await {
-                                        Ok(status) if status.success() => {
-                                            let _ = udisks_call(
-                                                conn,
-                                                &block_path,
-                                                "org.freedesktop.UDisks2.Block",
-                                                "Rescan",
-                                            )
-                                            .await;
-                                            Toast::info(format!(
-                                                "Formatação concluída ({bin}, elevado)"
-                                            ))
-                                        }
-                                        Ok(status) => Toast::error(format!(
-                                            "{bin} elevado terminou com {status}"
-                                        )),
-                                        Err(e) => Toast::error(format!(
-                                            "Falha ao formatar via {bin} elevado: {e}"
-                                        )),
+                        Some(dev_node) => match mkfs_command(&fs_type, &label, &dev_node) {
+                            Some((bin, args)) => {
+                                match format_via_sudo(&dev_node, &bin, &args, sudo_tx, tx).await {
+                                    Ok(()) => {
+                                        let _ = udisks_call(
+                                            conn,
+                                            &block_path,
+                                            "org.freedesktop.UDisks2.Block",
+                                            "Rescan",
+                                        )
+                                        .await;
+                                        Toast::info(format!("Formatação concluída ({bin}, sudo)"))
+                                    }
+                                    Err(msg) => {
+                                        Toast::error(format!("Falha ao formatar via {bin}: {msg}"))
                                     }
                                 }
-                                None => Toast::error(format_error_message(&fs_type, &e)),
                             }
+                            None => Toast::error(format_error_message(&fs_type, &e)),
+                        },
+                        None => {
+                            Toast::error("nó de dispositivo não encontrado para formatação elevada")
                         }
-                        None => Toast::error(
-                            "nó de dispositivo não encontrado para formatação elevada",
-                        ),
                     }
                 }
                 Err(e) => Toast::error(format_error_message(&fs_type, &e)),
@@ -1826,8 +2055,10 @@ async fn handle_action(
             let cancel = Arc::new(AtomicBool::new(false));
             flash_cancels.insert(device_id.clone(), cancel.clone());
             let txc = tx.clone();
-            let term_txc = term_tx.clone();
-            tokio::spawn(flash_task(device_id, iso_path, dev_node, cancel, txc, term_txc));
+            let sudo_txc = sudo_tx.clone();
+            tokio::spawn(flash_task(
+                device_id, iso_path, dev_node, cancel, txc, sudo_txc,
+            ));
         }
         Action::StorageFlashCancel { device_id } => {
             if let Some(cancel) = flash_cancels.get(&device_id) {
@@ -1857,8 +2088,8 @@ async fn handle_action(
             };
             tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "instalação do Ventoy solicitada");
             let txc = tx.clone();
-            let term_txc = term_tx.clone();
-            tokio::spawn(ventoy_task(device_id, dev_node, txc, term_txc));
+            let sudo_txc = sudo_tx.clone();
+            tokio::spawn(ventoy_task(device_id, dev_node, txc, sudo_txc));
         }
         Action::StorageVentoyListIsos { device_id } => {
             let id = DeviceId(device_id.clone());

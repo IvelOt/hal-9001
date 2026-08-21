@@ -382,6 +382,21 @@ pub struct ServiceStatus {
     pub degraded: Option<String>,
 }
 
+/// Estado do modal nativo (senha mascarada com `•`) de autenticação sudo —
+/// substitui o antigo fluxo de suspender o terminal para exibir o prompt
+/// real de `pkexec`/`sudo`. Aberto pelo `App::open_sudo_prompt` sempre que o
+/// backend de Storage recebe uma `SudoPasswordRequest` (porque `sudo -n
+/// true` falhou antes de uma operação privilegiada: formatação, gravação de
+/// ISO ou instalação do Ventoy).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SudoPromptState {
+    /// Rótulo da operação/dispositivo exibido no modal.
+    pub label: String,
+    pub password: String,
+    /// `Some("Senha incorreta")` numa nova tentativa após falha de autenticação.
+    pub error: Option<String>,
+}
+
 /// Estado global do aplicativo.
 pub struct App {
     pub config: Config,
@@ -411,6 +426,13 @@ pub struct App {
     pub storage_selected: usize,
     /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
     pub storage_modal: StorageModal,
+    /// Modal nativo de senha de sudo, aberto sob demanda pelo backend de
+    /// Storage (ver [`SudoPromptState`]); tem prioridade sobre `storage_modal`
+    /// no roteamento de teclado e no render.
+    pub sudo_prompt: Option<SudoPromptState>,
+    /// Canal de resposta guardado enquanto `sudo_prompt` está aberto —
+    /// respondido diretamente ao confirmar (`Enter`) ou cancelar (`Esc`).
+    sudo_respond: Option<tokio::sync::oneshot::Sender<Option<String>>>,
 
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
@@ -444,6 +466,8 @@ impl App {
             storage: None,
             storage_selected: 0,
             storage_modal: StorageModal::None,
+            sudo_prompt: None,
+            sudo_respond: None,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -804,6 +828,60 @@ impl App {
         !matches!(self.storage_modal, StorageModal::None)
     }
 
+    /// `true` quando o modal nativo de senha de sudo está aberto — tem
+    /// prioridade máxima no roteamento de teclado (`InputStream::next`).
+    pub fn sudo_prompt_open(&self) -> bool {
+        self.sudo_prompt.is_some()
+    }
+
+    /// Abre o modal nativo de senha de sudo a partir de uma solicitação do
+    /// backend de Storage, guardando o canal de resposta para ser respondido
+    /// diretamente ao confirmar (`Enter`) ou cancelar (`Esc`) — ver
+    /// [`SudoPromptState`] e `crate::events::SudoPasswordRequest`.
+    pub fn open_sudo_prompt(&mut self, req: crate::events::SudoPasswordRequest) {
+        self.sudo_prompt = Some(SudoPromptState {
+            label: req.label,
+            password: String::new(),
+            error: req.retry_error,
+        });
+        self.sudo_respond = Some(req.respond);
+    }
+
+    /// Roteia uma `Action` para o modal nativo de senha de sudo (digitação
+    /// mascarada, confirmação e cancelamento). Chamado com prioridade máxima
+    /// por `dispatch`, antes de qualquer outro modal.
+    fn dispatch_sudo_prompt(&mut self, action: Action) {
+        let Some(state) = &mut self.sudo_prompt else {
+            return;
+        };
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::StorageModalChar(c) => {
+                if !c.is_control() {
+                    state.password.push(c);
+                }
+            }
+            Action::StorageModalBackspace => {
+                state.password.pop();
+            }
+            Action::Enter => {
+                let password = state.password.clone();
+                self.sudo_prompt = None;
+                if let Some(respond) = self.sudo_respond.take() {
+                    let _ = respond.send(Some(password));
+                }
+            }
+            Action::ToggleConfig => {
+                // Esc: cancela a operação privilegiada em curso.
+                self.sudo_prompt = None;
+                if let Some(respond) = self.sudo_respond.take() {
+                    let _ = respond.send(None);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Ícone de cadeado (trava de segurança) — Nerd Font quando `icons =
     /// true`, ou o token ASCII `[LOCKED]` caso contrário (Zero Emojis
     /// Policy: nenhum emoji é usado em toda a base de código).
@@ -831,6 +909,9 @@ impl App {
     /// digitados como `Action::StorageModalChar` em vez das teclas de atalho
     /// globais.
     pub fn text_input_active(&self) -> bool {
+        if self.sudo_prompt.is_some() {
+            return true;
+        }
         match &self.storage_modal {
             StorageModal::Format(s) => s.field == FormatField::Label,
             StorageModal::Flasher(s) => matches!(
@@ -1384,7 +1465,9 @@ impl App {
                     return StorageModal::None;
                 }
             }
-            VentoyIsoManagerStage::Listing { entries, selected, .. } => match action {
+            VentoyIsoManagerStage::Listing {
+                entries, selected, ..
+            } => match action {
                 Action::ToggleConfig => return StorageModal::None,
                 Action::Down | Action::StorageModalChar('j') => {
                     if *selected + 1 < entries.len() {
@@ -1476,6 +1559,15 @@ impl App {
             self.phase = Phase::Running;
         }
 
+        // O modal nativo de senha de sudo tem prioridade máxima: captura
+        // toda a digitação antes de qualquer outro modal/roteamento, mesmo
+        // enquanto um modal de storage (ex.: instalação do Ventoy, com seu
+        // log de progresso) permanece aberto por trás dele.
+        if self.sudo_prompt_open() {
+            self.dispatch_sudo_prompt(action);
+            return;
+        }
+
         // Se um modal de storage (formatação/flasher) estiver aberto, captura
         // a navegação e o input de texto antes de qualquer outro roteamento.
         if self.storage_modal_open() {
@@ -1558,9 +1650,7 @@ impl App {
             Action::StorageFormatOpen => self.storage_format_open(),
             Action::StorageFlasherOpen => self.storage_flasher_open(),
             Action::StorageVentoyOpen => self.storage_ventoy_open(),
-            Action::StorageVentoyIsoManagerOpen => {
-                self.storage_ventoy_iso_manager_open(action_tx)
-            }
+            Action::StorageVentoyIsoManagerOpen => self.storage_ventoy_iso_manager_open(action_tx),
             Action::StorageMount(_)
             | Action::StorageUnmount(_)
             | Action::StorageEject(_)

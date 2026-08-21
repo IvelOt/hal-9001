@@ -6,13 +6,14 @@
 
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
-    build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
-    is_iso_or_img, is_not_authorized_error, is_permission_denied_error, is_system_disk,
-    mkfs_command, parse_proc_mounts, parse_proc_swaps, resolve_block_object_path,
-    ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo, StorageRow, StorageSnapshot,
+    build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust, is_iso_or_img,
+    is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
+    mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps,
+    resolve_block_object_path, sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind,
+    PartitionInfo, StorageRow, StorageSnapshot,
 };
 use hal9001::config::Config;
-use hal9001::events::{Action, AppEvent, DeviceId};
+use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};
 
 fn drive(removable: bool, bus: BusType) -> DriveInfo {
     DriveInfo {
@@ -376,9 +377,10 @@ fn resolve_block_object_path_converts_drive_path_to_its_block_device_path() {
         drives: vec![d],
     };
 
-    let resolved = resolve_block_object_path(&snap, &DeviceId(
-        "/org/freedesktop/UDisks2/drives/Kingston_1234".into(),
-    ))
+    let resolved = resolve_block_object_path(
+        &snap,
+        &DeviceId("/org/freedesktop/UDisks2/drives/Kingston_1234".into()),
+    )
     .expect("esperava resolver o bloco raiz do drive");
 
     assert_eq!(resolved, "/org/freedesktop/UDisks2/block_devices/sdz");
@@ -511,6 +513,146 @@ fn mkfs_command_omits_label_flag_when_label_is_empty() {
 #[test]
 fn mkfs_command_returns_none_for_unmapped_fs_type() {
     assert_eq!(mkfs_command("zfs", "X", "/dev/sdz1"), None);
+}
+
+// ---------------------------------------------------------------------------
+// Elevação via `sudo -S` (senha pelo modal nativo da TUI) — construção da
+// invocação, detecção de senha incorreta e parsing do progresso do `dd`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sudo_invocation_uses_dash_n_without_dashes_k_or_s_when_cached() {
+    let args = sudo_invocation(true, "mkfs.vfat", &["-F".to_string(), "32".to_string()]);
+    assert_eq!(args, vec!["-n", "--", "mkfs.vfat", "-F", "32"]);
+}
+
+#[test]
+fn sudo_invocation_uses_dash_s_dash_k_when_password_required() {
+    let args = sudo_invocation(false, "dd", &["if=x".to_string(), "of=y".to_string()]);
+    assert_eq!(args, vec!["-S", "-k", "--", "dd", "if=x", "of=y"]);
+}
+
+#[test]
+fn is_sudo_auth_failure_detects_incorrect_password_variants() {
+    for msg in [
+        "Sorry, try again.",
+        "sudo: 1 incorrect password attempt",
+        "sudo: no password was provided",
+    ] {
+        assert!(is_sudo_auth_failure(msg), "esperava match para: {msg}");
+    }
+}
+
+#[test]
+fn is_sudo_auth_failure_is_false_for_unrelated_stderr() {
+    assert!(!is_sudo_auth_failure(
+        "dd: failed to open '/dev/sdz': No space left on device"
+    ));
+}
+
+#[test]
+fn parse_dd_bytes_copied_extracts_leading_byte_count() {
+    let line = "104857600 bytes (105 MB, 100 MiB) copied, 1 s, 100 MB/s";
+    assert_eq!(parse_dd_bytes_copied(line), Some(104_857_600));
+}
+
+#[test]
+fn parse_dd_bytes_copied_ignores_records_in_out_lines() {
+    assert_eq!(parse_dd_bytes_copied("25+0 records in"), None);
+    assert_eq!(parse_dd_bytes_copied(""), None);
+}
+
+// ---------------------------------------------------------------------------
+// Modal nativo de senha de sudo — abertura, digitação mascarada, confirmação
+// e cancelamento, respondendo diretamente ao oneshot do backend.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sudo_prompt_open_populates_label_and_retry_error() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    let (respond, _rx) = tokio::sync::oneshot::channel();
+    app.open_sudo_prompt(SudoPasswordRequest {
+        label: "Formatar /dev/sdb1".to_string(),
+        retry_error: Some("Senha incorreta".to_string()),
+        respond,
+    });
+    assert!(app.sudo_prompt_open());
+    let state = app.sudo_prompt.as_ref().expect("modal aberto");
+    assert_eq!(state.label, "Formatar /dev/sdb1");
+    assert_eq!(state.password, "");
+    assert_eq!(state.error.as_deref(), Some("Senha incorreta"));
+}
+
+#[test]
+fn sudo_prompt_enter_sends_typed_password_and_closes_modal() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    let (respond, mut rx) = tokio::sync::oneshot::channel();
+    app.open_sudo_prompt(SudoPasswordRequest {
+        label: "Gravar ISO em /dev/sdb".to_string(),
+        retry_error: None,
+        respond,
+    });
+    let (action_tx, _rx2) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageModalChar('h'), &action_tx);
+    app.dispatch(Action::StorageModalChar('i'), &action_tx);
+    app.dispatch(Action::StorageModalBackspace, &action_tx);
+    app.dispatch(Action::StorageModalChar('i'), &action_tx);
+    app.dispatch(Action::Enter, &action_tx);
+
+    assert!(!app.sudo_prompt_open());
+    assert_eq!(
+        rx.try_recv().expect("resposta enviada"),
+        Some("hi".to_string())
+    );
+}
+
+#[test]
+fn sudo_prompt_esc_cancels_with_none_and_closes_modal() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    let (respond, mut rx) = tokio::sync::oneshot::channel();
+    app.open_sudo_prompt(SudoPasswordRequest {
+        label: "Instalar Ventoy em /dev/sdb".to_string(),
+        retry_error: None,
+        respond,
+    });
+    let (action_tx, _rx2) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageModalChar('x'), &action_tx);
+    app.dispatch(Action::ToggleConfig, &action_tx);
+
+    assert!(!app.sudo_prompt_open());
+    assert_eq!(rx.try_recv().expect("resposta enviada"), None);
+}
+
+#[test]
+fn sudo_prompt_takes_priority_over_an_already_open_storage_modal() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (action_tx, _rx2) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &action_tx);
+    assert!(app.storage_modal_open());
+
+    let (respond, mut rx) = tokio::sync::oneshot::channel();
+    app.open_sudo_prompt(SudoPasswordRequest {
+        label: "Formatar /dev/sdb1".to_string(),
+        retry_error: None,
+        respond,
+    });
+    // Mesmo com o modal de formatação ainda aberto por trás, a digitação vai
+    // para o campo de senha — não para o rótulo do volume do outro modal.
+    app.dispatch(Action::StorageModalChar('z'), &action_tx);
+    app.dispatch(Action::Enter, &action_tx);
+
+    assert!(!app.sudo_prompt_open());
+    assert_eq!(
+        rx.try_recv().expect("resposta enviada"),
+        Some("z".to_string())
+    );
+    assert!(matches!(app.storage_modal, StorageModal::Format(_)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,15 +1216,35 @@ fn labeled_partition(label: &str, dev_node: &str, size: u64) -> PartitionInfo {
 
 #[test]
 fn detect_ventoy_recognizes_ventoy_and_vtoyefi_labels_case_insensitively() {
-    assert!(detect_ventoy(&[labeled_partition("Ventoy", "/dev/sdz1", 1)]));
-    assert!(detect_ventoy(&[labeled_partition("VENTOY", "/dev/sdz1", 1)]));
-    assert!(detect_ventoy(&[labeled_partition("VTOYEFI", "/dev/sdz2", 1)]));
-    assert!(detect_ventoy(&[labeled_partition("vtoyefi", "/dev/sdz2", 1)]));
+    assert!(detect_ventoy(&[labeled_partition(
+        "Ventoy",
+        "/dev/sdz1",
+        1
+    )]));
+    assert!(detect_ventoy(&[labeled_partition(
+        "VENTOY",
+        "/dev/sdz1",
+        1
+    )]));
+    assert!(detect_ventoy(&[labeled_partition(
+        "VTOYEFI",
+        "/dev/sdz2",
+        1
+    )]));
+    assert!(detect_ventoy(&[labeled_partition(
+        "vtoyefi",
+        "/dev/sdz2",
+        1
+    )]));
 }
 
 #[test]
 fn detect_ventoy_is_false_for_unrelated_labels() {
-    assert!(!detect_ventoy(&[labeled_partition("KINGSTON", "/dev/sdz1", 1)]));
+    assert!(!detect_ventoy(&[labeled_partition(
+        "KINGSTON",
+        "/dev/sdz1",
+        1
+    )]));
     assert!(!detect_ventoy(&[]));
 }
 
