@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 
-use crate::backend::storage::StorageSnapshot;
+use crate::backend::storage::{StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
 
 /// Sender de eventos usado pelos backends.
@@ -87,6 +87,29 @@ pub enum AppEvent {
     StorageVentoyProgress { device_id: String, line: String },
     /// Conclusão (sucesso ou falha) da instalação do Ventoy.
     StorageVentoyDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
+    /// Listagem (atualizada) das ISOs presentes na partição de dados de um
+    /// pendrive Ventoy, junto do espaço livre restante nela.
+    StorageVentoyIsoList {
+        device_id: String,
+        entries: Vec<VentoyIsoEntry>,
+        free_bytes: Option<u64>,
+    },
+    /// Progresso de cópia de uma ISO para a partição de dados do Ventoy.
+    StorageVentoyIsoCopyProgress {
+        device_id: String,
+        bytes_written: u64,
+        total_bytes: u64,
+    },
+    /// Conclusão (sucesso ou falha) da cópia de uma ISO para o Ventoy.
+    StorageVentoyIsoCopyDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
+    /// Conclusão (sucesso ou falha) da remoção de uma ISO do Ventoy.
+    StorageVentoyIsoRemoveDone {
         device_id: String,
         result: Result<String, String>,
     },
@@ -173,11 +196,39 @@ pub enum Action {
     StorageVentoyInstall {
         device_id: String,
     },
+    /// Tecla `i`/`I`: abre o gerenciador de ISOs de um pendrive Ventoy
+    /// selecionado (sem efeito se o drive selecionado não for Ventoy).
+    StorageVentoyIsoManagerOpen,
+    /// Lista (ou relista) as ISOs presentes na partição de dados do Ventoy
+    /// identificado por `device_id`, montando-a primeiro se necessário.
+    StorageVentoyListIsos { device_id: String },
+    /// Copia `src_path` para a partição de dados do pendrive Ventoy
+    /// identificado, com progresso em streaming. Rejeitada quando o alvo é
+    /// um disco de sistema.
+    StorageVentoyAddIso {
+        device_id: String,
+        src_path: String,
+    },
+    /// Remove `file_name` da raiz da partição de dados do pendrive Ventoy
+    /// identificado. Rejeitada quando o alvo é um disco de sistema.
+    StorageVentoyRemoveIso {
+        device_id: String,
+        file_name: String,
+    },
     /// Caractere digitado num campo de texto de um modal de storage (rótulo
-    /// do volume, caminho da ISO, confirmação digitada).
+    /// do volume, caminho da ISO, confirmação digitada) — ou atalho de
+    /// caractere único num modal de navegação (file picker, gerenciador de
+    /// ISOs do Ventoy).
     StorageModalChar(char),
     /// Apaga o último caractere do campo de texto ativo num modal de storage.
     StorageModalBackspace,
+    /// Tecla `Delete`: remove o item selecionado num modal de storage que
+    /// suporte remoção (gerenciador de ISOs do Ventoy).
+    StorageModalDelete,
+    /// Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a
+    /// partir de um modal de storage que aceite selecionar uma imagem (ISO
+    /// Flasher, adicionar ISO ao Ventoy).
+    StorageModalOpenPicker,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }

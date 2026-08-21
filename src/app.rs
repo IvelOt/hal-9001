@@ -8,10 +8,11 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
-use crate::backend::storage::{StorageRow, StorageSnapshot};
+use crate::backend::storage::{StorageRow, StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
+use crate::ui::file_picker::{self, FileEntry};
 
 /// Sistemas de arquivos ofertados pelo modal de formatação (Épico G).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +136,171 @@ pub struct VentoyModalState {
     pub stage: VentoyStage,
 }
 
+/// Para onde o arquivo escolhido no seletor (Yazi-style) deve ser
+/// encaminhado — carrega os dados necessários para reconstruir o modal de
+/// origem (Flasher ou gerenciador de ISOs do Ventoy) sem precisar manter uma
+/// pilha de "modal anterior": ao escolher o arquivo, `App` reconstrói o modal
+/// alvo diretamente a partir destes campos.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilePickerPurpose {
+    FlasherIso {
+        device_id: String,
+        target_label: String,
+        target_dev_node: String,
+        target_size: u64,
+    },
+    VentoyAddIso {
+        device_id: String,
+        target_label: String,
+    },
+}
+
+/// Resultado de confirmar a seleção (`Enter`/`l`/`→`) no seletor de arquivos.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilePickerOutcome {
+    /// Navegação pura (entrou num diretório, ou nada aconteceu).
+    None,
+    /// Arquivo com extensão reconhecida (`.iso`/`.img`/`.vhd`) escolhido.
+    Picked(PathBuf),
+    /// Arquivo com extensão não suportada — permanece no seletor com erro.
+    Unsupported,
+}
+
+/// Estado do seletor de arquivos estilo Yazi (ver `ui::file_picker`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilePickerState {
+    pub cwd: PathBuf,
+    /// Listagem do diretório atual, já ordenada (diretórios primeiro, depois
+    /// arquivos, alfabeticamente sem diferenciar caixa).
+    pub entries: Vec<FileEntry>,
+    pub selected: usize,
+    pub error: Option<String>,
+    pub purpose: FilePickerPurpose,
+}
+
+impl FilePickerState {
+    /// Abre o seletor em `start_dir` (ou no diretório temporário do sistema,
+    /// caso `start_dir` não seja um diretório válido).
+    pub fn open(start_dir: PathBuf, purpose: FilePickerPurpose) -> Self {
+        let cwd = if start_dir.is_dir() {
+            start_dir
+        } else {
+            std::env::temp_dir()
+        };
+        let mut s = Self {
+            cwd,
+            entries: Vec::new(),
+            selected: 0,
+            error: None,
+            purpose,
+        };
+        s.reload();
+        s
+    }
+
+    /// Relista o diretório atual, clampeando a seleção ao novo tamanho.
+    pub fn reload(&mut self) {
+        match file_picker::list_dir(&self.cwd) {
+            Ok(entries) => {
+                self.selected = if entries.is_empty() {
+                    0
+                } else {
+                    self.selected.min(entries.len() - 1)
+                };
+                self.entries = entries;
+                self.error = None;
+            }
+            Err(e) => {
+                self.entries.clear();
+                self.selected = 0;
+                self.error = Some(e);
+            }
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.entries.len() {
+            self.selected += 1;
+        }
+    }
+
+    /// Sobe para o diretório pai, se houver (sem efeito na raiz `/`).
+    pub fn go_up(&mut self) {
+        if let Some(parent) = self.cwd.parent() {
+            self.cwd = parent.to_path_buf();
+            self.selected = 0;
+            self.reload();
+        }
+    }
+
+    /// Salta diretamente para `path` (atalhos `~`/`d`/`M`/`/`). Superfícia um
+    /// erro em vez de entrar num diretório inexistente/ilegível.
+    pub fn jump_to(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.cwd = path;
+            self.selected = 0;
+            self.reload();
+        } else {
+            self.error = Some(format!("{}", path.display()));
+        }
+    }
+
+    /// Confirma a seleção atual: desce em diretórios, ou "escolhe" arquivos
+    /// com extensão de imagem reconhecida.
+    pub fn enter_selected(&mut self) -> FilePickerOutcome {
+        let Some(entry) = self.entries.get(self.selected).cloned() else {
+            return FilePickerOutcome::None;
+        };
+        if entry.is_dir {
+            self.cwd = entry.path;
+            self.selected = 0;
+            self.reload();
+            FilePickerOutcome::None
+        } else if file_picker::is_pickable_image(&entry.name) {
+            FilePickerOutcome::Picked(entry.path)
+        } else {
+            FilePickerOutcome::Unsupported
+        }
+    }
+}
+
+/// Fase do gerenciador de ISOs de um pendrive Ventoy (tecla `i`/`I`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum VentoyIsoManagerStage {
+    Loading,
+    Listing {
+        entries: Vec<VentoyIsoEntry>,
+        selected: usize,
+        free_bytes: Option<u64>,
+    },
+    ConfirmRemove {
+        file_name: String,
+    },
+    Copying {
+        bytes_written: u64,
+        total_bytes: u64,
+        file_name: String,
+    },
+    Removing {
+        file_name: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Estado do gerenciador de ISOs do Ventoy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VentoyIsoManagerState {
+    pub device_id: String,
+    pub target_label: String,
+    pub stage: VentoyIsoManagerStage,
+}
+
 /// Modal interativo ativo na aba Storage (mutuamente exclusivo).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum StorageModal {
@@ -143,6 +309,8 @@ pub enum StorageModal {
     Format(FormatModalState),
     Flasher(FlasherModalState),
     Ventoy(VentoyModalState),
+    FilePicker(FilePickerState),
+    VentoyIsoManager(VentoyIsoManagerState),
 }
 
 /// Abas do Assistente de Sistema, na ordem da tabbar.
@@ -300,8 +468,13 @@ impl App {
         }
     }
 
-    /// Consome um evento de backend, mutando o estado.
-    pub fn handle_event(&mut self, event: AppEvent) {
+    /// Consome um evento de backend, mutando o estado. Devolve ações de
+    /// acompanhamento (ex.: relistar ISOs do Ventoy após uma cópia/remoção
+    /// concluída) que o chamador deve repassar ao `action_tx` — `handle_event`
+    /// não recebe o `Sender` diretamente para não quebrar a assinatura usada
+    /// em dezenas de testes existentes.
+    pub fn handle_event(&mut self, event: AppEvent) -> Vec<Action> {
+        let mut follow_up: Vec<Action> = Vec::new();
         match event {
             AppEvent::System(snap) => self.system = Some(*snap),
             AppEvent::Storage(snap) => self.storage = Some(*snap),
@@ -399,7 +572,76 @@ impl App {
                     }
                 }
             }
+            AppEvent::StorageVentoyIsoList {
+                device_id,
+                entries,
+                free_bytes,
+            } => {
+                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        s.stage = VentoyIsoManagerStage::Listing {
+                            entries,
+                            selected: 0,
+                            free_bytes,
+                        };
+                    }
+                }
+            }
+            AppEvent::StorageVentoyIsoCopyProgress {
+                device_id,
+                bytes_written,
+                total_bytes,
+            } => {
+                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        if let VentoyIsoManagerStage::Copying {
+                            bytes_written: bw,
+                            total_bytes: tb,
+                            ..
+                        } = &mut s.stage
+                        {
+                            *bw = bytes_written;
+                            *tb = total_bytes;
+                        }
+                    }
+                }
+            }
+            AppEvent::StorageVentoyIsoCopyDone { device_id, result } => {
+                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        match result {
+                            Ok(_) => {
+                                s.stage = VentoyIsoManagerStage::Loading;
+                                follow_up.push(Action::StorageVentoyListIsos {
+                                    device_id: device_id.clone(),
+                                });
+                            }
+                            Err(e) => {
+                                s.stage = VentoyIsoManagerStage::Error { message: e };
+                            }
+                        }
+                    }
+                }
+            }
+            AppEvent::StorageVentoyIsoRemoveDone { device_id, result } => {
+                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        match result {
+                            Ok(_) => {
+                                s.stage = VentoyIsoManagerStage::Loading;
+                                follow_up.push(Action::StorageVentoyListIsos {
+                                    device_id: device_id.clone(),
+                                });
+                            }
+                            Err(e) => {
+                                s.stage = VentoyIsoManagerStage::Error { message: e };
+                            }
+                        }
+                    }
+                }
+            }
         }
+        follow_up
     }
 
     /// Navega para o campo anterior no modal de configuração.
@@ -596,6 +838,10 @@ impl App {
                 FlasherStage::SelectIso { .. } | FlasherStage::Confirm2 { .. }
             ),
             StorageModal::Ventoy(s) => matches!(s.stage, VentoyStage::Confirm2 { .. }),
+            // Navegação pura: teclas únicas (hjkl, saltos) chegam como
+            // `Action::StorageModalChar`, mas não há campo de texto livre.
+            StorageModal::FilePicker(_) => false,
+            StorageModal::VentoyIsoManager(_) => false,
             StorageModal::None => false,
         }
     }
@@ -685,6 +931,29 @@ impl App {
         });
     }
 
+    /// Tecla `i`/`I`: abre o gerenciador de ISOs do pendrive Ventoy
+    /// selecionado. Sem efeito se o drive selecionado não for Ventoy (não há
+    /// trava de disco de sistema aqui — apenas discos removíveis chegam a ser
+    /// Ventoy).
+    fn storage_ventoy_iso_manager_open(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some((drive, _)) = self.storage_selection() else {
+            return;
+        };
+        if !drive.is_ventoy {
+            return;
+        }
+        let target_label = format!("{} {}", drive.vendor, drive.model)
+            .trim()
+            .to_string();
+        let device_id = drive.id.0.clone();
+        self.storage_modal = StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+            device_id: device_id.clone(),
+            target_label,
+            stage: VentoyIsoManagerStage::Loading,
+        });
+        let _ = action_tx.send(Action::StorageVentoyListIsos { device_id });
+    }
+
     /// Roteia uma `Action` para o modal de storage ativo (formatação,
     /// flasher ou Ventoy), retornando o controle ao fechar (`Esc`/conclusão).
     fn dispatch_storage_modal(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
@@ -694,7 +963,27 @@ impl App {
             StorageModal::Format(s) => self.dispatch_format_modal(s, action, action_tx),
             StorageModal::Flasher(s) => self.dispatch_flasher_modal(s, action, action_tx),
             StorageModal::Ventoy(s) => self.dispatch_ventoy_modal(s, action, action_tx),
+            StorageModal::FilePicker(s) => self.dispatch_file_picker_modal(s, action, action_tx),
+            StorageModal::VentoyIsoManager(s) => {
+                self.dispatch_ventoy_iso_manager_modal(s, action, action_tx)
+            }
         };
+    }
+
+    /// Diretório inicial do seletor de arquivos: `$HOME`, ou o diretório de
+    /// trabalho atual quando `$HOME` não puder ser resolvido.
+    fn home_dir() -> PathBuf {
+        directories::UserDirs::new()
+            .map(|u| u.home_dir().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
+    }
+
+    /// Atalho de salto `d`/`D`: pasta de downloads do usuário, com fallback
+    /// para `$HOME` quando não detectável.
+    fn downloads_dir() -> PathBuf {
+        directories::UserDirs::new()
+            .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
+            .unwrap_or_else(Self::home_dir)
     }
 
     fn dispatch_format_modal(
@@ -815,6 +1104,19 @@ impl App {
         let m = self.lang.messages();
         match &mut s.stage {
             FlasherStage::SelectIso { input, error } => match action {
+                // Tecla dedicada (F3, ver `events/input.rs`): abre o seletor
+                // de arquivos estilo Yazi em vez de digitar o caminho.
+                Action::StorageModalOpenPicker => {
+                    return StorageModal::FilePicker(FilePickerState::open(
+                        Self::home_dir(),
+                        FilePickerPurpose::FlasherIso {
+                            device_id: s.device_id.clone(),
+                            target_label: s.target_label.clone(),
+                            target_dev_node: s.target_dev_node.clone(),
+                            target_size: s.target_size,
+                        },
+                    ));
+                }
                 Action::StorageModalChar(c) if !c.is_control() => input.push(c),
                 Action::StorageModalBackspace => {
                     input.pop();
@@ -943,6 +1245,213 @@ impl App {
         StorageModal::Ventoy(s)
     }
 
+    /// Roteia navegação/seleção dentro do seletor de arquivos estilo Yazi.
+    /// `h/j/k/l` chegam como `Action::StorageModalChar` (ver generalização em
+    /// `events/input.rs`); as setas continuam chegando como `Action::Up/Down/
+    /// Left/Right` por usarem `KeyCode` dedicado — ambos são aceitos.
+    fn dispatch_file_picker_modal(
+        &mut self,
+        mut s: FilePickerState,
+        action: Action,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        if matches!(action, Action::Quit) {
+            self.should_quit = true;
+            return StorageModal::FilePicker(s);
+        }
+        // `Esc`: cancela a seleção e fecha o seletor sem escolher nada.
+        if matches!(action, Action::ToggleConfig) {
+            return StorageModal::None;
+        }
+
+        match action {
+            Action::Down | Action::StorageModalChar('j') => s.move_down(),
+            Action::Up | Action::StorageModalChar('k') => s.move_up(),
+            Action::Left | Action::StorageModalChar('h') | Action::StorageModalBackspace => {
+                s.go_up()
+            }
+            Action::Right | Action::StorageModalChar('l') | Action::Enter => {
+                return self.file_picker_enter(s, action_tx);
+            }
+            // Atalhos de salto rápido: `~` casa, `d`/`D` downloads, `M`
+            // pasta de mídia removível, `/` raiz do filesystem.
+            Action::StorageModalChar('~') => s.jump_to(Self::home_dir()),
+            Action::StorageModalChar('d') | Action::StorageModalChar('D') => {
+                s.jump_to(Self::downloads_dir())
+            }
+            Action::StorageModalChar('M') => s.jump_to(PathBuf::from("/media")),
+            Action::StorageModalChar('/') => s.jump_to(PathBuf::from("/")),
+            _ => {}
+        }
+        StorageModal::FilePicker(s)
+    }
+
+    /// Confirma a seleção do seletor de arquivos: navega para dentro de
+    /// diretórios, ou — ao escolher um arquivo de imagem válido — reconstrói
+    /// o modal de origem (Flasher ou gerenciador de ISOs do Ventoy) já com o
+    /// caminho escolhido.
+    fn file_picker_enter(
+        &mut self,
+        mut s: FilePickerState,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        match s.enter_selected() {
+            FilePickerOutcome::None => StorageModal::FilePicker(s),
+            FilePickerOutcome::Unsupported => {
+                let m = self.lang.messages();
+                s.error = Some(m.filepicker_err_unsupported.to_string());
+                StorageModal::FilePicker(s)
+            }
+            FilePickerOutcome::Picked(path) => {
+                let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                match s.purpose.clone() {
+                    FilePickerPurpose::FlasherIso {
+                        device_id,
+                        target_label,
+                        target_dev_node,
+                        target_size,
+                    } => {
+                        if size > target_size {
+                            let m = self.lang.messages();
+                            StorageModal::Flasher(FlasherModalState {
+                                device_id,
+                                target_label,
+                                target_dev_node,
+                                target_size,
+                                iso_path: PathBuf::new(),
+                                iso_size: 0,
+                                stage: FlasherStage::SelectIso {
+                                    input: path.to_string_lossy().to_string(),
+                                    error: Some(m.storage_flash_err_too_big.to_string()),
+                                },
+                            })
+                        } else {
+                            StorageModal::Flasher(FlasherModalState {
+                                device_id,
+                                target_label,
+                                target_dev_node,
+                                target_size,
+                                iso_path: path,
+                                iso_size: size,
+                                stage: FlasherStage::Ready { sha256: None },
+                            })
+                        }
+                    }
+                    FilePickerPurpose::VentoyAddIso {
+                        device_id,
+                        target_label,
+                    } => {
+                        let file_name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let _ = action_tx.send(Action::StorageVentoyAddIso {
+                            device_id: device_id.clone(),
+                            src_path: path.to_string_lossy().to_string(),
+                        });
+                        StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+                            device_id,
+                            target_label,
+                            stage: VentoyIsoManagerStage::Copying {
+                                bytes_written: 0,
+                                total_bytes: size,
+                                file_name,
+                            },
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Roteia ações dentro do gerenciador de ISOs de um pendrive Ventoy
+    /// (tecla `i`/`I`): listar, adicionar (via seletor de arquivos) e remover
+    /// (com confirmação) ISOs na partição de dados.
+    fn dispatch_ventoy_iso_manager_modal(
+        &mut self,
+        mut s: VentoyIsoManagerState,
+        action: Action,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        if matches!(action, Action::Quit) {
+            self.should_quit = true;
+            return StorageModal::VentoyIsoManager(s);
+        }
+
+        match &mut s.stage {
+            VentoyIsoManagerStage::Loading => {
+                if matches!(action, Action::ToggleConfig) {
+                    return StorageModal::None;
+                }
+            }
+            VentoyIsoManagerStage::Listing { entries, selected, .. } => match action {
+                Action::ToggleConfig => return StorageModal::None,
+                Action::Down | Action::StorageModalChar('j') => {
+                    if *selected + 1 < entries.len() {
+                        *selected += 1;
+                    }
+                }
+                Action::Up | Action::StorageModalChar('k') => {
+                    *selected = selected.saturating_sub(1);
+                }
+                Action::StorageModalChar('a') | Action::StorageModalChar('A') => {
+                    return StorageModal::FilePicker(FilePickerState::open(
+                        Self::home_dir(),
+                        FilePickerPurpose::VentoyAddIso {
+                            device_id: s.device_id.clone(),
+                            target_label: s.target_label.clone(),
+                        },
+                    ));
+                }
+                Action::StorageModalChar('d')
+                | Action::StorageModalChar('x')
+                | Action::StorageModalDelete => {
+                    if let Some(e) = entries.get(*selected) {
+                        let file_name = e.name.clone();
+                        s.stage = VentoyIsoManagerStage::ConfirmRemove { file_name };
+                    }
+                }
+                _ => {}
+            },
+            VentoyIsoManagerStage::ConfirmRemove { file_name } => match action {
+                Action::Enter | Action::StorageModalChar('y') | Action::StorageModalChar('Y') => {
+                    let _ = action_tx.send(Action::StorageVentoyRemoveIso {
+                        device_id: s.device_id.clone(),
+                        file_name: file_name.clone(),
+                    });
+                    s.stage = VentoyIsoManagerStage::Removing {
+                        file_name: file_name.clone(),
+                    };
+                }
+                Action::ToggleConfig
+                | Action::StorageModalChar('n')
+                | Action::StorageModalChar('N') => {
+                    let _ = action_tx.send(Action::StorageVentoyListIsos {
+                        device_id: s.device_id.clone(),
+                    });
+                    s.stage = VentoyIsoManagerStage::Loading;
+                }
+                _ => {}
+            },
+            VentoyIsoManagerStage::Copying { .. } => {
+                if matches!(action, Action::ToggleConfig) {
+                    return StorageModal::None;
+                }
+            }
+            VentoyIsoManagerStage::Removing { .. } => {
+                if matches!(action, Action::ToggleConfig) {
+                    return StorageModal::None;
+                }
+            }
+            VentoyIsoManagerStage::Error { .. } => {
+                if matches!(action, Action::ToggleConfig | Action::Enter) {
+                    return StorageModal::None;
+                }
+            }
+        }
+        StorageModal::VentoyIsoManager(s)
+    }
+
     /// Salva a configuração atual em disco e notifica via toast.
     pub fn save_config(&mut self) {
         match self.config.save() {
@@ -1049,6 +1558,9 @@ impl App {
             Action::StorageFormatOpen => self.storage_format_open(),
             Action::StorageFlasherOpen => self.storage_flasher_open(),
             Action::StorageVentoyOpen => self.storage_ventoy_open(),
+            Action::StorageVentoyIsoManagerOpen => {
+                self.storage_ventoy_iso_manager_open(action_tx)
+            }
             Action::StorageMount(_)
             | Action::StorageUnmount(_)
             | Action::StorageEject(_)
@@ -1057,14 +1569,20 @@ impl App {
             | Action::StorageChecksumIso(_)
             | Action::StorageFlashIso { .. }
             | Action::StorageFlashCancel { .. }
-            | Action::StorageVentoyInstall { .. } => {
+            | Action::StorageVentoyInstall { .. }
+            | Action::StorageVentoyListIsos { .. }
+            | Action::StorageVentoyAddIso { .. }
+            | Action::StorageVentoyRemoveIso { .. } => {
                 // Já totalmente formadas (com DeviceId/paths resolvidos);
                 // repassa direto ao backend de storage.
                 let _ = action_tx.send(action);
             }
-            // Sem modal de storage aberto, não há campo de texto para
-            // receber estes caracteres; ignora.
-            Action::StorageModalChar(_) | Action::StorageModalBackspace => {}
+            // Sem modal de storage aberto, não há campo de texto/navegação
+            // para receber estes atalhos; ignora.
+            Action::StorageModalChar(_)
+            | Action::StorageModalBackspace
+            | Action::StorageModalDelete
+            | Action::StorageModalOpenPicker => {}
             Action::Raw(_key) => {
                 // Reservado para foco de terminal (aba 8) — repasse ao PTY.
             }

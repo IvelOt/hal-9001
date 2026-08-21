@@ -6,8 +6,9 @@
 
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
-    compute_speed_eta, is_system_disk, parse_proc_mounts, parse_proc_swaps, BusType, DriveInfo,
-    FsKind, PartitionInfo, StorageRow, StorageSnapshot,
+    build_ventoy_entries, compute_speed_eta, detect_ventoy, is_iso_or_img, is_system_disk,
+    parse_proc_mounts, parse_proc_swaps, ventoy_data_partition, BusType, DriveInfo, FsKind,
+    PartitionInfo, StorageRow, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId};
@@ -24,6 +25,7 @@ fn drive(removable: bool, bus: BusType) -> DriveInfo {
         bus,
         rotational: false,
         is_system: false,
+        is_ventoy: false,
         partitions: Vec::new(),
     }
 }
@@ -886,6 +888,153 @@ fn render_ventoy_modal_without_panic() {
 
     app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Detecção de Ventoy e gerenciador de ISOs (novo módulo do picker/Ventoy).
+// ---------------------------------------------------------------------------
+
+fn labeled_partition(label: &str, dev_node: &str, size: u64) -> PartitionInfo {
+    let mut p = partition(vec![], false);
+    p.label = label.to_string();
+    p.dev_node = dev_node.to_string();
+    p.size = size;
+    p
+}
+
+#[test]
+fn detect_ventoy_recognizes_ventoy_and_vtoyefi_labels_case_insensitively() {
+    assert!(detect_ventoy(&[labeled_partition("Ventoy", "/dev/sdz1", 1)]));
+    assert!(detect_ventoy(&[labeled_partition("VENTOY", "/dev/sdz1", 1)]));
+    assert!(detect_ventoy(&[labeled_partition("VTOYEFI", "/dev/sdz2", 1)]));
+    assert!(detect_ventoy(&[labeled_partition("vtoyefi", "/dev/sdz2", 1)]));
+}
+
+#[test]
+fn detect_ventoy_is_false_for_unrelated_labels() {
+    assert!(!detect_ventoy(&[labeled_partition("KINGSTON", "/dev/sdz1", 1)]));
+    assert!(!detect_ventoy(&[]));
+}
+
+#[test]
+fn ventoy_data_partition_picks_the_non_efi_partition() {
+    let mut d = drive(true, BusType::Usb);
+    d.partitions = vec![
+        labeled_partition("VTOYEFI", "/dev/sdz1", 32 * 1024 * 1024),
+        labeled_partition("Ventoy", "/dev/sdz2", 30 * 1024 * 1024 * 1024),
+    ];
+    let data = ventoy_data_partition(&d).expect("esperava a partição de dados");
+    assert_eq!(data.dev_node, "/dev/sdz2");
+}
+
+#[test]
+fn ventoy_data_partition_falls_back_to_largest_non_efi_when_unlabeled() {
+    let mut d = drive(true, BusType::Usb);
+    d.partitions = vec![
+        labeled_partition("VTOYEFI", "/dev/sdz1", 32 * 1024 * 1024),
+        labeled_partition("", "/dev/sdz2", 30 * 1024 * 1024 * 1024),
+    ];
+    let data = ventoy_data_partition(&d).expect("esperava a partição de dados");
+    assert_eq!(data.dev_node, "/dev/sdz2");
+}
+
+#[test]
+fn is_iso_or_img_is_case_insensitive_and_rejects_other_extensions() {
+    assert!(is_iso_or_img("archlinux.iso"));
+    assert!(is_iso_or_img("Windows.ISO"));
+    assert!(is_iso_or_img("disk.img"));
+    assert!(!is_iso_or_img("readme.txt"));
+    assert!(!is_iso_or_img("archive.iso.zip"));
+}
+
+#[test]
+fn build_ventoy_entries_filters_and_sorts_case_insensitively() {
+    let raw = vec![
+        ("zeta.iso".to_string(), 10, None),
+        ("Alpha.ISO".to_string(), 20, None),
+        ("notes.txt".to_string(), 30, None),
+        ("beta.img".to_string(), 40, None),
+    ];
+    let entries = build_ventoy_entries(raw);
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["Alpha.ISO", "beta.img", "zeta.iso"]);
+}
+
+// ---------------------------------------------------------------------------
+// Render dos novos modais (seletor de arquivos / gerenciador de ISOs do
+// Ventoy) sem pânico.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_file_picker_modal_without_panic() {
+    use hal9001::app::{FilePickerPurpose, FilePickerState, StorageModal};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    app.storage_modal = StorageModal::FilePicker(FilePickerState::open(
+        std::env::temp_dir(),
+        FilePickerPurpose::FlasherIso {
+            device_id: "/drives/usb-target".to_string(),
+            target_label: "Test Drive".to_string(),
+            target_dev_node: "/dev/sdz".to_string(),
+            target_size: 8 * 1024 * 1024 * 1024,
+        },
+    ));
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+}
+
+#[test]
+fn render_ventoy_iso_manager_modal_in_every_stage_without_panic() {
+    use hal9001::app::{StorageModal, VentoyIsoManagerStage, VentoyIsoManagerState};
+    use hal9001::backend::storage::VentoyIsoEntry;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    let base = |stage: VentoyIsoManagerStage| {
+        StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+            device_id: "/drives/usb-target".to_string(),
+            target_label: "Ventoy USB".to_string(),
+            stage,
+        })
+    };
+
+    let stages = vec![
+        VentoyIsoManagerStage::Loading,
+        VentoyIsoManagerStage::Listing {
+            entries: vec![VentoyIsoEntry {
+                name: "archlinux.iso".to_string(),
+                size: 900 * 1024 * 1024,
+                modified: None,
+            }],
+            selected: 0,
+            free_bytes: Some(4 * 1024 * 1024 * 1024),
+        },
+        VentoyIsoManagerStage::ConfirmRemove {
+            file_name: "archlinux.iso".to_string(),
+        },
+        VentoyIsoManagerStage::Copying {
+            bytes_written: 512,
+            total_bytes: 1024,
+            file_name: "new.iso".to_string(),
+        },
+        VentoyIsoManagerStage::Removing {
+            file_name: "archlinux.iso".to_string(),
+        },
+        VentoyIsoManagerStage::Error {
+            message: "falha simulada".to_string(),
+        },
+    ];
+
+    for stage in stages {
+        app.storage_modal = base(stage);
+        terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+    }
 }
 
 // ---------------------------------------------------------------------------

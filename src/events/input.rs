@@ -72,6 +72,14 @@ fn map_key(
         return Some(Action::Quit);
     }
 
+    // Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a partir
+    // de qualquer modal de storage — funciona mesmo em `text_mode` (ex.:
+    // `SelectIso` do Flasher, onde o usuário normalmente digitaria o caminho)
+    // porque usa um `KeyCode` próprio, nunca um `Char` digitável.
+    if active == Tab::Storage && storage_modal_open && key.code == KeyCode::F(3) {
+        return Some(Action::StorageModalOpenPicker);
+    }
+
     // Campo de texto ativo num modal de Storage (caminho da ISO, rótulo do
     // volume, confirmação digitada): repassa caracteres/backspace direto,
     // suspendendo todos os atalhos globais para não "vazar" letras como `m`,
@@ -94,9 +102,14 @@ fn map_key(
 
     // Aba Storage: `m`/`e`/`r` têm significado próprio (montar/ejetar/refresh
     // da árvore de discos), sobrepondo os atalhos globais de mudo/refresh.
-    // `f`/`g`/`b` abrem os modais de formatação/ISO Flasher; com um modal já
-    // aberto (mas fora de campo de texto), `c` vira o atalho local de
-    // "calcular checksum" do flasher em vez de abrir o modal de config.
+    // `f`/`g`/`b`/`V`/`i` abrem os modais de formatação/ISO Flasher/Ventoy;
+    // com um modal já aberto (mas fora de campo de texto), qualquer `Char`
+    // simples vira `Action::StorageModalChar` — os modais de navegação pura
+    // (seletor de arquivos, gerenciador de ISOs do Ventoy) usam letras únicas
+    // (`a`, `d`, `x`, `y`, `n`, atalhos de salto) e o `c` do Flasher continua
+    // funcionando como "calcular checksum" por este mesmo caminho. Os campos
+    // com `KeyCode` dedicado (setas, Enter, Tab) do modal de formatação não
+    // são afetados por esta generalização.
     if active == Tab::Storage {
         match key.code {
             KeyCode::Char('f') if !storage_modal_open => return Some(Action::StorageFormatOpen),
@@ -104,7 +117,11 @@ fn map_key(
                 return Some(Action::StorageFlasherOpen)
             }
             KeyCode::Char('V') if !storage_modal_open => return Some(Action::StorageVentoyOpen),
-            KeyCode::Char('c') if storage_modal_open => return Some(Action::StorageModalChar('c')),
+            KeyCode::Char('i') | KeyCode::Char('I') if !storage_modal_open => {
+                return Some(Action::StorageVentoyIsoManagerOpen)
+            }
+            KeyCode::Delete if storage_modal_open => return Some(Action::StorageModalDelete),
+            KeyCode::Char(c) if storage_modal_open => return Some(Action::StorageModalChar(c)),
             KeyCode::Char('m') if !storage_modal_open => {
                 return Some(Action::StorageMountToggleSelected)
             }

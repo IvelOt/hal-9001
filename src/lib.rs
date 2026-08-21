@@ -42,7 +42,14 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
 
     loop {
         tokio::select! {
-            Some(ev) = event_rx.recv() => app.handle_event(ev),
+            Some(ev) = event_rx.recv() => {
+                // Ações de acompanhamento (ex.: relistar ISOs do Ventoy após
+                // uma cópia/remoção concluída) devolvidas pelo `App` são
+                // repassadas aos backends como se tivessem vindo do input.
+                for follow_up in app.handle_event(ev) {
+                    let _ = action_tx.send(follow_up);
+                }
+            }
             Some(action) = input.next(app.active, app.storage_modal_open(), app.text_input_active()) => app.dispatch(action, &action_tx),
             _ = render_tick.tick() => {
                 app.on_tick();

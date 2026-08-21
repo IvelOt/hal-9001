@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{
     App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice, StorageModal,
-    VentoyModalState, VentoyStage,
+    VentoyIsoManagerStage, VentoyIsoManagerState, VentoyModalState, VentoyStage,
 };
 use crate::backend::storage::{BusType, DriveInfo, PartitionInfo, StorageRow};
 
@@ -92,6 +92,18 @@ fn system_tag(app: &App) -> String {
     }
 }
 
+/// Tag "pendrive Ventoy" — Nerd Font de disco de boot `\u{f17c}` + palavra
+/// traduzida quando `icons = true`, ou o token ASCII `[VENTOY]` caso
+/// contrário (Zero Emojis Policy).
+fn ventoy_tag(app: &App) -> String {
+    let m = app.lang.messages();
+    if app.config.ui.icons {
+        format!("\u{f17c} {}", m.storage_tag_ventoy)
+    } else {
+        m.storage_tag_ventoy_ascii.to_string()
+    }
+}
+
 fn draw_tree(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
     let block = super::content_block(m.storage_col_tree, pal);
@@ -169,6 +181,12 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
         spans.push(Span::styled(
             format!("  [{}]", m.storage_tag_usb),
             Style::default().fg(pal.accent),
+        ));
+    }
+    if drive.is_ventoy {
+        spans.push(Span::styled(
+            format!("  {}", ventoy_tag(app)),
+            Style::default().fg(pal.ok),
         ));
     }
     Line::from(spans)
@@ -255,6 +273,12 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                     Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
                 )));
             }
+            if drive.is_ventoy {
+                lines.push(Line::from(Span::styled(
+                    m.storage_ventoy_is_multiboot,
+                    Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+                )));
+            }
 
             if let Some(p) = partition {
                 lines.push(Line::from(""));
@@ -307,7 +331,11 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             Style::default().fg(pal.dim),
         ),
     ]));
-    lines.push(Line::from(vec![
+    let selected_is_ventoy = app
+        .storage_selection()
+        .map(|(d, _)| d.is_ventoy)
+        .unwrap_or(false);
+    let mut last_hint_row = vec![
         Span::styled(
             format!("{}  ", m.storage_hint_format),
             Style::default().fg(pal.dim),
@@ -320,13 +348,23 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             format!("{}  ", m.storage_hint_ventoy),
             Style::default().fg(pal.dim),
         ),
-        Span::styled(m.storage_hint_refresh, Style::default().fg(pal.dim)),
-    ]));
+        Span::styled(
+            format!("{}  ", m.storage_hint_refresh),
+            Style::default().fg(pal.dim),
+        ),
+    ];
+    if selected_is_ventoy {
+        last_hint_row.push(Span::styled(
+            m.storage_hint_iso_manager,
+            Style::default().fg(pal.dim),
+        ));
+    }
+    lines.push(Line::from(last_hint_row));
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn kv<'a>(label: &'a str, value: impl Into<String>, pal: &Palette) -> Line<'a> {
+pub(crate) fn kv<'a>(label: &'a str, value: impl Into<String>, pal: &Palette) -> Line<'a> {
     Line::from(vec![
         Span::styled(
             format!("{label}: "),
@@ -347,11 +385,13 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
         StorageModal::Format(s) => draw_format_modal(app, pal, f, s),
         StorageModal::Flasher(s) => draw_flasher_modal(app, pal, f, s),
         StorageModal::Ventoy(s) => draw_ventoy_modal(app, pal, f, s),
+        StorageModal::FilePicker(s) => super::file_picker::draw(app, pal, f, s),
+        StorageModal::VentoyIsoManager(s) => draw_ventoy_iso_manager_modal(app, pal, f, s),
         StorageModal::None => {}
     }
 }
 
-fn modal_block<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
+pub(crate) fn modal_block<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.accent))
@@ -675,7 +715,7 @@ fn draw_ventoy_modal(app: &App, pal: &Palette, f: &mut Frame, s: &VentoyModalSta
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
+pub(crate) fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
     let bar_w = 30usize;
     let filled = (pct.clamp(0.0, 1.0) * bar_w as f32).round() as usize;
     let empty = bar_w.saturating_sub(filled);
@@ -690,4 +730,114 @@ fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
             Style::default().fg(pal.dim),
         ),
     ])
+}
+
+// ---------------------------------------------------------------------------
+// Gerenciador de ISOs do Ventoy (Part 4 do picker/Ventoy manager).
+// ---------------------------------------------------------------------------
+
+fn draw_ventoy_iso_manager_modal(app: &App, pal: &Palette, f: &mut Frame, s: &VentoyIsoManagerState) {
+    let m = app.lang.messages();
+    let area = super::centered(70, 60, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block(m.ventoy_iso_mgr_title, pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![kv(m.storage_ventoy_target_label, &s.target_label, pal), Line::from("")];
+
+    match &s.stage {
+        VentoyIsoManagerStage::Loading => {
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_checksumming, // reaproveita "Calculando..." como placeholder de "Carregando..."
+                Style::default().fg(pal.dim),
+            )));
+        }
+        VentoyIsoManagerStage::Listing {
+            entries,
+            selected,
+            free_bytes,
+        } => {
+            if let Some(free) = free_bytes {
+                lines.push(kv(m.ventoy_iso_mgr_free_space, human_bytes(*free), pal));
+                lines.push(Line::from(""));
+            }
+            if entries.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    m.ventoy_iso_mgr_empty,
+                    Style::default().fg(pal.dim),
+                )));
+            } else {
+                for (idx, entry) in entries.iter().enumerate() {
+                    let style = row_style(pal, idx == *selected);
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{} ", entry.name), style),
+                        Span::styled(human_bytes(entry.size), style.fg(pal.dim)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", m.ventoy_iso_mgr_hint_add),
+                    Style::default().fg(pal.dim),
+                ),
+                Span::styled(m.ventoy_iso_mgr_hint_remove, Style::default().fg(pal.dim)),
+            ]));
+        }
+        VentoyIsoManagerStage::ConfirmRemove { file_name } => {
+            lines.push(Line::from(Span::styled(
+                format!("{}: {file_name}", m.ventoy_iso_mgr_confirm_remove),
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(m.storage_flash_hint_continue, Style::default().fg(pal.dim)),
+                Span::raw("  "),
+                Span::styled(m.storage_flash_hint_cancel, Style::default().fg(pal.dim)),
+            ]));
+        }
+        VentoyIsoManagerStage::Copying {
+            bytes_written,
+            total_bytes,
+            file_name,
+        } => {
+            let pct = if *total_bytes > 0 {
+                (*bytes_written as f32 / *total_bytes as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            lines.push(kv(m.storage_flash_iso_label, file_name, pal));
+            lines.push(Line::from(Span::styled(
+                m.ventoy_iso_mgr_copying,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(progress_line(pct, pal));
+            lines.push(Line::from(format!(
+                "{} / {}",
+                human_bytes(*bytes_written),
+                human_bytes(*total_bytes)
+            )));
+        }
+        VentoyIsoManagerStage::Removing { file_name } => {
+            lines.push(kv(m.storage_flash_iso_label, file_name, pal));
+            lines.push(Line::from(Span::styled(
+                m.ventoy_iso_mgr_removing,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+        }
+        VentoyIsoManagerStage::Error { message } => {
+            lines.push(Line::from(Span::styled(
+                message.as_str(),
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_hint_continue,
+                Style::default().fg(pal.dim),
+            )));
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }

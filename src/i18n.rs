@@ -182,6 +182,11 @@ pub struct Messages {
     /// Fallback ASCII do rótulo "disco de sistema" quando `icons = false`
     /// (Zero Emojis Policy: sem emoji, apenas texto).
     pub storage_tag_system_ascii: &'static str,
+    pub storage_tag_ventoy: &'static str,
+    /// Fallback ASCII do rótulo "pendrive Ventoy" quando `icons = false`.
+    pub storage_tag_ventoy_ascii: &'static str,
+    pub storage_ventoy_is_multiboot: &'static str,
+    pub storage_hint_iso_manager: &'static str,
 
     // Modal de formatação (Épico G)
     pub storage_format_title: &'static str,
@@ -226,6 +231,35 @@ pub struct Messages {
     pub storage_flash_failed: &'static str,
     pub storage_flash_hint_cancel: &'static str,
     pub storage_flash_hint_continue: &'static str,
+
+    // Seletor de arquivos estilo Yazi (ISO Flasher / gerenciador de ISOs do Ventoy)
+    pub filepicker_title: &'static str,
+    pub filepicker_hint_nav: &'static str,
+    pub filepicker_hint_pick: &'static str,
+    pub filepicker_hint_updir: &'static str,
+    pub filepicker_hint_jumps: &'static str,
+    pub filepicker_jump_home: &'static str,
+    pub filepicker_jump_downloads: &'static str,
+    pub filepicker_jump_media: &'static str,
+    pub filepicker_jump_root: &'static str,
+    pub filepicker_err_unsupported: &'static str,
+    pub filepicker_empty_dir: &'static str,
+    pub filepicker_label_size: &'static str,
+    pub filepicker_label_modified: &'static str,
+
+    // Gerenciador de ISOs do Ventoy
+    pub ventoy_iso_mgr_title: &'static str,
+    pub ventoy_iso_mgr_empty: &'static str,
+    pub ventoy_iso_mgr_free_space: &'static str,
+    pub ventoy_iso_mgr_hint_add: &'static str,
+    pub ventoy_iso_mgr_hint_remove: &'static str,
+    pub ventoy_iso_mgr_confirm_remove: &'static str,
+    pub ventoy_iso_mgr_copying: &'static str,
+    pub ventoy_iso_mgr_removing: &'static str,
+    pub ventoy_iso_mgr_copy_done: &'static str,
+    pub ventoy_iso_mgr_copy_failed: &'static str,
+    pub ventoy_iso_mgr_remove_done: &'static str,
+    pub ventoy_iso_mgr_remove_failed: &'static str,
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +362,10 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_hint_refresh: "[r] Atualizar",
     storage_err_system: "operação bloqueada: disco de sistema",
     storage_tag_system_ascii: "[SISTEMA]",
+    storage_tag_ventoy: "VENTOY",
+    storage_tag_ventoy_ascii: "[VENTOY]",
+    storage_ventoy_is_multiboot: "Pendrive multi-boot Ventoy",
+    storage_hint_iso_manager: "[i] ISOs",
 
     storage_format_title: "Formatar Dispositivo",
     storage_format_target: "Alvo",
@@ -367,6 +405,33 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_flash_failed: "Falha na gravação",
     storage_flash_hint_cancel: "[Esc] cancelar",
     storage_flash_hint_continue: "[Enter] continuar",
+
+    filepicker_title: "Selecionar Arquivo de Imagem",
+    filepicker_hint_nav: "[j/k/h/l] navegar",
+    filepicker_hint_pick: "[Enter] selecionar",
+    filepicker_hint_updir: "[h/←] subir  [Esc] cancelar",
+    filepicker_hint_jumps: "Atalhos",
+    filepicker_jump_home: "Home",
+    filepicker_jump_downloads: "Downloads",
+    filepicker_jump_media: "Mídia",
+    filepicker_jump_root: "Raiz",
+    filepicker_err_unsupported: "Arquivo não suportado (use .iso/.img/.vhd)",
+    filepicker_empty_dir: "Diretório vazio",
+    filepicker_label_size: "Tamanho",
+    filepicker_label_modified: "Modificado",
+
+    ventoy_iso_mgr_title: "Gerenciador de ISOs do Ventoy",
+    ventoy_iso_mgr_empty: "Nenhuma ISO encontrada no pendrive",
+    ventoy_iso_mgr_free_space: "Espaço livre",
+    ventoy_iso_mgr_hint_add: "[a] Adicionar ISO",
+    ventoy_iso_mgr_hint_remove: "[d/x] Remover ISO",
+    ventoy_iso_mgr_confirm_remove: "Remover permanentemente",
+    ventoy_iso_mgr_copying: "Copiando ISO para o pendrive...",
+    ventoy_iso_mgr_removing: "Removendo ISO...",
+    ventoy_iso_mgr_copy_done: "ISO copiada com sucesso",
+    ventoy_iso_mgr_copy_failed: "Falha ao copiar a ISO",
+    ventoy_iso_mgr_remove_done: "ISO removida com sucesso",
+    ventoy_iso_mgr_remove_failed: "Falha ao remover a ISO",
 };
 
 // ---------------------------------------------------------------------------
@@ -469,6 +534,10 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_hint_refresh: "[r] Refresh",
     storage_err_system: "operation blocked: system disk",
     storage_tag_system_ascii: "[SYSTEM]",
+    storage_tag_ventoy: "VENTOY",
+    storage_tag_ventoy_ascii: "[VENTOY]",
+    storage_ventoy_is_multiboot: "Ventoy multi-boot drive",
+    storage_hint_iso_manager: "[i] ISOs",
 
     storage_format_title: "Format Device",
     storage_format_target: "Target",
@@ -509,6 +578,33 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_flash_failed: "Flash failed",
     storage_flash_hint_cancel: "[Esc] cancel",
     storage_flash_hint_continue: "[Enter] continue",
+
+    filepicker_title: "Select Image File",
+    filepicker_hint_nav: "[j/k/h/l] navigate",
+    filepicker_hint_pick: "[Enter] select",
+    filepicker_hint_updir: "[h/left] up  [Esc] cancel",
+    filepicker_hint_jumps: "Shortcuts",
+    filepicker_jump_home: "Home",
+    filepicker_jump_downloads: "Downloads",
+    filepicker_jump_media: "Media",
+    filepicker_jump_root: "Root",
+    filepicker_err_unsupported: "Unsupported file (use .iso/.img/.vhd)",
+    filepicker_empty_dir: "Empty directory",
+    filepicker_label_size: "Size",
+    filepicker_label_modified: "Modified",
+
+    ventoy_iso_mgr_title: "Ventoy ISO Manager",
+    ventoy_iso_mgr_empty: "No ISOs found on the drive",
+    ventoy_iso_mgr_free_space: "Free space",
+    ventoy_iso_mgr_hint_add: "[a] Add ISO",
+    ventoy_iso_mgr_hint_remove: "[d/x] Remove ISO",
+    ventoy_iso_mgr_confirm_remove: "Permanently remove",
+    ventoy_iso_mgr_copying: "Copying ISO to the drive...",
+    ventoy_iso_mgr_removing: "Removing ISO...",
+    ventoy_iso_mgr_copy_done: "ISO copied successfully",
+    ventoy_iso_mgr_copy_failed: "Failed to copy the ISO",
+    ventoy_iso_mgr_remove_done: "ISO removed successfully",
+    ventoy_iso_mgr_remove_failed: "Failed to remove the ISO",
 };
 
 // ---------------------------------------------------------------------------
@@ -611,6 +707,10 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_hint_refresh: "[r] Actualizar",
     storage_err_system: "operación bloqueada: disco de sistema",
     storage_tag_system_ascii: "[SISTEMA]",
+    storage_tag_ventoy: "VENTOY",
+    storage_tag_ventoy_ascii: "[VENTOY]",
+    storage_ventoy_is_multiboot: "Unidad multi-arranque Ventoy",
+    storage_hint_iso_manager: "[i] ISOs",
 
     storage_format_title: "Formatear Dispositivo",
     storage_format_target: "Destino",
@@ -651,4 +751,31 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_flash_failed: "Error en la grabación",
     storage_flash_hint_cancel: "[Esc] cancelar",
     storage_flash_hint_continue: "[Enter] continuar",
+
+    filepicker_title: "Seleccionar Archivo de Imagen",
+    filepicker_hint_nav: "[j/k/h/l] navegar",
+    filepicker_hint_pick: "[Enter] seleccionar",
+    filepicker_hint_updir: "[h/izq] subir  [Esc] cancelar",
+    filepicker_hint_jumps: "Atajos",
+    filepicker_jump_home: "Inicio",
+    filepicker_jump_downloads: "Descargas",
+    filepicker_jump_media: "Medios",
+    filepicker_jump_root: "Raíz",
+    filepicker_err_unsupported: "Archivo no compatible (use .iso/.img/.vhd)",
+    filepicker_empty_dir: "Directorio vacío",
+    filepicker_label_size: "Tamaño",
+    filepicker_label_modified: "Modificado",
+
+    ventoy_iso_mgr_title: "Gestor de ISOs de Ventoy",
+    ventoy_iso_mgr_empty: "No se encontraron ISOs en la unidad",
+    ventoy_iso_mgr_free_space: "Espacio libre",
+    ventoy_iso_mgr_hint_add: "[a] Agregar ISO",
+    ventoy_iso_mgr_hint_remove: "[d/x] Eliminar ISO",
+    ventoy_iso_mgr_confirm_remove: "Eliminar permanentemente",
+    ventoy_iso_mgr_copying: "Copiando ISO a la unidad...",
+    ventoy_iso_mgr_removing: "Eliminando ISO...",
+    ventoy_iso_mgr_copy_done: "ISO copiada con éxito",
+    ventoy_iso_mgr_copy_failed: "Error al copiar la ISO",
+    ventoy_iso_mgr_remove_done: "ISO eliminada con éxito",
+    ventoy_iso_mgr_remove_failed: "Error al eliminar la ISO",
 };

@@ -156,6 +156,10 @@ pub struct DriveInfo {
     /// Trava de segurança: `true` quando o drive hospeda qualquer partição de
     /// sistema, ou é um disco fixo interno (ver [`is_system_disk`]).
     pub is_system: bool,
+    /// `true` quando o drive é um pendrive Ventoy (layout de duas partições
+    /// com uma pequena `VTOYEFI` + a partição de dados onde ficam as ISOs).
+    /// Ver [`detect_ventoy`].
+    pub is_ventoy: bool,
     pub partitions: Vec<PartitionInfo>,
 }
 
@@ -219,6 +223,74 @@ impl StorageSnapshot {
     pub fn drive_size(&self, id: &DeviceId) -> Option<u64> {
         self.drives.iter().find(|d| &d.id == id).map(|d| d.size)
     }
+
+    /// Busca um drive pelo `DeviceId` (caminho do objeto D-Bus).
+    pub fn drive_by_id<'a>(&'a self, id: &DeviceId) -> Option<&'a DriveInfo> {
+        self.drives.iter().find(|d| &d.id == id)
+    }
+}
+
+/// Uma entrada `.iso`/`.img` encontrada na raiz da partição de dados de um
+/// pendrive Ventoy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VentoyIsoEntry {
+    pub name: String,
+    pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// Reconhece o rótulo (`IdLabel`) de qualquer partição criada pelo instalador
+/// do Ventoy — `VTOYEFI` (pequena partição EFI de boot) ou `Ventoy` (partição
+/// de dados). A checagem por rótulo é suficiente e evita heurísticas frágeis
+/// por tipo de filesystem.
+pub fn detect_ventoy(partitions: &[PartitionInfo]) -> bool {
+    partitions.iter().any(|p| {
+        p.label.eq_ignore_ascii_case("ventoy") || p.label.eq_ignore_ascii_case("vtoyefi")
+    })
+}
+
+/// Partição de dados do Ventoy (onde ficam as ISOs) — a partição do drive
+/// rotulada `Ventoy`, ou, na ausência desse rótulo exato, a maior partição
+/// que não seja a `VTOYEFI`. Retorna `None` quando o drive não é Ventoy.
+pub fn ventoy_data_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
+    if let Some(p) = drive
+        .partitions
+        .iter()
+        .find(|p| p.label.eq_ignore_ascii_case("ventoy"))
+    {
+        return Some(p);
+    }
+    drive
+        .partitions
+        .iter()
+        .filter(|p| !p.label.eq_ignore_ascii_case("vtoyefi"))
+        .max_by_key(|p| p.size)
+}
+
+/// Decide se `name` tem extensão de imagem que o gerenciador de ISOs do
+/// Ventoy reconhece (`.iso`/`.img`, sem diferenciar maiúsculas/minúsculas).
+pub fn is_iso_or_img(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".iso") || lower.ends_with(".img")
+}
+
+/// Filtra e ordena (alfabeticamente, sem diferenciar caixa) entradas brutas
+/// de diretório em [`VentoyIsoEntry`]s — função pura, testável sem tocar o
+/// filesystem real.
+pub fn build_ventoy_entries(
+    raw: Vec<(String, u64, Option<std::time::SystemTime>)>,
+) -> Vec<VentoyIsoEntry> {
+    let mut entries: Vec<VentoyIsoEntry> = raw
+        .into_iter()
+        .filter(|(name, _, _)| is_iso_or_img(name))
+        .map(|(name, size, modified)| VentoyIsoEntry {
+            name,
+            size,
+            modified,
+        })
+        .collect();
+    entries.sort_by_key(|a| a.name.to_ascii_lowercase());
+    entries
 }
 
 /// Calcula taxa de transferência (MB/s) e ETA (segundos) a partir dos bytes
@@ -410,6 +482,7 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
             bus: BusType::parse(&prop_string(drive_props, "ConnectionBus").unwrap_or_default()),
             rotational: rotation_rate > 0,
             is_system: false,
+            is_ventoy: false,
             partitions: Vec::new(),
         };
         drive_path_index.insert(path.as_str().to_string(), drives.len());
@@ -488,6 +561,7 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         // partições reconhecidas ainda (ex.: sysfs incompleto no boot).
         drive_is_system |= !drive.removable && drive.bus != BusType::Usb;
         drive.is_system = drive_is_system;
+        drive.is_ventoy = detect_ventoy(&drive.partitions);
     }
     drives.sort_by(|a, b| a.dev_node.cmp(&b.dev_node));
 
@@ -503,6 +577,18 @@ fn disk_usage_for_mount(disks: &Disks, mount_point: &str) -> Option<u64> {
         .iter()
         .find(|d| d.mount_point().to_string_lossy() == mount_point)
         .map(|d| d.total_space().saturating_sub(d.available_space()))
+}
+
+/// Espaço livre (bytes) no ponto de montagem informado, consultado via
+/// `sysinfo` — usado para exibir o espaço restante no gerenciador de ISOs do
+/// Ventoy antes de copiar uma nova imagem.
+fn free_bytes_for_mount(mount_point: &str) -> Option<u64> {
+    let disks = Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .find(|d| d.mount_point().to_string_lossy() == mount_point)
+        .map(|d| d.available_space())
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +622,40 @@ async fn udisks_call(
 
 async fn mount(conn: &Connection, path: &str) -> anyhow::Result<()> {
     udisks_call(conn, path, "org.freedesktop.UDisks2.Filesystem", "Mount").await
+}
+
+/// Monta `path` e devolve o ponto de montagem escolhido pelo UDisks2 (o
+/// método `Filesystem.Mount` retorna a string do caminho). Usado pelo
+/// gerenciador de ISOs do Ventoy, que precisa do caminho real para ler/
+/// escrever arquivos na raiz da partição de dados.
+async fn mount_and_get_path(conn: &Connection, path: &str) -> anyhow::Result<String> {
+    let opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
+    let reply = conn
+        .call_method(
+            Some(UDISKS_SERVICE),
+            path,
+            Some("org.freedesktop.UDisks2.Filesystem"),
+            "Mount",
+            &(opts,),
+        )
+        .await?;
+    Ok(reply.body().deserialize::<String>()?)
+}
+
+/// Garante que a partição em `part_path` esteja montada, reaproveitando
+/// `existing_mount` (do último snapshot conhecido) quando disponível, ou
+/// montando-a via D-Bus caso contrário.
+async fn ensure_mounted(
+    conn: &Connection,
+    part_path: &str,
+    existing_mount: Option<String>,
+) -> anyhow::Result<String> {
+    if let Some(mp) = existing_mount {
+        if !mp.is_empty() {
+            return Ok(mp);
+        }
+    }
+    mount_and_get_path(conn, part_path).await
 }
 
 async fn unmount(conn: &Connection, path: &str) -> anyhow::Result<()> {
@@ -825,6 +945,174 @@ async fn flash_task(
 }
 
 // ---------------------------------------------------------------------------
+// Gerenciador de ISOs do Ventoy — listar/adicionar/remover arquivos na
+// partição de dados de um pendrive Ventoy já configurado.
+// ---------------------------------------------------------------------------
+
+/// Lê a raiz de `mount_point`, filtra `.iso`/`.img` e emite a listagem
+/// (ordenada) junto do espaço livre restante na partição.
+async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
+    let mut raw = Vec::new();
+    if let Ok(mut rd) = tokio::fs::read_dir(mount_point).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            raw.push((name, meta.len(), meta.modified().ok()));
+        }
+    }
+    let entries = build_ventoy_entries(raw);
+    let free_bytes = free_bytes_for_mount(mount_point);
+    let _ = tx.send(AppEvent::StorageVentoyIsoList {
+        device_id,
+        entries,
+        free_bytes,
+    });
+}
+
+/// Garante a montagem da partição de dados do Ventoy e publica a listagem
+/// atual de ISOs. Falha graciosamente (lista vazia + toast) se a montagem
+/// falhar — nunca deixa o gerenciador travado em `Loading`.
+async fn ventoy_list_isos_task(
+    conn: Connection,
+    device_id: String,
+    part_path: String,
+    existing_mount: Option<String>,
+    tx: EventTx,
+) {
+    match ensure_mounted(&conn, &part_path, existing_mount).await {
+        Ok(mount_point) => list_and_emit(&mount_point, device_id, &tx).await,
+        Err(e) => {
+            let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                "Falha ao montar partição de dados do Ventoy: {e}"
+            ))));
+            let _ = tx.send(AppEvent::StorageVentoyIsoList {
+                device_id,
+                entries: Vec::new(),
+                free_bytes: None,
+            });
+        }
+    }
+}
+
+/// Copia `src_path` para dentro de `dst_path` em blocos de 4 MiB, emitindo
+/// progresso throttled — mesma disciplina do `flash_inner`, mas sem `libc::
+/// sync()` global (arquivo regular, não bloco de dispositivo). Garante
+/// `flush`/`sync_all` do destino antes de reportar sucesso: uma ISO truncada
+/// num pendrive de boot é uma falha real, não cosmética.
+async fn copy_iso_inner(
+    src_path: &str,
+    dst_path: &str,
+    device_id: &str,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    let mut src = tokio::fs::File::open(src_path).await?;
+    let total_bytes = src.metadata().await?.len();
+    let mut dst = tokio::fs::File::create(dst_path).await?;
+
+    let mut buf = vec![0u8; IO_BUFFER_SIZE];
+    let mut written: u64 = 0;
+    let mut last_emit = tokio::time::Instant::now();
+
+    loop {
+        let n = src.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        dst.write_all(&buf[..n]).await?;
+        written += n as u64;
+
+        if last_emit.elapsed() >= PROGRESS_THROTTLE {
+            let _ = tx.send(AppEvent::StorageVentoyIsoCopyProgress {
+                device_id: device_id.to_string(),
+                bytes_written: written,
+                total_bytes,
+            });
+            last_emit = tokio::time::Instant::now();
+        }
+    }
+
+    dst.flush().await?;
+    dst.sync_all().await?;
+
+    let _ = tx.send(AppEvent::StorageVentoyIsoCopyProgress {
+        device_id: device_id.to_string(),
+        bytes_written: total_bytes,
+        total_bytes,
+    });
+    Ok(())
+}
+
+async fn ventoy_add_iso_task(
+    conn: Connection,
+    device_id: String,
+    part_path: String,
+    existing_mount: Option<String>,
+    src_path: String,
+    tx: EventTx,
+) {
+    let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            let _ = tx.send(AppEvent::StorageVentoyIsoCopyDone {
+                device_id,
+                result: Err(format!("falha ao montar partição de dados: {e}")),
+            });
+            return;
+        }
+    };
+    let file_name = std::path::Path::new(&src_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "image.iso".to_string());
+    let dst_path = format!("{}/{}", mount_point.trim_end_matches('/'), file_name);
+
+    let result = copy_iso_inner(&src_path, &dst_path, &device_id, &tx)
+        .await
+        .map(|()| file_name.clone())
+        .map_err(|e| e.to_string());
+    let _ = tx.send(AppEvent::StorageVentoyIsoCopyDone {
+        device_id: device_id.clone(),
+        result,
+    });
+    list_and_emit(&mount_point, device_id, &tx).await;
+}
+
+async fn ventoy_remove_iso_task(
+    conn: Connection,
+    device_id: String,
+    part_path: String,
+    existing_mount: Option<String>,
+    file_name: String,
+    tx: EventTx,
+) {
+    let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            let _ = tx.send(AppEvent::StorageVentoyIsoRemoveDone {
+                device_id,
+                result: Err(format!("falha ao montar partição de dados: {e}")),
+            });
+            return;
+        }
+    };
+    let target = format!("{}/{}", mount_point.trim_end_matches('/'), file_name);
+    let result = tokio::fs::remove_file(&target)
+        .await
+        .map(|()| file_name.clone())
+        .map_err(|e| e.to_string());
+    let _ = tx.send(AppEvent::StorageVentoyIsoRemoveDone {
+        device_id: device_id.clone(),
+        result,
+    });
+    list_and_emit(&mount_point, device_id, &tx).await;
+}
+
+// ---------------------------------------------------------------------------
 // Task de polling / dispatcher
 // ---------------------------------------------------------------------------
 
@@ -1038,6 +1326,126 @@ async fn handle_action(
             tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "instalação do Ventoy solicitada");
             let txc = tx.clone();
             tokio::spawn(ventoy_task(device_id, dev_node, txc));
+        }
+        Action::StorageVentoyListIsos { device_id } => {
+            let id = DeviceId(device_id.clone());
+            let Some(snap) = snapshot else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            let Some(drive) = snap.drive_by_id(&id) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo alvo não encontrado",
+                )));
+                return;
+            };
+            let Some(part) = ventoy_data_partition(drive) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "partição de dados do Ventoy não encontrada",
+                )));
+                return;
+            };
+            let part_path = part.id.0.clone();
+            let existing_mount = part.mount_points.first().cloned();
+            let conn2 = conn.clone();
+            let txc = tx.clone();
+            tokio::spawn(ventoy_list_isos_task(
+                conn2,
+                device_id,
+                part_path,
+                existing_mount,
+                txc,
+            ));
+        }
+        Action::StorageVentoyAddIso {
+            device_id,
+            src_path,
+        } => {
+            let id = DeviceId(device_id.clone());
+            let Some(snap) = snapshot else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            if snap.is_system_target(&id) {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "escrita de ISO em disco de sistema recusada (gerenciador Ventoy)");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                return;
+            }
+            let Some(drive) = snap.drive_by_id(&id) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo alvo não encontrado",
+                )));
+                return;
+            };
+            let Some(part) = ventoy_data_partition(drive) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "partição de dados do Ventoy não encontrada",
+                )));
+                return;
+            };
+            let part_path = part.id.0.clone();
+            let existing_mount = part.mount_points.first().cloned();
+            tracing::warn!(target: "hal9001::storage", device = %device_id, src = %src_path, "cópia de ISO para o Ventoy solicitada");
+            let conn2 = conn.clone();
+            let txc = tx.clone();
+            tokio::spawn(ventoy_add_iso_task(
+                conn2,
+                device_id,
+                part_path,
+                existing_mount,
+                src_path,
+                txc,
+            ));
+        }
+        Action::StorageVentoyRemoveIso {
+            device_id,
+            file_name,
+        } => {
+            let id = DeviceId(device_id.clone());
+            let Some(snap) = snapshot else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            if snap.is_system_target(&id) {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "remoção de ISO em disco de sistema recusada (gerenciador Ventoy)");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                return;
+            }
+            let Some(drive) = snap.drive_by_id(&id) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo alvo não encontrado",
+                )));
+                return;
+            };
+            let Some(part) = ventoy_data_partition(drive) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "partição de dados do Ventoy não encontrada",
+                )));
+                return;
+            };
+            let part_path = part.id.0.clone();
+            let existing_mount = part.mount_points.first().cloned();
+            tracing::warn!(target: "hal9001::storage", device = %device_id, file = %file_name, "remoção de ISO do Ventoy solicitada");
+            let conn2 = conn.clone();
+            let txc = tx.clone();
+            tokio::spawn(ventoy_remove_iso_task(
+                conn2,
+                device_id,
+                part_path,
+                existing_mount,
+                file_name,
+                txc,
+            ));
         }
         _ => {}
     }

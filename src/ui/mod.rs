@@ -5,6 +5,7 @@ pub mod widgets;
 
 pub mod bluetooth;
 pub mod config_modal;
+pub mod file_picker;
 pub mod files;
 pub mod network;
 pub mod overview;
