@@ -37,8 +37,21 @@ for bin in curl tar sha256sum lsblk awk sed; do
   command -v "$bin" >/dev/null 2>&1 || die "dependência ausente: $bin"
 done
 
+# Auto-elevação: a instalação do Ventoy grava diretamente no dispositivo de
+# bloco, o que exige root. Em vez de abortar pedindo para o usuário reexecutar
+# manualmente via sudo/pkexec, o script se reexecuta a si mesmo já elevado —
+# preserva o(s) argumento(s) originais (`"$0" "$@"`) via `exec`, então o
+# processo elevado substitui este, sem deixar uma cópia não-privilegiada
+# pendurada. Prefere `pkexec` (autenticação gráfica/Polkit, coerente com o
+# resto do HAL-9001) e cai para `sudo` quando `pkexec` não estiver disponível.
 if [ "$(id -u)" -ne 0 ]; then
-  die "é necessário root para gravar em $DEVICE (execute via sudo/pkexec)"
+  if command -v pkexec >/dev/null 2>&1; then
+    exec pkexec bash "$0" "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    exec sudo bash "$0" "$@"
+  else
+    die "é necessário root para gravar em $DEVICE (instale pkexec ou sudo)"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

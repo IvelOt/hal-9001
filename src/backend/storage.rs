@@ -363,6 +363,20 @@ fn fat_volume_label(label: &str) -> [u8; 11] {
     buf
 }
 
+/// Executa `fatfs::format_volume` sobre um arquivo/descritor já aberto para
+/// leitura+escrita, sincronizando o conteúdo em disco (`sync_all`) antes de
+/// devolver o controle — núcleo compartilhado por [`format_fat32_pure_rust`]
+/// (testes, abre o caminho diretamente) e pelo fluxo de produção, que abre o
+/// descritor via `Block.OpenDevice` do UDisks2 (ver `open_device_fd`).
+fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<()> {
+    let options = fatfs::FormatVolumeOptions::new()
+        .fat_type(fatfs::FatType::Fat32)
+        .volume_label(fat_volume_label(label));
+    fatfs::format_volume(&mut file, options)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 /// Formata `dev_node` (nó de bloco, ex.: `/dev/sdz` ou `/dev/sdz1`) como
 /// FAT32 usando exclusivamente a crate `fatfs` — 100% Rust puro, sem invocar
 /// nenhum binário externo do host (`mkfs.vfat`/`dosfstools`).
@@ -372,17 +386,17 @@ fn fat_volume_label(label: &str) -> [u8; 11] {
 /// própria: o nó já foi resolvido pelo UDisks2/`resolve_block_object_path`
 /// exatamente como o `mkfs.vfat` do host o receberia, então o mesmo alvo é
 /// reaproveitado aqui sem duplicar a lógica de particionamento.
+///
+/// Abre o caminho diretamente via `std::fs::OpenOptions` — usado pelos
+/// testes (que apontam para arquivos regulares). O fluxo de produção usa
+/// [`open_device_fd`] + [`format_fat32_on_file`] para obter permissão via
+/// Polkit/D-Bus em vez de depender do grupo `disk` do processo local.
 pub fn format_fat32_pure_rust(dev_node: &str, label: &str) -> anyhow::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(dev_node)?;
-    let options = fatfs::FormatVolumeOptions::new()
-        .fat_type(fatfs::FatType::Fat32)
-        .volume_label(fat_volume_label(label));
-    fatfs::format_volume(&mut file, options)?;
-    file.sync_all()?;
-    Ok(())
+    format_fat32_on_file(file, label)
 }
 
 /// Uma entrada `.iso`/`.img` encontrada na raiz da partição de dados de um
@@ -854,6 +868,38 @@ async fn format_block(
     )
     .await?;
     Ok(())
+}
+
+/// Abre `block_path` via `Block.OpenDevice("rw", {"flags": O_SYNC|O_EXCL})`
+/// do UDisks2, devolvendo um `std::fs::File` já construído a partir do
+/// descritor recebido por D-Bus (fd-passing/`SCM_RIGHTS`).
+///
+/// A autorização passa pelo Polkit do UDisks2 (`udisksd` roda como root), o
+/// que garante permissão total de leitura/escrita sobre o nó de bloco sem
+/// depender do processo do HAL-9001 pertencer ao grupo `disk` nem de
+/// heurísticas de userspace — elimina a classe inteira de erros
+/// `Permission denied` ao formatar via `fatfs` em vez do `mkfs.vfat` do host.
+/// `O_SYNC` garante que cada escrita do `fatfs` seja persistida
+/// imediatamente; `O_EXCL` recusa a abertura se outro processo já tiver o
+/// dispositivo aberto em modo exclusivo.
+async fn open_device_fd(conn: &Connection, block_path: &str) -> anyhow::Result<std::fs::File> {
+    let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
+    opts.insert(
+        "flags",
+        zbus::zvariant::Value::from(libc::O_SYNC | libc::O_EXCL),
+    );
+    let reply = conn
+        .call_method(
+            Some(UDISKS_SERVICE),
+            block_path,
+            Some("org.freedesktop.UDisks2.Block"),
+            "OpenDevice",
+            &("rw", opts),
+        )
+        .await?;
+    let owned_fd: zbus::zvariant::OwnedFd = reply.body().deserialize()?;
+    let std_fd: std::os::fd::OwnedFd = owned_fd.into();
+    Ok(std::fs::File::from(std_fd))
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,12 +1496,12 @@ async fn handle_action(
                     // para o formatador FAT32 100% Rust puro (`fatfs`), sem
                     // NUNCA expor ao usuário um erro pedindo para instalar
                     // pacotes externos no sistema operacional.
-                    tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — usando formatador FAT32 Rust puro");
-                    match snap.dev_node_for_block_path(&block_path) {
-                        Some(dev_node) => {
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — usando formatador FAT32 Rust puro via Block.OpenDevice");
+                    match open_device_fd(conn, &block_path).await {
+                        Ok(file) => {
                             let label_owned = label.clone();
                             let result = tokio::task::spawn_blocking(move || {
-                                format_fat32_pure_rust(&dev_node, &label_owned)
+                                format_fat32_on_file(file, &label_owned)
                             })
                             .await;
                             match result {
@@ -1463,7 +1509,8 @@ async fn handle_action(
                                     // Notifica o UDisks2/kernel para
                                     // rescanear o dispositivo — a
                                     // formatação foi feita diretamente no
-                                    // nó de bloco, por fora do D-Bus.
+                                    // descritor aberto via `OpenDevice`,
+                                    // por fora do `Block.Format`.
                                     let _ = udisks_call(
                                         conn,
                                         &block_path,
@@ -1479,7 +1526,9 @@ async fn handle_action(
                                 Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
                             }
                         }
-                        None => Toast::error(format_error_message(&fs_type, &e)),
+                        Err(e) => Toast::error(format!(
+                            "Falha ao abrir dispositivo via OpenDevice: {e}"
+                        )),
                     }
                 }
                 Err(e) => Toast::error(format_error_message(&fs_type, &e)),

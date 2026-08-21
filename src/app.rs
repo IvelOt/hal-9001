@@ -883,8 +883,11 @@ impl App {
         });
     }
 
-    /// Tecla `g`/`b`: abre o wizard do ISO Flasher para o drive selecionado.
-    /// Recusa discos de sistema (camada 1 da trava).
+    /// Tecla `g`/`b`: abre diretamente o seletor de arquivos estilo Yazi para
+    /// escolher a ISO do drive selecionado. Recusa discos de sistema (camada
+    /// 1 da trava). Ao escolher um arquivo `.iso`/`.img`/`.vhd` (`Enter`), o
+    /// seletor reconstrói o modal do Flasher já no estágio de confirmação
+    /// (ver `file_picker_enter`).
     fn storage_flasher_open(&mut self) {
         let Some((drive, _)) = self.storage_selection() else {
             return;
@@ -896,18 +899,15 @@ impl App {
         let target_label = format!("{} {}", drive.vendor, drive.model)
             .trim()
             .to_string();
-        self.storage_modal = StorageModal::Flasher(FlasherModalState {
-            device_id: drive.id.0.clone(),
-            target_label,
-            target_dev_node: drive.dev_node.clone(),
-            target_size: drive.size,
-            iso_path: PathBuf::new(),
-            iso_size: 0,
-            stage: FlasherStage::SelectIso {
-                input: String::new(),
-                error: None,
+        self.storage_modal = StorageModal::FilePicker(FilePickerState::open(
+            Self::home_dir(),
+            FilePickerPurpose::FlasherIso {
+                device_id: drive.id.0.clone(),
+                target_label,
+                target_dev_node: drive.dev_node.clone(),
+                target_size: drive.size,
             },
-        });
+        ));
     }
 
     /// Tecla `V`: abre o modal de instalação do Ventoy para o drive

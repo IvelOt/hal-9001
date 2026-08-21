@@ -615,19 +615,41 @@ fn type_path(app: &mut App, tx: &tokio::sync::broadcast::Sender<Action>, path: &
     }
 }
 
+/// Abre o wizard do Flasher (tecla `g`/`b`) — que agora abre diretamente o
+/// seletor de arquivos estilo Yazi em vez do antigo estágio de texto
+/// `SelectIso` — e escolhe `iso_path` diretamente na listagem do diretório,
+/// como um usuário navegando com as setas/`hjkl` e confirmando com `Enter`.
+fn open_flasher_and_pick_iso(
+    app: &mut App,
+    tx: &tokio::sync::broadcast::Sender<Action>,
+    iso_path: &std::path::Path,
+) {
+    app.dispatch(Action::StorageFlasherOpen, tx);
+    match &mut app.storage_modal {
+        StorageModal::FilePicker(s) => {
+            s.cwd = iso_path.parent().unwrap().to_path_buf();
+            s.reload();
+            s.selected = s
+                .entries
+                .iter()
+                .position(|e| e.path == iso_path)
+                .expect("arquivo ISO não encontrado na listagem do seletor");
+        }
+        other => panic!("esperava FilePicker (seletor Yazi) ao abrir o flasher, obteve {other:?}"),
+    }
+    app.dispatch(Action::Enter, tx);
+}
+
 #[test]
 fn flasher_rejects_iso_larger_than_target_capacity() {
-    let iso = tempfile::NamedTempFile::new().unwrap();
+    let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0u8; 4096]).unwrap();
 
     // Alvo com capacidade menor que o arquivo (4096 bytes) força o erro de
     // tamanho antes mesmo de qualquer I/O de gravação.
     let mut app = app_with_usb_target("/dev/sdz", 1024);
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageFlasherOpen, &tx);
-
-    type_path(&mut app, &tx, iso.path().to_str().unwrap());
-    app.dispatch(Action::Enter, &tx);
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path());
 
     match &app.storage_modal {
         StorageModal::Flasher(s) => match &s.stage {
@@ -642,15 +664,12 @@ fn flasher_rejects_iso_larger_than_target_capacity() {
 
 #[test]
 fn flasher_full_wizard_reaches_flashing_only_after_typed_confirmation_matches() {
-    let iso = tempfile::NamedTempFile::new().unwrap();
+    let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0xABu8; 4096]).unwrap();
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageFlasherOpen, &tx);
-
-    type_path(&mut app, &tx, iso.path().to_str().unwrap());
-    app.dispatch(Action::Enter, &tx); // SelectIso -> Ready
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path()); // seletor -> Ready
     match &app.storage_modal {
         StorageModal::Flasher(s) => assert!(matches!(s.stage, FlasherStage::Ready { .. })),
         other => panic!("esperava Ready, obteve {other:?}"),
@@ -693,14 +712,12 @@ fn flasher_full_wizard_reaches_flashing_only_after_typed_confirmation_matches() 
 
 #[test]
 fn flasher_esc_during_flash_sends_cancel_and_closes_modal() {
-    let iso = tempfile::NamedTempFile::new().unwrap();
+    let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0xABu8; 4096]).unwrap();
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageFlasherOpen, &tx);
-    type_path(&mut app, &tx, iso.path().to_str().unwrap());
-    app.dispatch(Action::Enter, &tx); // -> Ready
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path()); // -> Ready
     app.dispatch(Action::Enter, &tx); // -> Confirm1
     app.dispatch(Action::Enter, &tx); // -> Confirm2
     type_path(&mut app, &tx, "/dev/sdz");
@@ -720,14 +737,12 @@ fn flasher_esc_during_flash_sends_cancel_and_closes_modal() {
 
 #[test]
 fn flash_progress_event_updates_flashing_stage_fields() {
-    let iso = tempfile::NamedTempFile::new().unwrap();
+    let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0xABu8; 4096]).unwrap();
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageFlasherOpen, &tx);
-    type_path(&mut app, &tx, iso.path().to_str().unwrap());
-    app.dispatch(Action::Enter, &tx);
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path());
     app.dispatch(Action::Enter, &tx);
     app.dispatch(Action::Enter, &tx);
     type_path(&mut app, &tx, "/dev/sdz");
@@ -761,14 +776,12 @@ fn flash_progress_event_updates_flashing_stage_fields() {
 
 #[test]
 fn flash_done_event_transitions_to_done_stage_with_result() {
-    let iso = tempfile::NamedTempFile::new().unwrap();
+    let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0xABu8; 4096]).unwrap();
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageFlasherOpen, &tx);
-    type_path(&mut app, &tx, iso.path().to_str().unwrap());
-    app.dispatch(Action::Enter, &tx);
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path());
     app.dispatch(Action::Enter, &tx);
     app.dispatch(Action::Enter, &tx);
     type_path(&mut app, &tx, "/dev/sdz");
