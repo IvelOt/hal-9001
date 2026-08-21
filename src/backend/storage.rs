@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use sysinfo::Disks;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
@@ -555,7 +555,12 @@ async fn eject(conn: &Connection, path: &str) -> anyhow::Result<()> {
 /// Formata o bloco em `path` (drive ou partição) com `fs_type` (`vfat`,
 /// `exfat`, `ext4`, `ntfs`, `btrfs`) via `Block.Format` do UDisks2, que
 /// encapsula o `mkfs.*` correspondente.
-async fn format_block(conn: &Connection, path: &str, fs_type: &str, label: &str) -> anyhow::Result<()> {
+async fn format_block(
+    conn: &Connection,
+    path: &str,
+    fs_type: &str,
+    label: &str,
+) -> anyhow::Result<()> {
     let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     opts.insert("label", zbus::zvariant::Value::from(label));
     opts.insert("update-partition-type", zbus::zvariant::Value::from(true));
@@ -695,6 +700,114 @@ async fn flash_inner(
         eta_secs: 0,
     });
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Ventoy — instalação via `scripts/ventoy.sh` (Gadget/Script)
+// ---------------------------------------------------------------------------
+
+/// Resolve o caminho do `scripts/ventoy.sh`, na ordem: `$HAL9001_VENTOY_SCRIPT`
+/// (override explícito), diretório do binário em execução, e — apenas em
+/// builds de desenvolvimento — o diretório-fonte do crate.
+fn resolve_ventoy_script_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("HAL9001_VENTOY_SCRIPT") {
+        let p = std::path::PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("scripts/ventoy.sh");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    for prefix in ["/usr/local/share/hal9001", "/usr/share/hal9001"] {
+        let candidate = std::path::Path::new(prefix).join("scripts/ventoy.sh");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let candidate = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ventoy.sh");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Executa `scripts/ventoy.sh <dev_node>`, repassando cada linha de saída
+/// (stdout/stderr) como progresso e emitindo o resultado final ao término.
+async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx) {
+    let Some(script) = resolve_ventoy_script_path() else {
+        let _ = tx.send(AppEvent::StorageVentoyDone {
+            device_id,
+            result: Err("scripts/ventoy.sh não encontrado".to_string()),
+        });
+        return;
+    };
+
+    let mut child = match tokio::process::Command::new("bash")
+        .arg(&script)
+        .arg(&dev_node)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(AppEvent::StorageVentoyDone {
+                device_id,
+                result: Err(format!("falha ao iniciar ventoy.sh: {e}")),
+            });
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let tx_out = tx.clone();
+    let id_out = device_id.clone();
+    let out_task = tokio::spawn(async move {
+        if let Some(stdout) = stdout {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx_out.send(AppEvent::StorageVentoyProgress {
+                    device_id: id_out.clone(),
+                    line,
+                });
+            }
+        }
+    });
+    let tx_err = tx.clone();
+    let id_err = device_id.clone();
+    let err_task = tokio::spawn(async move {
+        if let Some(stderr) = stderr {
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = tx_err.send(AppEvent::StorageVentoyProgress {
+                    device_id: id_err.clone(),
+                    line,
+                });
+            }
+        }
+    });
+
+    let status = child.wait().await;
+    let _ = out_task.await;
+    let _ = err_task.await;
+
+    let result = match status {
+        Ok(st) if st.success() => Ok("Ventoy instalado com sucesso".to_string()),
+        Ok(st) => Err(format!("ventoy.sh terminou com código {st}")),
+        Err(e) => Err(format!("falha ao executar ventoy.sh: {e}")),
+    };
+    let _ = tx.send(AppEvent::StorageVentoyDone { device_id, result });
 }
 
 async fn flash_task(
@@ -866,7 +979,10 @@ async fn handle_action(
             let txc = tx.clone();
             tokio::spawn(checksum_task(iso_path, txc));
         }
-        Action::StorageFlashIso { device_id, iso_path } => {
+        Action::StorageFlashIso {
+            device_id,
+            iso_path,
+        } => {
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
@@ -897,6 +1013,31 @@ async fn handle_action(
             if let Some(cancel) = flash_cancels.get(&device_id) {
                 cancel.store(true, Ordering::Relaxed);
             }
+        }
+        Action::StorageVentoyInstall { device_id } => {
+            let id = DeviceId(device_id.clone());
+            let Some(snap) = snapshot else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            if snap.is_system_target(&id) {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "instalação do Ventoy em disco de sistema recusada");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                return;
+            }
+            let Some(dev_node) = snap.drive_dev_node(&id) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo alvo não encontrado",
+                )));
+                return;
+            };
+            tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "instalação do Ventoy solicitada");
+            let txc = tx.clone();
+            tokio::spawn(ventoy_task(device_id, dev_node, txc));
         }
         _ => {}
     }

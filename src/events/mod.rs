@@ -83,6 +83,13 @@ pub enum AppEvent {
         device_id: String,
         result: Result<String, String>,
     },
+    /// Uma linha de saída (stdout/stderr) do `scripts/ventoy.sh` em execução.
+    StorageVentoyProgress { device_id: String, line: String },
+    /// Conclusão (sucesso ou falha) da instalação do Ventoy.
+    StorageVentoyDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
 }
 
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
@@ -150,9 +157,22 @@ pub enum Action {
     StorageChecksumIso(String),
     /// Inicia a gravação em streaming do `.iso` no dispositivo de bloco
     /// identificado. Rejeitada quando o alvo é um disco de sistema.
-    StorageFlashIso { device_id: String, iso_path: String },
+    StorageFlashIso {
+        device_id: String,
+        iso_path: String,
+    },
     /// Cancela uma gravação de ISO em curso para o dispositivo identificado.
-    StorageFlashCancel { device_id: String },
+    StorageFlashCancel {
+        device_id: String,
+    },
+    /// Tecla `V`: abre o modal de instalação do Ventoy para o drive selecionado.
+    StorageVentoyOpen,
+    /// Instala o Ventoy no `device_id` informado via `scripts/ventoy.sh`.
+    /// Rejeitada pelo backend (e pelo `App`) quando o alvo é um disco de
+    /// sistema (ver `is_system_disk`).
+    StorageVentoyInstall {
+        device_id: String,
+    },
     /// Caractere digitado num campo de texto de um modal de storage (rótulo
     /// do volume, caminho da ISO, confirmação digitada).
     StorageModalChar(char),

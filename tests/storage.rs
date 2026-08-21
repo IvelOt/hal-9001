@@ -4,7 +4,7 @@
 //! cálculo de velocidade/ETA e a invariante de segurança contra discos de
 //! sistema.
 
-use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab};
+use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
     compute_speed_eta, is_system_disk, parse_proc_mounts, parse_proc_swaps, BusType, DriveInfo,
     FsKind, PartitionInfo, StorageRow, StorageSnapshot,
@@ -315,7 +315,10 @@ fn compute_speed_eta_computes_rate_and_remaining_time() {
     let total = 20 * 1024 * 1024;
     let written = 4 * 1024 * 1024;
     let (speed, eta) = compute_speed_eta(window_bytes, 1.0, written, total);
-    assert!((speed - 4.0).abs() < 0.01, "esperava ~4.0 MB/s, obteve {speed}");
+    assert!(
+        (speed - 4.0).abs() < 0.01,
+        "esperava ~4.0 MB/s, obteve {speed}"
+    );
     assert_eq!(eta, 4);
 }
 
@@ -389,7 +392,7 @@ fn format_modal_opens_for_non_system_drive_defaulting_to_pendrive_label() {
 }
 
 #[test]
-fn format_modal_cycles_fs_edits_label_and_sends_action_on_confirm() {
+fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
@@ -407,8 +410,8 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_confirm() {
         app.dispatch(Action::StorageModalChar(c), &tx);
     }
 
-    // Avança para o campo de confirmação e confirma.
-    app.dispatch(Action::Enter, &tx);
+    // Um único `Enter`, sem navegar até o botão de confirmação, já dispara a
+    // formatação e fecha o modal (correção do Enter no modal de formatar).
     app.dispatch(Action::Enter, &tx);
 
     assert!(matches!(app.storage_modal, StorageModal::None));
@@ -424,6 +427,62 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_confirm() {
         }
         other => panic!("esperava StorageFormat, obteve {other:?}"),
     }
+}
+
+#[test]
+fn format_modal_enter_on_fs_field_formats_immediately() {
+    // `Enter` deve disparar a formatação imediatamente para o filesystem e
+    // label selecionados, não importa qual campo esteja com foco no momento
+    // (aqui: logo na abertura, com foco ainda no seletor de FS).
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &tx);
+
+    match &app.storage_modal {
+        StorageModal::Format(s) => assert_eq!(s.field, FormatField::Fs),
+        other => panic!("esperava modal de formatação, obteve {other:?}"),
+    }
+
+    app.dispatch(Action::Enter, &tx);
+
+    assert!(matches!(app.storage_modal, StorageModal::None));
+    match rx.try_recv() {
+        Ok(Action::StorageFormat {
+            device_id,
+            fs_type,
+            label,
+        }) => {
+            assert_eq!(device_id, "/drives/usb-target");
+            assert_eq!(fs_type, "vfat");
+            assert_eq!(label, "PENDRIVE");
+        }
+        other => panic!("esperava StorageFormat, obteve {other:?}"),
+    }
+    // Toast de execução exibido ao disparar a formatação.
+    assert!(app.toast.is_some());
+}
+
+#[test]
+fn format_modal_tab_and_shift_tab_cycle_field_focus() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &tx);
+
+    let field_of = |app: &App| match &app.storage_modal {
+        StorageModal::Format(s) => s.field,
+        other => panic!("esperava modal de formatação, obteve {other:?}"),
+    };
+
+    assert_eq!(field_of(&app), FormatField::Fs);
+    app.dispatch(Action::NextTab, &tx); // Tab
+    assert_eq!(field_of(&app), FormatField::Label);
+    app.dispatch(Action::NextTab, &tx);
+    assert_eq!(field_of(&app), FormatField::Confirm);
+    app.dispatch(Action::NextTab, &tx); // cicla de volta
+    assert_eq!(field_of(&app), FormatField::Fs);
+
+    app.dispatch(Action::PrevTab, &tx); // Shift-Tab: volta ciclando
+    assert_eq!(field_of(&app), FormatField::Confirm);
 }
 
 #[test]
@@ -527,7 +586,10 @@ fn flasher_full_wizard_reaches_flashing_only_after_typed_confirmation_matches() 
     app.dispatch(Action::Enter, &tx);
 
     match rx.try_recv() {
-        Ok(Action::StorageFlashIso { device_id, iso_path }) => {
+        Ok(Action::StorageFlashIso {
+            device_id,
+            iso_path,
+        }) => {
             assert_eq!(device_id, "/drives/usb-target");
             assert_eq!(iso_path, iso.path().to_str().unwrap());
         }
@@ -677,4 +739,212 @@ fn render_format_and_flasher_modals_without_panic() {
 
     app.dispatch(Action::StorageFlasherOpen, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Gadget/Script Ventoy — modal e ação integrada.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ventoy_open_is_refused_for_system_disk_and_no_modal_opens() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
+    app.storage_selected = 0; // drive de sistema.
+
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+
+    assert!(matches!(app.storage_modal, StorageModal::None));
+    assert!(app.toast.is_some());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn ventoy_open_starts_at_confirm1_for_non_system_drive() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+
+    match &app.storage_modal {
+        StorageModal::Ventoy(s) => {
+            assert_eq!(s.target_dev_node, "/dev/sdz");
+            assert!(matches!(s.stage, VentoyStage::Confirm1));
+        }
+        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
+    }
+}
+
+#[test]
+fn ventoy_wizard_requires_matching_device_confirmation_before_install() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+
+    app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
+
+    // Confirmação digitada incorreta: não deve instalar.
+    for c in "/dev/wrong".chars() {
+        app.dispatch(Action::StorageModalChar(c), &tx);
+    }
+    app.dispatch(Action::Enter, &tx);
+    assert!(
+        rx.try_recv().is_err(),
+        "instalação não deveria ter iniciado"
+    );
+    match &app.storage_modal {
+        StorageModal::Ventoy(s) => assert!(matches!(s.stage, VentoyStage::Confirm2 { .. })),
+        other => panic!("esperava permanecer em Confirm2, obteve {other:?}"),
+    }
+
+    // Limpa e digita o nó correto.
+    for _ in 0.."/dev/wrong".len() {
+        app.dispatch(Action::StorageModalBackspace, &tx);
+    }
+    for c in "/dev/sdz".chars() {
+        app.dispatch(Action::StorageModalChar(c), &tx);
+    }
+    app.dispatch(Action::Enter, &tx);
+
+    match rx.try_recv() {
+        Ok(Action::StorageVentoyInstall { device_id }) => {
+            assert_eq!(device_id, "/drives/usb-target");
+        }
+        other => panic!("esperava StorageVentoyInstall, obteve {other:?}"),
+    }
+    match &app.storage_modal {
+        StorageModal::Ventoy(s) => assert!(matches!(s.stage, VentoyStage::Installing { .. })),
+        other => panic!("esperava Installing, obteve {other:?}"),
+    }
+}
+
+#[test]
+fn ventoy_progress_and_done_events_update_modal_state() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+    app.dispatch(Action::Enter, &tx);
+    for c in "/dev/sdz".chars() {
+        app.dispatch(Action::StorageModalChar(c), &tx);
+    }
+    app.dispatch(Action::Enter, &tx);
+
+    app.handle_event(AppEvent::StorageVentoyProgress {
+        device_id: "/drives/usb-target".to_string(),
+        line: "[ventoy] baixando ventoy-1.0.99-linux.tar.gz...".to_string(),
+    });
+    match &app.storage_modal {
+        StorageModal::Ventoy(s) => match &s.stage {
+            VentoyStage::Installing { log } => assert_eq!(log.len(), 1),
+            other => panic!("esperava Installing, obteve {other:?}"),
+        },
+        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
+    }
+
+    app.handle_event(AppEvent::StorageVentoyDone {
+        device_id: "/drives/usb-target".to_string(),
+        result: Ok("Ventoy instalado com sucesso".to_string()),
+    });
+    match &app.storage_modal {
+        StorageModal::Ventoy(s) => match &s.stage {
+            VentoyStage::Done { ok, .. } => assert!(*ok),
+            other => panic!("esperava Done, obteve {other:?}"),
+        },
+        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
+    }
+}
+
+#[test]
+fn system_disk_never_reachable_for_ventoy_via_app_dispatch() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
+    app.storage_selected = 0; // linha do drive de sistema.
+
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+
+    assert!(matches!(app.storage_modal, StorageModal::None));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn render_ventoy_modal_without_panic() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    app.dispatch(Action::StorageVentoyOpen, &tx);
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+
+    app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Zero Emojis Policy — nenhum caractere emoji em todo o código-fonte.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_emojis_anywhere_in_the_source_tree() {
+    fn is_emoji(c: char) -> bool {
+        let cp = c as u32;
+        matches!(cp,
+            0x1F300..=0x1FAFF // símbolos diversos, emoticons, transporte, suplementares...
+            | 0x2600..=0x27BF   // símbolos diversos e dingbats
+            | 0x1F1E6..=0x1F1FF // letras regionais indicadoras (bandeiras)
+        )
+    }
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders: Vec<String> = Vec::new();
+
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if matches!(name, "target" | ".git") {
+                    continue;
+                }
+                walk(&path, out);
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if matches!(ext, "rs" | "sh" | "toml") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(&manifest_dir.join("src"), &mut files);
+    walk(&manifest_dir.join("tests"), &mut files);
+    walk(&manifest_dir.join("scripts"), &mut files);
+
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (i, line) in text.lines().enumerate() {
+            if line.chars().any(is_emoji) {
+                offenders.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "emojis encontrados no código-fonte (Zero Emojis Policy):\n{}",
+        offenders.join("\n")
+    );
 }

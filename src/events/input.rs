@@ -28,7 +28,12 @@ impl InputStream {
     /// atalhos globais (`m`, `r`, dígitos de aba, etc.) ficam suspensos; em
     /// `text_mode` (campo de caminho de ISO, rótulo ou confirmação digitada),
     /// todo caractere vira `Action::StorageModalChar`.
-    pub async fn next(&mut self, active: Tab, storage_modal_open: bool, text_mode: bool) -> Option<Action> {
+    pub async fn next(
+        &mut self,
+        active: Tab,
+        storage_modal_open: bool,
+        text_mode: bool,
+    ) -> Option<Action> {
         loop {
             match self.inner.next().await {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
@@ -54,7 +59,12 @@ impl Default for InputStream {
 
 /// Keymap global. Teclas não reconhecidas viram [`Action::Raw`] para eventual
 /// repasse ao PTY da aba de terminal.
-fn map_key(key: KeyEvent, active: Tab, storage_modal_open: bool, text_mode: bool) -> Option<Action> {
+fn map_key(
+    key: KeyEvent,
+    active: Tab,
+    storage_modal_open: bool,
+    text_mode: bool,
+) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     // Ctrl+C sempre encerra, mesmo dentro de um campo de texto de modal.
@@ -74,6 +84,10 @@ fn map_key(key: KeyEvent, active: Tab, storage_modal_open: bool, text_mode: bool
             KeyCode::Esc => Some(Action::ToggleConfig),
             KeyCode::Up => Some(Action::Up),
             KeyCode::Down => Some(Action::Down),
+            // `Tab`/`Shift-Tab` alternam o foco mesmo com um campo de texto
+            // (ex.: rótulo do volume) ativo — não digitam caractere algum.
+            KeyCode::Tab => Some(Action::NextTab),
+            KeyCode::BackTab => Some(Action::PrevTab),
             _ => None,
         };
     }
@@ -89,9 +103,8 @@ fn map_key(key: KeyEvent, active: Tab, storage_modal_open: bool, text_mode: bool
             KeyCode::Char('g') | KeyCode::Char('b') if !storage_modal_open => {
                 return Some(Action::StorageFlasherOpen)
             }
-            KeyCode::Char('c') if storage_modal_open => {
-                return Some(Action::StorageModalChar('c'))
-            }
+            KeyCode::Char('V') if !storage_modal_open => return Some(Action::StorageVentoyOpen),
+            KeyCode::Char('c') if storage_modal_open => return Some(Action::StorageModalChar('c')),
             KeyCode::Char('m') if !storage_modal_open => {
                 return Some(Action::StorageMountToggleSelected)
             }

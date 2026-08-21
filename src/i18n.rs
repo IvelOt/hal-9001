@@ -176,8 +176,12 @@ pub struct Messages {
     pub storage_hint_eject: &'static str,
     pub storage_hint_format: &'static str,
     pub storage_hint_iso: &'static str,
+    pub storage_hint_ventoy: &'static str,
     pub storage_hint_refresh: &'static str,
     pub storage_err_system: &'static str,
+    /// Fallback ASCII do rótulo "disco de sistema" quando `icons = false`
+    /// (Zero Emojis Policy: sem emoji, apenas texto).
+    pub storage_tag_system_ascii: &'static str,
 
     // Modal de formatação (Épico G)
     pub storage_format_title: &'static str,
@@ -187,6 +191,19 @@ pub struct Messages {
     pub storage_format_confirm: &'static str,
     pub storage_format_warning: &'static str,
     pub storage_format_hint: &'static str,
+    /// Prefixo do toast emitido ao pressionar `Enter` no modal de
+    /// formatação (dispara `Action::StorageFormat` imediatamente).
+    pub storage_format_started: &'static str,
+
+    // Modal de instalação do Ventoy (Gadget/Script)
+    pub storage_ventoy_title: &'static str,
+    pub storage_ventoy_target_label: &'static str,
+    pub storage_ventoy_confirm1_title: &'static str,
+    pub storage_ventoy_confirm2_title: &'static str,
+    pub storage_ventoy_confirm2_prompt: &'static str,
+    pub storage_ventoy_installing: &'static str,
+    pub storage_ventoy_success: &'static str,
+    pub storage_ventoy_failed: &'static str,
 
     // Modal do ISO Flasher (Épico H)
     pub storage_flash_title: &'static str,
@@ -212,7 +229,7 @@ pub struct Messages {
 }
 
 // ---------------------------------------------------------------------------
-// 🇧🇷 Português do Brasil (Padrão)
+// pt-BR — Português do Brasil (Padrão)
 // ---------------------------------------------------------------------------
 pub static MESSAGES_PT_BR: Messages = Messages {
     app_title_suffix: "Assistente de Sistema",
@@ -300,15 +317,17 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_label_usage: "Uso",
     storage_yes: "sim",
     storage_no: "não",
-    storage_tag_system: "🔒 SISTEMA",
+    storage_tag_system: "SISTEMA",
     storage_tag_usb: "USB",
     storage_hint_nav: "[j/k] navegar",
     storage_hint_mount: "[m] Montar/Desmontar",
     storage_hint_eject: "[e] Ejetar",
     storage_hint_format: "[f] Formatar",
     storage_hint_iso: "[g] Gravar ISO",
+    storage_hint_ventoy: "[V] Ventoy",
     storage_hint_refresh: "[r] Atualizar",
     storage_err_system: "operação bloqueada: disco de sistema",
+    storage_tag_system_ascii: "[SISTEMA]",
 
     storage_format_title: "Formatar Dispositivo",
     storage_format_target: "Alvo",
@@ -316,7 +335,17 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_format_label_label: "Rótulo do Volume",
     storage_format_confirm: "[Enter] Formatar",
     storage_format_warning: "ATENÇÃO: todos os dados do dispositivo serão apagados!",
-    storage_format_hint: "[↑/↓] campo  [←/→] mudar FS  [Enter] avançar  [Esc] cancelar",
+    storage_format_hint: "[↑/↓/Tab] campo  [←/→] mudar FS  [Enter] formatar  [Esc] cancelar",
+    storage_format_started: "Formatação iniciada em",
+
+    storage_ventoy_title: "Instalar Ventoy",
+    storage_ventoy_target_label: "Pendrive alvo",
+    storage_ventoy_confirm1_title: "TODOS OS DADOS DO PENDRIVE SERÃO APAGADOS AO INSTALAR O VENTOY",
+    storage_ventoy_confirm2_title: "Confirmação final — digite o dispositivo abaixo para instalar",
+    storage_ventoy_confirm2_prompt: "Digite o nó do dispositivo para confirmar:",
+    storage_ventoy_installing: "Instalando Ventoy...",
+    storage_ventoy_success: "Ventoy instalado com sucesso",
+    storage_ventoy_failed: "Falha ao instalar o Ventoy",
 
     storage_flash_title: "Gravador de ISO (Pendrive Bootável)",
     storage_flash_target_label: "Pendrive alvo",
@@ -341,7 +370,7 @@ pub static MESSAGES_PT_BR: Messages = Messages {
 };
 
 // ---------------------------------------------------------------------------
-// 🇺🇸 English (US)
+// en-US — English (US)
 // ---------------------------------------------------------------------------
 pub static MESSAGES_EN_US: Messages = Messages {
     app_title_suffix: "System Assistant",
@@ -429,15 +458,17 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_label_usage: "Usage",
     storage_yes: "yes",
     storage_no: "no",
-    storage_tag_system: "🔒 SYSTEM",
+    storage_tag_system: "SYSTEM",
     storage_tag_usb: "USB",
     storage_hint_nav: "[j/k] navigate",
     storage_hint_mount: "[m] Mount/Unmount",
     storage_hint_eject: "[e] Eject",
     storage_hint_format: "[f] Format",
     storage_hint_iso: "[g] Flash ISO",
+    storage_hint_ventoy: "[V] Ventoy",
     storage_hint_refresh: "[r] Refresh",
     storage_err_system: "operation blocked: system disk",
+    storage_tag_system_ascii: "[SYSTEM]",
 
     storage_format_title: "Format Device",
     storage_format_target: "Target",
@@ -445,7 +476,18 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_format_label_label: "Volume Label",
     storage_format_confirm: "[Enter] Format",
     storage_format_warning: "WARNING: all data on this device will be erased!",
-    storage_format_hint: "[up/down] field  [left/right] change FS  [Enter] next  [Esc] cancel",
+    storage_format_hint:
+        "[up/down/Tab] field  [left/right] change FS  [Enter] format  [Esc] cancel",
+    storage_format_started: "Formatting started on",
+
+    storage_ventoy_title: "Install Ventoy",
+    storage_ventoy_target_label: "Target drive",
+    storage_ventoy_confirm1_title: "ALL DATA ON THE DRIVE WILL BE ERASED BY INSTALLING VENTOY",
+    storage_ventoy_confirm2_title: "Final confirmation — type the device below to install",
+    storage_ventoy_confirm2_prompt: "Type the device node to confirm:",
+    storage_ventoy_installing: "Installing Ventoy...",
+    storage_ventoy_success: "Ventoy installed successfully",
+    storage_ventoy_failed: "Failed to install Ventoy",
 
     storage_flash_title: "ISO Flasher (Bootable USB)",
     storage_flash_target_label: "Target drive",
@@ -470,7 +512,7 @@ pub static MESSAGES_EN_US: Messages = Messages {
 };
 
 // ---------------------------------------------------------------------------
-// 🇪🇸 Español
+// es-ES — Español
 // ---------------------------------------------------------------------------
 pub static MESSAGES_ES_ES: Messages = Messages {
     app_title_suffix: "Asistente de Sistema",
@@ -558,15 +600,17 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_label_usage: "Uso",
     storage_yes: "sí",
     storage_no: "no",
-    storage_tag_system: "🔒 SISTEMA",
+    storage_tag_system: "SISTEMA",
     storage_tag_usb: "USB",
     storage_hint_nav: "[j/k] navegar",
     storage_hint_mount: "[m] Montar/Desmontar",
     storage_hint_eject: "[e] Expulsar",
     storage_hint_format: "[f] Formatear",
     storage_hint_iso: "[g] Grabar ISO",
+    storage_hint_ventoy: "[V] Ventoy",
     storage_hint_refresh: "[r] Actualizar",
     storage_err_system: "operación bloqueada: disco de sistema",
+    storage_tag_system_ascii: "[SISTEMA]",
 
     storage_format_title: "Formatear Dispositivo",
     storage_format_target: "Destino",
@@ -574,7 +618,18 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_format_label_label: "Etiqueta del Volumen",
     storage_format_confirm: "[Enter] Formatear",
     storage_format_warning: "ATENCIÓN: ¡todos los datos del dispositivo serán borrados!",
-    storage_format_hint: "[↑/↓] campo  [←/→] cambiar FS  [Enter] avanzar  [Esc] cancelar",
+    storage_format_hint: "[↑/↓/Tab] campo  [←/→] cambiar FS  [Enter] formatear  [Esc] cancelar",
+    storage_format_started: "Formateo iniciado en",
+
+    storage_ventoy_title: "Instalar Ventoy",
+    storage_ventoy_target_label: "Unidad destino",
+    storage_ventoy_confirm1_title: "TODOS LOS DATOS DE LA UNIDAD SERÁN BORRADOS AL INSTALAR VENTOY",
+    storage_ventoy_confirm2_title:
+        "Confirmación final — escriba el dispositivo abajo para instalar",
+    storage_ventoy_confirm2_prompt: "Escriba el nodo del dispositivo para confirmar:",
+    storage_ventoy_installing: "Instalando Ventoy...",
+    storage_ventoy_success: "Ventoy instalado con éxito",
+    storage_ventoy_failed: "Error al instalar Ventoy",
 
     storage_flash_title: "Grabador de ISO (USB Booteable)",
     storage_flash_target_label: "Unidad destino",

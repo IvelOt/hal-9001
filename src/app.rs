@@ -113,6 +113,28 @@ pub struct FlasherModalState {
     pub stage: FlasherStage,
 }
 
+/// Máquina de estados do modal de instalação do Ventoy (Gadget/Script).
+#[derive(Debug, Clone, PartialEq)]
+pub enum VentoyStage {
+    /// Primeira confirmação: apenas aviso + `Enter`/`Esc`.
+    Confirm1,
+    /// Segunda confirmação: usuário deve digitar o nó do dispositivo alvo.
+    Confirm2 { typed: String },
+    /// `scripts/ventoy.sh` em execução; acumula as últimas linhas de saída.
+    Installing { log: Vec<String> },
+    /// Conclusão (sucesso ou falha) da instalação.
+    Done { ok: bool, message: String },
+}
+
+/// Estado do modal de instalação do Ventoy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VentoyModalState {
+    pub device_id: String,
+    pub target_label: String,
+    pub target_dev_node: String,
+    pub stage: VentoyStage,
+}
+
 /// Modal interativo ativo na aba Storage (mutuamente exclusivo).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum StorageModal {
@@ -120,6 +142,7 @@ pub enum StorageModal {
     None,
     Format(FormatModalState),
     Flasher(FlasherModalState),
+    Ventoy(VentoyModalState),
 }
 
 /// Abas do Assistente de Sistema, na ordem da tabbar.
@@ -346,6 +369,36 @@ impl App {
                     }
                 }
             }
+            AppEvent::StorageVentoyProgress { device_id, line } => {
+                if let StorageModal::Ventoy(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        if let VentoyStage::Installing { log } = &mut s.stage {
+                            log.push(line);
+                            // Mantém só as últimas linhas visíveis no modal.
+                            let overflow = log.len().saturating_sub(12);
+                            if overflow > 0 {
+                                log.drain(0..overflow);
+                            }
+                        }
+                    }
+                }
+            }
+            AppEvent::StorageVentoyDone { device_id, result } => {
+                if let StorageModal::Ventoy(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        s.stage = match result {
+                            Ok(msg) => VentoyStage::Done {
+                                ok: true,
+                                message: msg,
+                            },
+                            Err(err) => VentoyStage::Done {
+                                ok: false,
+                                message: err,
+                            },
+                        };
+                    }
+                }
+            }
         }
     }
 
@@ -497,19 +550,38 @@ impl App {
             return;
         };
         if drive.is_system {
-            self.toast = Some((
-                Toast::error(self.lang.messages().storage_err_system),
-                Instant::now(),
-            ));
+            self.toast_system_locked();
             return;
         }
         let _ = action_tx.send(Action::StorageEject(drive.id.clone()));
     }
 
-    /// `true` quando um modal de storage (formatação ou flasher) está aberto
-    /// — usado para desviar a navegação/teclado da aba.
+    /// `true` quando um modal de storage (formatação, flasher ou Ventoy) está
+    /// aberto — usado para desviar a navegação/teclado da aba.
     pub fn storage_modal_open(&self) -> bool {
         !matches!(self.storage_modal, StorageModal::None)
+    }
+
+    /// Ícone de cadeado (trava de segurança) — Nerd Font quando `icons =
+    /// true`, ou o token ASCII `[LOCKED]` caso contrário (Zero Emojis
+    /// Policy: nenhum emoji é usado em toda a base de código).
+    fn lock_tag(&self) -> String {
+        if self.config.ui.icons {
+            "\u{f023} ".to_string()
+        } else {
+            "[LOCKED] ".to_string()
+        }
+    }
+
+    /// Emite o toast de recusa por trava de segurança (disco de sistema),
+    /// prefixado pelo ícone/tag de cadeado.
+    fn toast_system_locked(&mut self) {
+        let msg = format!(
+            "{}{}",
+            self.lock_tag(),
+            self.lang.messages().storage_err_system
+        );
+        self.toast = Some((Toast::error(msg), Instant::now()));
     }
 
     /// `true` quando o campo com foco no modal de storage é um campo de
@@ -523,6 +595,7 @@ impl App {
                 s.stage,
                 FlasherStage::SelectIso { .. } | FlasherStage::Confirm2 { .. }
             ),
+            StorageModal::Ventoy(s) => matches!(s.stage, VentoyStage::Confirm2 { .. }),
             StorageModal::None => false,
         }
     }
@@ -552,10 +625,7 @@ impl App {
             ),
         };
         if is_system {
-            self.toast = Some((
-                Toast::error(self.lang.messages().storage_err_system),
-                Instant::now(),
-            ));
+            self.toast_system_locked();
             return;
         }
         self.storage_modal = StorageModal::Format(FormatModalState {
@@ -574,10 +644,7 @@ impl App {
             return;
         };
         if drive.is_system {
-            self.toast = Some((
-                Toast::error(self.lang.messages().storage_err_system),
-                Instant::now(),
-            ));
+            self.toast_system_locked();
             return;
         }
         let target_label = format!("{} {}", drive.vendor, drive.model)
@@ -597,14 +664,36 @@ impl App {
         });
     }
 
-    /// Roteia uma `Action` para o modal de storage ativo (formatação ou
-    /// flasher), retornando o controle ao fechar (`Esc`/conclusão).
+    /// Tecla `V`: abre o modal de instalação do Ventoy para o drive
+    /// selecionado. Recusa discos de sistema (camada 1 da trava).
+    fn storage_ventoy_open(&mut self) {
+        let Some((drive, _)) = self.storage_selection() else {
+            return;
+        };
+        if drive.is_system {
+            self.toast_system_locked();
+            return;
+        }
+        let target_label = format!("{} {}", drive.vendor, drive.model)
+            .trim()
+            .to_string();
+        self.storage_modal = StorageModal::Ventoy(VentoyModalState {
+            device_id: drive.id.0.clone(),
+            target_label,
+            target_dev_node: drive.dev_node.clone(),
+            stage: VentoyStage::Confirm1,
+        });
+    }
+
+    /// Roteia uma `Action` para o modal de storage ativo (formatação,
+    /// flasher ou Ventoy), retornando o controle ao fechar (`Esc`/conclusão).
     fn dispatch_storage_modal(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
         let modal = std::mem::take(&mut self.storage_modal);
         self.storage_modal = match modal {
             StorageModal::None => StorageModal::None,
             StorageModal::Format(s) => self.dispatch_format_modal(s, action, action_tx),
             StorageModal::Flasher(s) => self.dispatch_flasher_modal(s, action, action_tx),
+            StorageModal::Ventoy(s) => self.dispatch_ventoy_modal(s, action, action_tx),
         };
     }
 
@@ -633,6 +722,22 @@ impl App {
                     FormatField::Confirm => FormatField::Confirm,
                 };
             }
+            // `Tab`/`Shift-Tab` também alternam o foco entre os três campos,
+            // ciclando (ao contrário de `↑`/`↓`, que travam nas pontas).
+            Action::NextTab => {
+                s.field = match s.field {
+                    FormatField::Fs => FormatField::Label,
+                    FormatField::Label => FormatField::Confirm,
+                    FormatField::Confirm => FormatField::Fs,
+                };
+            }
+            Action::PrevTab => {
+                s.field = match s.field {
+                    FormatField::Fs => FormatField::Confirm,
+                    FormatField::Label => FormatField::Fs,
+                    FormatField::Confirm => FormatField::Label,
+                };
+            }
             Action::Left => {
                 if s.field == FormatField::Fs {
                     let n = FsChoice::ALL.len();
@@ -655,28 +760,33 @@ impl App {
                     s.label.pop();
                 }
             }
-            Action::Enter => match s.field {
-                FormatField::Fs => {
-                    s.fs_idx = (s.fs_idx + 1) % FsChoice::ALL.len();
-                }
-                FormatField::Label => {
-                    s.field = FormatField::Confirm;
-                }
-                FormatField::Confirm => {
-                    let fs = FsChoice::ALL[s.fs_idx];
-                    let label = if s.label.trim().is_empty() {
-                        "PENDRIVE".to_string()
-                    } else {
-                        s.label.clone()
-                    };
-                    let _ = action_tx.send(Action::StorageFormat {
-                        device_id: s.device_id.clone(),
-                        fs_type: fs.udisks_type().to_string(),
-                        label,
-                    });
-                    return StorageModal::None;
-                }
-            },
+            // `Enter` dispara a formatação imediatamente, em qualquer campo
+            // com foco (seletor de FS, rótulo ou botão Formatar) — não é
+            // mais necessário navegar até o botão de confirmação primeiro.
+            Action::Enter => {
+                let fs = FsChoice::ALL[s.fs_idx];
+                let label = if s.label.trim().is_empty() {
+                    "PENDRIVE".to_string()
+                } else {
+                    s.label.clone()
+                };
+                let m = self.lang.messages();
+                self.toast = Some((
+                    Toast::info(format!(
+                        "{} {} ({})",
+                        m.storage_format_started,
+                        s.target_label,
+                        fs.label()
+                    )),
+                    Instant::now(),
+                ));
+                let _ = action_tx.send(Action::StorageFormat {
+                    device_id: s.device_id.clone(),
+                    fs_type: fs.udisks_type().to_string(),
+                    label,
+                });
+                return StorageModal::None;
+            }
             _ => {}
         }
         StorageModal::Format(s)
@@ -762,10 +872,8 @@ impl App {
                             eta_secs: 0,
                         };
                     } else {
-                        self.toast = Some((
-                            Toast::error(m.storage_flash_err_mismatch),
-                            Instant::now(),
-                        ));
+                        self.toast =
+                            Some((Toast::error(m.storage_flash_err_mismatch), Instant::now()));
                     }
                 }
                 _ => {}
@@ -779,6 +887,60 @@ impl App {
             }
         }
         StorageModal::Flasher(s)
+    }
+
+    fn dispatch_ventoy_modal(
+        &mut self,
+        mut s: VentoyModalState,
+        action: Action,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        if matches!(action, Action::Quit) {
+            self.should_quit = true;
+            return StorageModal::Ventoy(s);
+        }
+        // `Esc`: fecha o modal. A instalação (se já iniciada) continua em
+        // segundo plano no backend e reporta seu resultado via toast.
+        if matches!(action, Action::ToggleConfig) {
+            return StorageModal::None;
+        }
+
+        let m = self.lang.messages();
+        match &mut s.stage {
+            VentoyStage::Confirm1 => {
+                if matches!(action, Action::Enter) {
+                    s.stage = VentoyStage::Confirm2 {
+                        typed: String::new(),
+                    };
+                }
+            }
+            VentoyStage::Confirm2 { typed } => match action {
+                Action::StorageModalChar(c) if !c.is_control() => typed.push(c),
+                Action::StorageModalBackspace => {
+                    typed.pop();
+                }
+                Action::Enter => {
+                    if typed.trim() == s.target_dev_node {
+                        let _ = action_tx.send(Action::StorageVentoyInstall {
+                            device_id: s.device_id.clone(),
+                        });
+                        s.stage = VentoyStage::Installing { log: Vec::new() };
+                    } else {
+                        self.toast =
+                            Some((Toast::error(m.storage_flash_err_mismatch), Instant::now()));
+                    }
+                }
+                _ => {}
+            },
+            // Progresso chega via `AppEvent::StorageVentoyProgress`/`Done`.
+            VentoyStage::Installing { .. } => {}
+            VentoyStage::Done { .. } => {
+                if matches!(action, Action::Enter) {
+                    return StorageModal::None;
+                }
+            }
+        }
+        StorageModal::Ventoy(s)
     }
 
     /// Salva a configuração atual em disco e notifica via toast.
@@ -886,6 +1048,7 @@ impl App {
             Action::StorageEjectSelected => self.storage_eject_selected(action_tx),
             Action::StorageFormatOpen => self.storage_format_open(),
             Action::StorageFlasherOpen => self.storage_flasher_open(),
+            Action::StorageVentoyOpen => self.storage_ventoy_open(),
             Action::StorageMount(_)
             | Action::StorageUnmount(_)
             | Action::StorageEject(_)
@@ -893,7 +1056,8 @@ impl App {
             | Action::StorageFormat { .. }
             | Action::StorageChecksumIso(_)
             | Action::StorageFlashIso { .. }
-            | Action::StorageFlashCancel { .. } => {
+            | Action::StorageFlashCancel { .. }
+            | Action::StorageVentoyInstall { .. } => {
                 // Já totalmente formadas (com DeviceId/paths resolvidos);
                 // repassa direto ao backend de storage.
                 let _ = action_tx.send(action);

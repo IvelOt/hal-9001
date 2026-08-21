@@ -8,6 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{
     App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice, StorageModal,
+    VentoyModalState, VentoyStage,
 };
 use crate::backend::storage::{BusType, DriveInfo, PartitionInfo, StorageRow};
 
@@ -28,6 +29,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 app.lang.messages().storage_hint_eject,
                 app.lang.messages().storage_hint_format,
                 app.lang.messages().storage_hint_iso,
+                app.lang.messages().storage_hint_ventoy,
             ],
         );
         return;
@@ -61,18 +63,33 @@ fn icon(app: &App, nerd: &str, ascii: &str) -> String {
     }
 }
 
+/// Ícone do drive — Nerd Font `\u{f287}` (USB) / `\u{f0a0}` (Disco/SSD/HDD)
+/// quando `icons = true`, fallback ASCII limpo caso contrário (Zero Emojis
+/// Policy: nenhum emoji é usado em toda a base de código).
 fn drive_icon(app: &App, drive: &DriveInfo) -> String {
     if drive.bus == BusType::Usb || drive.removable {
-        icon(app, "󰇄", "[USB]")
+        icon(app, "\u{f287}", "[USB]")
     } else if drive.rotational {
-        icon(app, "", "[HDD]")
+        icon(app, "\u{f0a0}", "[HDD]")
     } else {
-        icon(app, "󰋊", "[SSD]")
+        icon(app, "\u{f0a0}", "[SSD]")
     }
 }
 
 fn partition_icon(app: &App) -> String {
-    icon(app, "", "-")
+    icon(app, "\u{f0a0}", "-")
+}
+
+/// Tag "disco de sistema" — Nerd Font de cadeado `\u{f023}` + palavra
+/// traduzida quando `icons = true`, ou o token ASCII `[SISTEMA]`/`[SYSTEM]`
+/// quando `icons = false`.
+fn system_tag(app: &App) -> String {
+    let m = app.lang.messages();
+    if app.config.ui.icons {
+        format!("\u{f023} {}", m.storage_tag_system)
+    } else {
+        m.storage_tag_system_ascii.to_string()
+    }
 }
 
 fn draw_tree(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
@@ -145,7 +162,7 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
     ];
     if drive.is_system {
         spans.push(Span::styled(
-            format!("  {}", m.storage_tag_system),
+            format!("  {}", system_tag(app)),
             Style::default().fg(pal.err),
         ));
     } else if drive.bus == BusType::Usb || drive.removable {
@@ -164,7 +181,6 @@ fn partition_line<'a>(
     partition: &PartitionInfo,
     selected: bool,
 ) -> Line<'a> {
-    let m = app.lang.messages();
     let style = row_style(pal, selected);
     let label = if partition.label.is_empty() {
         partition.dev_node.clone()
@@ -196,7 +212,7 @@ fn partition_line<'a>(
     }
     if partition.is_system {
         spans.push(Span::styled(
-            format!(" {}", m.storage_tag_system),
+            format!(" {}", system_tag(app)),
             Style::default().fg(pal.err),
         ));
     }
@@ -235,7 +251,7 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             lines.push(kv(m.storage_label_size, human_bytes(drive.size), pal));
             if drive.is_system {
                 lines.push(Line::from(Span::styled(
-                    m.storage_tag_system,
+                    system_tag(app),
                     Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
                 )));
             }
@@ -300,6 +316,10 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             format!("{}  ", m.storage_hint_iso),
             Style::default().fg(pal.dim),
         ),
+        Span::styled(
+            format!("{}  ", m.storage_hint_ventoy),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(m.storage_hint_refresh, Style::default().fg(pal.dim)),
     ]));
 
@@ -326,6 +346,7 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     match &app.storage_modal {
         StorageModal::Format(s) => draw_format_modal(app, pal, f, s),
         StorageModal::Flasher(s) => draw_flasher_modal(app, pal, f, s),
+        StorageModal::Ventoy(s) => draw_ventoy_modal(app, pal, f, s),
         StorageModal::None => {}
     }
 }
@@ -571,13 +592,102 @@ fn draw_flasher_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FlasherModalS
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+fn draw_ventoy_modal(app: &App, pal: &Palette, f: &mut Frame, s: &VentoyModalState) {
+    let m = app.lang.messages();
+    let area = super::centered(64, 55, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block(m.storage_ventoy_title, pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![
+        kv(m.storage_ventoy_target_label, &s.target_label, pal),
+        kv(m.storage_label_node, &s.target_dev_node, pal),
+        Line::from(""),
+    ];
+
+    match &s.stage {
+        VentoyStage::Confirm1 => {
+            lines.push(Line::from(Span::styled(
+                m.storage_ventoy_confirm1_title,
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(m.storage_flash_hint_continue, Style::default().fg(pal.dim)),
+                Span::raw("  "),
+                Span::styled(m.storage_flash_hint_cancel, Style::default().fg(pal.dim)),
+            ]));
+        }
+        VentoyStage::Confirm2 { typed } => {
+            lines.push(Line::from(Span::styled(
+                m.storage_ventoy_confirm2_title,
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{}: {}",
+                    m.storage_ventoy_confirm2_prompt, s.target_dev_node
+                ),
+                Style::default().fg(pal.accent),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("{typed}▏"),
+                Style::default().fg(pal.bg).bg(pal.accent),
+            )));
+        }
+        VentoyStage::Installing { log } => {
+            lines.push(Line::from(Span::styled(
+                m.storage_ventoy_installing,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            for line in log {
+                lines.push(Line::from(Span::styled(
+                    line.as_str(),
+                    Style::default().fg(pal.dim),
+                )));
+            }
+        }
+        VentoyStage::Done { ok, message } => {
+            let (color, text) = if *ok {
+                (pal.ok, m.storage_ventoy_success)
+            } else {
+                (pal.err, m.storage_ventoy_failed)
+            };
+            lines.push(Line::from(Span::styled(
+                text,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                message.as_str(),
+                Style::default().fg(pal.dim),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_hint_continue,
+                Style::default().fg(pal.dim),
+            )));
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
     let bar_w = 30usize;
     let filled = (pct.clamp(0.0, 1.0) * bar_w as f32).round() as usize;
     let empty = bar_w.saturating_sub(filled);
     Line::from(vec![
-        Span::styled("█".repeat(filled), Style::default().fg(pal.gauge_color(pct as f64))),
+        Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(pal.gauge_color(pct as f64)),
+        ),
         Span::styled("░".repeat(empty), Style::default().fg(pal.dim)),
-        Span::styled(format!(" {:>3.0}%", pct * 100.0), Style::default().fg(pal.dim)),
+        Span::styled(
+            format!(" {:>3.0}%", pct * 100.0),
+            Style::default().fg(pal.dim),
+        ),
     ])
 }

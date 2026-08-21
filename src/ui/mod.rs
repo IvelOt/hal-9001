@@ -133,7 +133,8 @@ fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
-    let hints = " [1-8/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair ";
+    let hints =
+        " [1-8/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair ";
     let line = Line::from(Span::styled(hints, Style::default().fg(pal.dim)));
     f.render_widget(Paragraph::new(line), area);
 }
@@ -168,9 +169,7 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
         .border_style(Style::default().fg(pal.accent))
         .title(" ? ");
     f.render_widget(
-        Paragraph::new(text)
-            .block(block)
-            .alignment(Alignment::Left),
+        Paragraph::new(text).block(block).alignment(Alignment::Left),
         area,
     );
 }
@@ -207,7 +206,11 @@ pub(crate) fn draw_pending(
     f.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
-    match app.services.get(service_key).and_then(|s| s.degraded.clone()) {
+    match app
+        .services
+        .get(service_key)
+        .and_then(|s| s.degraded.clone())
+    {
         Some(reason) => lines.push(Line::from(vec![
             Span::styled("● ", Style::default().fg(pal.warn)),
             Span::styled(reason, Style::default().fg(pal.warn)),
