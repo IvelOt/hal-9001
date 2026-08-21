@@ -145,6 +145,12 @@ impl PartitionInfo {
 pub struct DriveInfo {
     pub id: DeviceId,
     pub dev_node: String,
+    /// Caminho de objeto D-Bus (`/org/freedesktop/UDisks2/block_devices/sdX`)
+    /// do bloco "raiz" (disco inteiro) deste drive, quando conhecido. Só a
+    /// interface `Block` deste objeto existe — a interface `Block` nunca
+    /// existe no caminho de objeto do `Drive` em si (ver
+    /// [`resolve_block_object_path`]).
+    pub block_path: Option<String>,
     pub model: String,
     pub vendor: String,
     pub size: u64,
@@ -228,6 +234,94 @@ impl StorageSnapshot {
     pub fn drive_by_id<'a>(&'a self, id: &DeviceId) -> Option<&'a DriveInfo> {
         self.drives.iter().find(|d| &d.id == id)
     }
+}
+
+/// Prefixo de caminho de objeto D-Bus de um dispositivo de bloco do UDisks2 —
+/// a única localização onde a interface `org.freedesktop.UDisks2.Block`
+/// realmente existe.
+const BLOCK_DEVICE_PREFIX: &str = "/org/freedesktop/UDisks2/block_devices/";
+/// Prefixo de caminho de objeto D-Bus de um `Drive` do UDisks2 — a interface
+/// `Block` NUNCA existe neste caminho.
+const DRIVE_PREFIX: &str = "/org/freedesktop/UDisks2/drives/";
+
+/// Resolve `target_id` (que pode ser o caminho de objeto de um `Drive` ou já
+/// de um `block_device`) para o caminho de objeto de bloco correto onde a
+/// interface `org.freedesktop.UDisks2.Block` existe de fato.
+///
+/// Esta é a correção central do bug de formatação: `Block.Format` só pode ser
+/// chamado num caminho de `block_devices/...`. Quando o usuário seleciona um
+/// `Drive` (`/org/freedesktop/UDisks2/drives/...`), é preciso localizar o
+/// bloco "raiz" correspondente (o disco inteiro, sem entrada de partição) via
+/// [`DriveInfo::block_path`].
+pub fn resolve_block_object_path(snapshot: &StorageSnapshot, target_id: &DeviceId) -> Option<String> {
+    if target_id.0.starts_with(BLOCK_DEVICE_PREFIX) {
+        return Some(target_id.0.clone());
+    }
+    if target_id.0.starts_with(DRIVE_PREFIX) {
+        return snapshot
+            .drives
+            .iter()
+            .find(|d| &d.id == target_id)
+            .and_then(|d| d.block_path.clone());
+    }
+    None
+}
+
+/// Lista os caminhos de objeto de todas as partições atualmente montadas que
+/// precisam ser desmontadas antes de formatar `target_id`: todas as
+/// partições montadas do drive (quando `target_id` é um `Drive`), ou apenas a
+/// própria partição (quando `target_id` já é uma partição montada).
+fn mounted_partition_paths(snapshot: &StorageSnapshot, target_id: &DeviceId) -> Vec<String> {
+    if let Some(drive) = snapshot.drive_by_id(target_id) {
+        return drive
+            .partitions
+            .iter()
+            .filter(|p| p.is_mounted())
+            .map(|p| p.id.0.clone())
+            .collect();
+    }
+    for drive in &snapshot.drives {
+        if let Some(p) = drive.partitions.iter().find(|p| &p.id == target_id) {
+            if p.is_mounted() {
+                return vec![p.id.0.clone()];
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Binário `mkfs.*` e pacote que o fornece, por tipo de sistema de arquivos —
+/// usado para transformar um erro genérico do UDisks2 ("comando não
+/// encontrado") numa instrução acionável para o usuário.
+fn mkfs_hint(fs_type: &str) -> Option<(&'static str, &'static str)> {
+    match fs_type.trim().to_ascii_lowercase().as_str() {
+        "vfat" | "fat32" | "fat" => Some(("mkfs.vfat", "dosfstools")),
+        "exfat" => Some(("mkfs.exfat", "exfatprogs (ou exfat-utils)")),
+        "ext4" => Some(("mkfs.ext4", "e2fsprogs")),
+        "ext3" => Some(("mkfs.ext3", "e2fsprogs")),
+        "ext2" => Some(("mkfs.ext2", "e2fsprogs")),
+        "ntfs" => Some(("mkfs.ntfs", "ntfs-3g")),
+        "btrfs" => Some(("mkfs.btrfs", "btrfs-progs")),
+        _ => None,
+    }
+}
+
+/// Traduz o erro cru do `Block.Format` (D-Bus) numa mensagem de toast clara.
+/// Quando o erro indica que o `mkfs.*` correspondente não está instalado no
+/// host, devolve uma instrução acionável em vez do erro D-Bus bruto.
+fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
+    let raw = err.to_string();
+    let lower = raw.to_ascii_lowercase();
+    let looks_like_missing_binary = lower.contains("not found")
+        || lower.contains("no such file or directory")
+        || lower.contains("command not found")
+        || lower.contains("failed to execute");
+    if looks_like_missing_binary {
+        if let Some((bin, pkg)) = mkfs_hint(fs_type) {
+            return format!("{bin} ausente — instale {pkg}");
+        }
+    }
+    format!("Falha ao formatar: {raw}")
 }
 
 /// Uma entrada `.iso`/`.img` encontrada na raiz da partição de dados de um
@@ -474,6 +568,7 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         let drive = DriveInfo {
             id: DeviceId(path.as_str().to_string()),
             dev_node: String::new(), // preenchido a partir do bloco raiz, se houver.
+            block_path: None,        // idem.
             model: prop_string(drive_props, "Model").unwrap_or_default(),
             vendor: prop_string(drive_props, "Vendor").unwrap_or_default(),
             size: prop_u64(drive_props, "Size").unwrap_or(0),
@@ -515,6 +610,7 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         let id_type = prop_string(block_props, "IdType").unwrap_or_default();
         if is_whole_disk_block {
             drives[drive_idx].dev_node = dev_node.clone();
+            drives[drive_idx].block_path = Some(path.as_str().to_string());
             if id_type.trim().is_empty() {
                 continue;
             }
@@ -684,6 +780,10 @@ async fn format_block(
     let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     opts.insert("label", zbus::zvariant::Value::from(label));
     opts.insert("update-partition-type", zbus::zvariant::Value::from(true));
+    // Permite que o UDisks2 limpe tabelas de partição/assinaturas
+    // preexistentes (ex.: imagens Ventoy/ISO gravadas via `dd`) antes de
+    // criar o novo filesystem.
+    opts.insert("tear-down", zbus::zvariant::Value::from(true));
     conn.call_method(
         Some(UDISKS_SERVICE),
         path,
@@ -1256,10 +1356,35 @@ async fn handle_action(
                 )));
                 return;
             }
-            tracing::warn!(target: "hal9001::storage", device = %device_id, fs = %fs_type, label = %label, "formatação solicitada");
-            let toast = match format_block(conn, &device_id, &fs_type, &label).await {
+            // `snapshot` está garantidamente `Some` aqui: `is_system_target`
+            // acima já teria bloqueado (fail-closed) se fosse `None`.
+            let Some(snap) = snapshot.as_ref() else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            // Resolve o alvo (que pode ser um `Drive` ou já um
+            // `block_device`) para o caminho de objeto de bloco correto —
+            // `Block.Format` só existe em caminhos `block_devices/...`,
+            // nunca no caminho de objeto do `Drive`.
+            let Some(block_path) = resolve_block_object_path(snap, &id) else {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "bloco de dispositivo não encontrado para formatação");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo de bloco não encontrado para formatação",
+                )));
+                return;
+            };
+            // Desmonta todas as partições montadas do alvo antes de formatar
+            // — o `Block.Format` falha (ou é destrutivo demais) sobre um
+            // dispositivo com filesystems montados.
+            for part_path in mounted_partition_paths(snap, &id) {
+                let _ = unmount(conn, &part_path).await;
+            }
+            tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
+            let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info("Formatação concluída"),
-                Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
+                Err(e) => Toast::error(format_error_message(&fs_type, &e)),
             };
             let _ = tx.send(AppEvent::Toast(toast));
         }

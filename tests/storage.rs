@@ -7,8 +7,8 @@
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, is_iso_or_img, is_system_disk,
-    parse_proc_mounts, parse_proc_swaps, ventoy_data_partition, BusType, DriveInfo, FsKind,
-    PartitionInfo, StorageRow, StorageSnapshot,
+    parse_proc_mounts, parse_proc_swaps, resolve_block_object_path, ventoy_data_partition,
+    BusType, DriveInfo, FsKind, PartitionInfo, StorageRow, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId};
@@ -17,6 +17,7 @@ fn drive(removable: bool, bus: BusType) -> DriveInfo {
     DriveInfo {
         id: DeviceId("/org/freedesktop/UDisks2/drives/test".into()),
         dev_node: "/dev/sda".into(),
+        block_path: Some("/org/freedesktop/UDisks2/block_devices/sda".into()),
         model: "Test Drive".into(),
         vendor: "ACME".into(),
         size: 512 * 1024 * 1024 * 1024,
@@ -354,6 +355,92 @@ fn app_with_usb_target(dev_node: &str, size: u64) -> App {
     ))));
     app.storage_selected = 0; // única linha: o drive USB.
     app
+}
+
+// ---------------------------------------------------------------------------
+// `resolve_block_object_path` — correção do bug D-Bus
+// (org.freedesktop.DBus.Error.UnknownMethod: "No such interface
+// org.freedesktop.UDisks2.Block"): a interface `Block` só existe em
+// caminhos `block_devices/...`, nunca em caminhos `drives/...`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolve_block_object_path_converts_drive_path_to_its_block_device_path() {
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/org/freedesktop/UDisks2/drives/Kingston_1234".into());
+    d.dev_node = "/dev/sdz".into();
+    d.block_path = Some("/org/freedesktop/UDisks2/block_devices/sdz".into());
+    let snap = StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    };
+
+    let resolved = resolve_block_object_path(&snap, &DeviceId(
+        "/org/freedesktop/UDisks2/drives/Kingston_1234".into(),
+    ))
+    .expect("esperava resolver o bloco raiz do drive");
+
+    assert_eq!(resolved, "/org/freedesktop/UDisks2/block_devices/sdz");
+    // Nunca deve devolver o caminho de objeto do próprio Drive: a interface
+    // `Block` não existe lá — chamar `Block.Format` nesse caminho é
+    // exatamente o bug original (UnknownMethod / No such interface).
+    assert!(resolved.starts_with("/org/freedesktop/UDisks2/block_devices/"));
+}
+
+#[test]
+fn resolve_block_object_path_passes_through_an_already_resolved_block_device_path() {
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/org/freedesktop/UDisks2/drives/Kingston_1234".into());
+    d.block_path = Some("/org/freedesktop/UDisks2/block_devices/sdz".into());
+    let part = partition(vec![], false);
+    let part_id = part.id.clone();
+    d.partitions = vec![part];
+    let snap = StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    };
+
+    // Uma partição já é um `block_device`: deve ser usada diretamente, sem
+    // nenhuma tentativa de "resolução" via drive.
+    let resolved = resolve_block_object_path(&snap, &part_id).expect("esperava o próprio caminho");
+    assert_eq!(resolved, part_id.0);
+}
+
+#[test]
+fn resolve_block_object_path_returns_none_for_a_drive_with_unknown_block_path() {
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/org/freedesktop/UDisks2/drives/no_block_known".into());
+    d.block_path = None; // ex.: sysfs incompleto no boot, bloco raiz ainda não visto.
+    let snap = StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    };
+
+    assert_eq!(
+        resolve_block_object_path(
+            &snap,
+            &DeviceId("/org/freedesktop/UDisks2/drives/no_block_known".into())
+        ),
+        None
+    );
+}
+
+#[test]
+fn resolve_block_object_path_never_resolves_a_drive_id_to_itself() {
+    // Invariante central do fix: para QUALQUER drive do snapshot, o caminho
+    // resolvido (quando existe) nunca é o próprio caminho de objeto do
+    // Drive — pois `Block.Format` chamado ali produz exatamente
+    // `UnknownMethod: No such interface org.freedesktop.UDisks2.Block`.
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/org/freedesktop/UDisks2/drives/anything".into());
+    d.block_path = Some("/org/freedesktop/UDisks2/block_devices/sdq".into());
+    let snap = StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d.clone()],
+    };
+
+    let resolved = resolve_block_object_path(&snap, &d.id);
+    assert_ne!(resolved.as_deref(), Some(d.id.0.as_str()));
 }
 
 // ---------------------------------------------------------------------------
