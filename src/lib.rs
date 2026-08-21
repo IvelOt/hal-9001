@@ -43,7 +43,7 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     loop {
         tokio::select! {
             Some(ev) = event_rx.recv() => app.handle_event(ev),
-            Some(action) = input.next() => app.dispatch(action, &action_tx),
+            Some(action) = input.next(app.active) => app.dispatch(action, &action_tx),
             _ = render_tick.tick() => {
                 app.on_tick();
                 terminal.draw(|f| ui::draw(&app, f))?;

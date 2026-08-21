@@ -27,10 +27,16 @@ pub fn spawn_all(config: &Config, tx: EventTx, action_tx: &broadcast::Sender<Act
         action_tx.subscribe(),
     ));
 
-    // Stubs — sobem e registram estado "pendente" (Módulos 2..8).
+    // Serviço com dados reais (Módulo 4).
+    tokio::spawn(storage::run(
+        config.polling.storage_ms,
+        tx.clone(),
+        action_tx.subscribe(),
+    ));
+
+    // Stubs — sobem e registram estado "pendente" (Módulos 2, 3, 5).
     tokio::spawn(network::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(bluetooth::run(tx.clone(), action_tx.subscribe()));
-    tokio::spawn(storage::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(power::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(updates::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(pty::run(tx, action_tx.subscribe()));

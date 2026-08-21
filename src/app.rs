@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
+use crate::backend::storage::{StorageRow, StorageSnapshot};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
@@ -102,6 +103,12 @@ pub struct App {
     /// Último snapshot de sistema.
     pub system: Option<SystemSnapshot>,
 
+    /// Último snapshot da árvore de discos/partições (Módulo 4).
+    pub storage: Option<StorageSnapshot>,
+    /// Linha selecionada na árvore achatada da aba Storage (ver
+    /// `StorageSnapshot::rows`).
+    pub storage_selected: usize,
+
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
@@ -131,6 +138,8 @@ impl App {
             detailed_overview: false,
             selection: [0; 8],
             system: None,
+            storage: None,
+            storage_selected: 0,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -144,9 +153,7 @@ impl App {
 
     /// Chamado a cada frame: gerencia transições temporais.
     pub fn on_tick(&mut self) {
-        if self.phase == Phase::Splash
-            && self.elapsed_ms() as u64 >= self.config.splash.min_ms
-        {
+        if self.phase == Phase::Splash && self.elapsed_ms() as u64 >= self.config.splash.min_ms {
             self.phase = Phase::Running;
         }
         // Expira toast após 4s.
@@ -161,10 +168,15 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::System(snap) => self.system = Some(*snap),
+            AppEvent::Storage(snap) => self.storage = Some(*snap),
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
             AppEvent::ServiceDegraded { name, reason } => {
-                self.services
-                    .insert(name, ServiceStatus { degraded: Some(reason) });
+                self.services.insert(
+                    name,
+                    ServiceStatus {
+                        degraded: Some(reason),
+                    },
+                );
             }
         }
     }
@@ -264,6 +276,68 @@ impl App {
         }
     }
 
+    /// Linha atualmente selecionada na árvore da aba Storage, já clampeada ao
+    /// tamanho da lista (evita índice fora dos limites após um refresh que
+    /// encolheu a árvore).
+    pub fn storage_row(&self) -> Option<StorageRow> {
+        let snap = self.storage.as_ref()?;
+        let rows = snap.rows();
+        if rows.is_empty() {
+            return None;
+        }
+        let idx = self.storage_selected.min(rows.len() - 1);
+        rows.get(idx).copied()
+    }
+
+    /// Drive (e partição, se o item selecionado for uma partição) atualmente
+    /// realçados na aba Storage.
+    pub fn storage_selection(
+        &self,
+    ) -> Option<(
+        &crate::backend::storage::DriveInfo,
+        Option<&crate::backend::storage::PartitionInfo>,
+    )> {
+        let snap = self.storage.as_ref()?;
+        match self.storage_row()? {
+            StorageRow::Drive(di) => snap.drive(di).map(|d| (d, None)),
+            StorageRow::Partition(di, pi) => {
+                let drive = snap.drive(di)?;
+                let partition = snap.partition(di, pi)?;
+                Some((drive, Some(partition)))
+            }
+        }
+    }
+
+    /// Tecla `m`: monta a partição selecionada, ou a desmonta se já montada.
+    /// Sem efeito sobre a linha de um drive (sem partição selecionada).
+    fn storage_mount_toggle(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some((_, Some(partition))) = self.storage_selection() else {
+            return;
+        };
+        let action = if partition.is_mounted() {
+            Action::StorageUnmount(partition.id.clone())
+        } else {
+            Action::StorageMount(partition.id.clone())
+        };
+        let _ = action_tx.send(action);
+    }
+
+    /// Tecla `e`: ejeta o drive selecionado (ou o drive-pai de uma partição
+    /// selecionada), com a trava de segurança como primeira camada de defesa.
+    fn storage_eject_selected(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some((drive, _)) = self.storage_selection() else {
+            return;
+        };
+        if drive.is_system {
+            self.toast = Some((
+                Toast::error("operação bloqueada: disco de sistema"),
+                Instant::now(),
+            ));
+            return;
+        }
+        let _ = action_tx.send(Action::StorageEject(drive.id.clone()));
+    }
+
     /// Salva a configuração atual em disco e notifica via toast.
     pub fn save_config(&mut self) {
         match self.config.save() {
@@ -314,12 +388,20 @@ impl App {
             }
             Action::SelectTab(i) => self.active = Tab::from_index(i),
             Action::Up => {
-                let i = self.active.index();
-                self.selection[i] = self.selection[i].saturating_sub(1);
+                if self.active == Tab::Storage {
+                    self.storage_selected = self.storage_selected.saturating_sub(1);
+                } else {
+                    let i = self.active.index();
+                    self.selection[i] = self.selection[i].saturating_sub(1);
+                }
             }
             Action::Down => {
-                let i = self.active.index();
-                self.selection[i] = self.selection[i].saturating_add(1);
+                if self.active == Tab::Storage {
+                    self.storage_selected = self.storage_selected.saturating_add(1);
+                } else {
+                    let i = self.active.index();
+                    self.selection[i] = self.selection[i].saturating_add(1);
+                }
             }
             Action::Left | Action::Right => {}
             Action::ToggleHelp => {
@@ -350,6 +432,16 @@ impl App {
                 let _ = action_tx.send(action);
             }
             Action::Redraw => {}
+            Action::StorageMountToggleSelected => self.storage_mount_toggle(action_tx),
+            Action::StorageEjectSelected => self.storage_eject_selected(action_tx),
+            Action::StorageMount(_)
+            | Action::StorageUnmount(_)
+            | Action::StorageEject(_)
+            | Action::StorageRefresh => {
+                // Já totalmente formadas (com DeviceId resolvido); repassa
+                // direto ao backend de storage.
+                let _ = action_tx.send(action);
+            }
             Action::Raw(_key) => {
                 // Reservado para foco de terminal (aba 8) — repasse ao PTY.
             }

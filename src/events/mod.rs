@@ -7,10 +7,18 @@ pub mod input;
 
 use crossterm::event::KeyEvent;
 
+use crate::backend::storage::StorageSnapshot;
 use crate::backend::system::SystemSnapshot;
 
 /// Sender de eventos usado pelos backends.
 pub type EventTx = tokio::sync::mpsc::UnboundedSender<AppEvent>;
+
+/// Identidade estável de um dispositivo/objeto UDisks2 — o caminho do objeto
+/// D-Bus (ex.: `/org/freedesktop/UDisks2/block_devices/sdb1`). Usado em vez do
+/// nó `/dev/sdX` (que pode trocar entre replugs) para referenciar drives e
+/// partições através dos canais de evento.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceId(pub String);
 
 /// Nível de severidade de um toast/notificação.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,13 +57,13 @@ pub enum AppEvent {
     /// Novo snapshot de sistema (sysinfo). Boxed por ser bem maior que os
     /// demais variantes, evitando inflar o tamanho do enum.
     System(Box<SystemSnapshot>),
+    /// Novo snapshot da árvore de discos/partições (UDisks2). Boxed pelo
+    /// mesmo motivo de `System`.
+    Storage(Box<StorageSnapshot>),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
-    ServiceDegraded {
-        name: &'static str,
-        reason: String,
-    },
+    ServiceDegraded { name: &'static str, reason: String },
 }
 
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
@@ -93,6 +101,20 @@ pub enum Action {
     CyclePowerProfile,
     /// Redesenho solicitado (ex.: resize). Sem efeito de estado.
     Redraw,
+    /// Monta a partição/filesystem identificado (broadcast para o backend).
+    StorageMount(DeviceId),
+    /// Desmonta a partição/filesystem identificado (broadcast para o backend).
+    StorageUnmount(DeviceId),
+    /// Desmonta tudo e ejeta o drive identificado (broadcast para o backend).
+    StorageEject(DeviceId),
+    /// Solicita um refresh imediato da árvore de discos (tecla `r`).
+    StorageRefresh,
+    /// Intenção de tecla (`m`) sobre o item selecionado na aba Storage; o
+    /// `App` resolve a seleção atual e emite `StorageMount`/`StorageUnmount`.
+    StorageMountToggleSelected,
+    /// Intenção de tecla (`e`) sobre o drive selecionado na aba Storage; o
+    /// `App` resolve a seleção atual e emite `StorageEject`.
+    StorageEjectSelected,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }
