@@ -44,6 +44,9 @@ pub fn draw(app: &App, f: &mut Frame) {
     draw_content(app, &pal, f, chunks[1]);
     draw_statusline(app, &pal, f, chunks[2]);
 
+    if app.active == Tab::Storage && app.storage_modal_open() {
+        storage::draw_modal(app, &pal, f);
+    }
     if app.show_help {
         draw_help(app, &pal, f);
     }

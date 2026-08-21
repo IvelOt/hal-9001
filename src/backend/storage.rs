@@ -6,14 +6,24 @@
 //! que impede que discos de sistema virem alvo de operações destrutivas.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use sysinfo::Disks;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
 use crate::events::{Action, AppEvent, DeviceId, EventTx, Toast};
+
+/// Tamanho do buffer de I/O para checksum e gravação de blocos (4 MiB),
+/// conforme especificado no Épico H.
+const IO_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+/// Intervalo mínimo entre emissões de progresso (evita inundar o canal).
+const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
 
 const UDISKS_SERVICE: &str = "org.freedesktop.UDisks2";
 const UDISKS_ROOT: &str = "/org/freedesktop/UDisks2";
@@ -183,6 +193,52 @@ impl StorageSnapshot {
     pub fn partition(&self, drive_idx: usize, part_idx: usize) -> Option<&PartitionInfo> {
         self.drives.get(drive_idx)?.partitions.get(part_idx)
     }
+
+    /// `true` quando `id` identifica um drive ou partição marcados como
+    /// disco de sistema — usado como camada 2/3 da trava de segurança em
+    /// `App::dispatch` e em `handle_action` (revalidação TOCTOU).
+    pub fn is_system_target(&self, id: &DeviceId) -> bool {
+        self.drives.iter().any(|d| &d.id == id && d.is_system)
+            || self
+                .drives
+                .iter()
+                .flat_map(|d| &d.partitions)
+                .any(|p| &p.id == id && p.is_system)
+    }
+
+    /// Nó de dispositivo (`/dev/sdX`) do drive identificado, usado para abrir
+    /// o dispositivo de bloco na gravação de ISO.
+    pub fn drive_dev_node(&self, id: &DeviceId) -> Option<String> {
+        self.drives
+            .iter()
+            .find(|d| &d.id == id)
+            .map(|d| d.dev_node.clone())
+    }
+
+    /// Capacidade total (bytes) do drive identificado.
+    pub fn drive_size(&self, id: &DeviceId) -> Option<u64> {
+        self.drives.iter().find(|d| &d.id == id).map(|d| d.size)
+    }
+}
+
+/// Calcula taxa de transferência (MB/s) e ETA (segundos) a partir dos bytes
+/// transferidos numa janela de tempo curta e do total restante. Função pura,
+/// testável sem I/O real.
+pub fn compute_speed_eta(
+    window_bytes: u64,
+    window_secs: f64,
+    bytes_written: u64,
+    total_bytes: u64,
+) -> (f64, u64) {
+    let secs = window_secs.max(0.001);
+    let speed_mbps = (window_bytes as f64 / 1_048_576.0) / secs;
+    let remaining = total_bytes.saturating_sub(bytes_written);
+    let eta_secs = if speed_mbps > 0.0 {
+        (remaining as f64 / (speed_mbps * 1_048_576.0)).round() as u64
+    } else {
+        0
+    };
+    (speed_mbps, eta_secs)
 }
 
 /// Trava de segurança inegociável: decide se `partition` (pertencente a
@@ -496,6 +552,165 @@ async fn eject(conn: &Connection, path: &str) -> anyhow::Result<()> {
     udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "PowerOff").await
 }
 
+/// Formata o bloco em `path` (drive ou partição) com `fs_type` (`vfat`,
+/// `exfat`, `ext4`, `ntfs`, `btrfs`) via `Block.Format` do UDisks2, que
+/// encapsula o `mkfs.*` correspondente.
+async fn format_block(conn: &Connection, path: &str, fs_type: &str, label: &str) -> anyhow::Result<()> {
+    let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
+    opts.insert("label", zbus::zvariant::Value::from(label));
+    opts.insert("update-partition-type", zbus::zvariant::Value::from(true));
+    conn.call_method(
+        Some(UDISKS_SERVICE),
+        path,
+        Some("org.freedesktop.UDisks2.Block"),
+        "Format",
+        &(fs_type, opts),
+    )
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ISO Flasher — checksum SHA256 e gravação de blocos em streaming (Épico H)
+// ---------------------------------------------------------------------------
+
+/// Lê `iso_path` em blocos de 4 MiB calculando o SHA256, emitindo progresso
+/// throttled a cada ~200ms. Roda inteiramente numa task Tokio — nunca bloqueia
+/// a thread de render.
+async fn checksum_task(iso_path: String, tx: EventTx) {
+    let path_buf = std::path::PathBuf::from(&iso_path);
+    let file = match tokio::fs::File::open(&path_buf).await {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                "Falha ao abrir ISO para checksum: {e}"
+            ))));
+            return;
+        }
+    };
+    let total = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let mut reader = tokio::io::BufReader::with_capacity(IO_BUFFER_SIZE, file);
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; IO_BUFFER_SIZE];
+    let mut read_total: u64 = 0;
+    let mut last_emit = tokio::time::Instant::now();
+
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                    "Falha ao ler ISO: {e}"
+                ))));
+                return;
+            }
+        };
+        hasher.update(&buf[..n]);
+        read_total += n as u64;
+        if total > 0 && last_emit.elapsed() >= PROGRESS_THROTTLE {
+            let pct = (read_total as f32 / total as f32).clamp(0.0, 1.0);
+            let _ = tx.send(AppEvent::StorageChecksumProgress {
+                path: path_buf.clone(),
+                pct,
+            });
+            last_emit = tokio::time::Instant::now();
+        }
+    }
+
+    let sha256 = format!("{:x}", hasher.finalize());
+    let _ = tx.send(AppEvent::StorageChecksumDone {
+        path: path_buf,
+        sha256,
+    });
+}
+
+/// Grava `iso_path` no dispositivo de bloco `dev_node` em blocos de 4 MiB,
+/// emitindo progresso (%, MB/s, ETA) a cada ~200ms. Ao final, garante
+/// `fsync` + `sync()` de kernel antes de reportar sucesso — 100% escrito
+/// **não** é sucesso até o sync retornar (evita a armadilha clássica do
+/// cache de página).
+async fn flash_inner(
+    iso_path: &str,
+    dev_node: &str,
+    cancel: &Arc<AtomicBool>,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    let mut src = tokio::fs::File::open(iso_path).await?;
+    let total_bytes = src.metadata().await?.len();
+    let mut dst = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(dev_node)
+        .await?;
+
+    let mut buf = vec![0u8; IO_BUFFER_SIZE];
+    let mut written: u64 = 0;
+    let mut window_started = tokio::time::Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("gravação cancelada pelo usuário");
+        }
+        let n = src.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        dst.write_all(&buf[..n]).await?;
+        written += n as u64;
+        window_bytes += n as u64;
+
+        if window_started.elapsed() >= PROGRESS_THROTTLE {
+            let (speed_mbps, eta_secs) = compute_speed_eta(
+                window_bytes,
+                window_started.elapsed().as_secs_f64(),
+                written,
+                total_bytes,
+            );
+            let _ = tx.send(AppEvent::StorageFlashProgress {
+                bytes_written: written,
+                total_bytes,
+                speed_mbps,
+                eta_secs,
+            });
+            window_started = tokio::time::Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    // Syncing: fsync do FD + sync() global de kernel — só então o "100%" vira
+    // sucesso de fato (H4).
+    dst.flush().await?;
+    dst.sync_all().await?;
+    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
+    // insegura; apenas força o flush de todos os buffers do kernel.
+    unsafe {
+        libc::sync();
+    }
+
+    let _ = tx.send(AppEvent::StorageFlashProgress {
+        bytes_written: total_bytes,
+        total_bytes,
+        speed_mbps: 0.0,
+        eta_secs: 0,
+    });
+    Ok(())
+}
+
+async fn flash_task(
+    device_id: String,
+    iso_path: String,
+    dev_node: String,
+    cancel: Arc<AtomicBool>,
+    tx: EventTx,
+) {
+    let result = flash_inner(&iso_path, &dev_node, &cancel, &tx)
+        .await
+        .map(|()| "gravação concluída com sucesso".to_string())
+        .map_err(|e| e.to_string());
+    let _ = tx.send(AppEvent::StorageFlashDone { device_id, result });
+}
+
 // ---------------------------------------------------------------------------
 // Task de polling / dispatcher
 // ---------------------------------------------------------------------------
@@ -526,6 +741,8 @@ pub async fn run(
 
     let mut conn: Option<Connection> = Connection::system().await.ok();
     let mut last_snapshot: Option<StorageSnapshot> = None;
+    // Tokens de cancelamento das gravações de ISO em curso, por `device_id`.
+    let mut flash_cancels: HashMap<String, Arc<AtomicBool>> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -552,7 +769,7 @@ pub async fn run(
             res = actions.recv() => match res {
                 Ok(action) => {
                     if let Some(c) = &conn {
-                        handle_action(c, action, &last_snapshot, &tx).await;
+                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels).await;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -570,6 +787,7 @@ async fn handle_action(
     action: Action,
     snapshot: &Option<StorageSnapshot>,
     tx: &EventTx,
+    flash_cancels: &mut HashMap<String, Arc<AtomicBool>>,
 ) {
     match action {
         Action::StorageMount(id) => {
@@ -616,6 +834,69 @@ async fn handle_action(
         Action::StorageRefresh => {
             // O próximo tick já republica o snapshot; nada a fazer aqui além
             // de reservar o braço para clareza do fluxo.
+        }
+        Action::StorageFormat {
+            device_id,
+            fs_type,
+            label,
+        } => {
+            // Camada 3 (TOCTOU): revalida contra o último snapshot conhecido
+            // imediatamente antes de tocar o D-Bus — o alvo pode ter mudado
+            // entre a UI e a execução da ação.
+            let id = DeviceId(device_id.clone());
+            if snapshot
+                .as_ref()
+                .map(|s| s.is_system_target(&id))
+                .unwrap_or(true)
+            {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "formatação de disco de sistema recusada");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                return;
+            }
+            tracing::warn!(target: "hal9001::storage", device = %device_id, fs = %fs_type, label = %label, "formatação solicitada");
+            let toast = match format_block(conn, &device_id, &fs_type, &label).await {
+                Ok(()) => Toast::info("Formatação concluída"),
+                Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
+            };
+            let _ = tx.send(AppEvent::Toast(toast));
+        }
+        Action::StorageChecksumIso(iso_path) => {
+            let txc = tx.clone();
+            tokio::spawn(checksum_task(iso_path, txc));
+        }
+        Action::StorageFlashIso { device_id, iso_path } => {
+            let id = DeviceId(device_id.clone());
+            let Some(snap) = snapshot else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "árvore de discos indisponível",
+                )));
+                return;
+            };
+            if snap.is_system_target(&id) {
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "gravação de ISO em disco de sistema recusada");
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                return;
+            }
+            let Some(dev_node) = snap.drive_dev_node(&id) else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo alvo não encontrado",
+                )));
+                return;
+            };
+            tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, iso = %iso_path, "gravação de ISO solicitada");
+            let cancel = Arc::new(AtomicBool::new(false));
+            flash_cancels.insert(device_id.clone(), cancel.clone());
+            let txc = tx.clone();
+            tokio::spawn(flash_task(device_id, iso_path, dev_node, cancel, txc));
+        }
+        Action::StorageFlashCancel { device_id } => {
+            if let Some(cancel) = flash_cancels.get(&device_id) {
+                cancel.store(true, Ordering::Relaxed);
+            }
         }
         _ => {}
     }

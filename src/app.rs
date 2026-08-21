@@ -3,6 +3,7 @@
 //! `App` é a única fonte da verdade consumida pelo render. A UI é uma função
 //! pura de `&App`.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use tokio::sync::broadcast;
@@ -11,6 +12,115 @@ use crate::backend::storage::{StorageRow, StorageSnapshot};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
+
+/// Sistemas de arquivos ofertados pelo modal de formatação (Épico G).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsChoice {
+    Vfat,
+    Exfat,
+    Ext4,
+    Ntfs,
+    Btrfs,
+}
+
+impl FsChoice {
+    pub const ALL: [FsChoice; 5] = [
+        FsChoice::Vfat,
+        FsChoice::Exfat,
+        FsChoice::Ext4,
+        FsChoice::Ntfs,
+        FsChoice::Btrfs,
+    ];
+
+    /// Valor de `type` esperado por `Block.Format` do UDisks2.
+    pub fn udisks_type(self) -> &'static str {
+        match self {
+            FsChoice::Vfat => "vfat",
+            FsChoice::Exfat => "exfat",
+            FsChoice::Ext4 => "ext4",
+            FsChoice::Ntfs => "ntfs",
+            FsChoice::Btrfs => "btrfs",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FsChoice::Vfat => "FAT32 (vfat)",
+            FsChoice::Exfat => "exFAT",
+            FsChoice::Ext4 => "ext4",
+            FsChoice::Ntfs => "NTFS",
+            FsChoice::Btrfs => "btrfs",
+        }
+    }
+}
+
+/// Campo com foco no modal de formatação.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatField {
+    Fs,
+    Label,
+    Confirm,
+}
+
+/// Estado do modal de formatação (Épico G).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatModalState {
+    pub device_id: String,
+    pub target_label: String,
+    pub fs_idx: usize,
+    pub label: String,
+    pub field: FormatField,
+}
+
+/// Máquina de estados do wizard do ISO Flasher (Épico H, seção 4.1 do plano).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FlasherStage {
+    SelectIso {
+        input: String,
+        error: Option<String>,
+    },
+    Checksumming {
+        pct: f32,
+    },
+    Ready {
+        sha256: Option<String>,
+    },
+    Confirm1,
+    Confirm2 {
+        typed: String,
+    },
+    Flashing {
+        bytes_written: u64,
+        total_bytes: u64,
+        speed_mbps: f64,
+        eta_secs: u64,
+    },
+    Done {
+        ok: bool,
+        message: String,
+    },
+}
+
+/// Estado do modal do ISO Flasher (Épico H).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlasherModalState {
+    pub device_id: String,
+    pub target_label: String,
+    pub target_dev_node: String,
+    pub target_size: u64,
+    pub iso_path: PathBuf,
+    pub iso_size: u64,
+    pub stage: FlasherStage,
+}
+
+/// Modal interativo ativo na aba Storage (mutuamente exclusivo).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum StorageModal {
+    #[default]
+    None,
+    Format(FormatModalState),
+    Flasher(FlasherModalState),
+}
 
 /// Abas do Assistente de Sistema, na ordem da tabbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +218,8 @@ pub struct App {
     /// Linha selecionada na árvore achatada da aba Storage (ver
     /// `StorageSnapshot::rows`).
     pub storage_selected: usize,
+    /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
+    pub storage_modal: StorageModal,
 
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
@@ -140,6 +252,7 @@ impl App {
             system: None,
             storage: None,
             storage_selected: 0,
+            storage_modal: StorageModal::None,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -177,6 +290,61 @@ impl App {
                         degraded: Some(reason),
                     },
                 );
+            }
+            AppEvent::StorageChecksumProgress { path, pct } => {
+                if let StorageModal::Flasher(s) = &mut self.storage_modal {
+                    if s.iso_path == path {
+                        if let FlasherStage::Checksumming { pct: p } = &mut s.stage {
+                            *p = pct;
+                        }
+                    }
+                }
+            }
+            AppEvent::StorageChecksumDone { path, sha256 } => {
+                if let StorageModal::Flasher(s) = &mut self.storage_modal {
+                    if s.iso_path == path {
+                        s.stage = FlasherStage::Ready {
+                            sha256: Some(sha256),
+                        };
+                    }
+                }
+            }
+            AppEvent::StorageFlashProgress {
+                bytes_written,
+                total_bytes,
+                speed_mbps,
+                eta_secs,
+            } => {
+                if let StorageModal::Flasher(s) = &mut self.storage_modal {
+                    if let FlasherStage::Flashing {
+                        bytes_written: bw,
+                        total_bytes: tb,
+                        speed_mbps: sp,
+                        eta_secs: eta,
+                    } = &mut s.stage
+                    {
+                        *bw = bytes_written;
+                        *tb = total_bytes;
+                        *sp = speed_mbps;
+                        *eta = eta_secs;
+                    }
+                }
+            }
+            AppEvent::StorageFlashDone { device_id, result } => {
+                if let StorageModal::Flasher(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        s.stage = match result {
+                            Ok(msg) => FlasherStage::Done {
+                                ok: true,
+                                message: msg,
+                            },
+                            Err(err) => FlasherStage::Done {
+                                ok: false,
+                                message: err,
+                            },
+                        };
+                    }
+                }
             }
         }
     }
@@ -330,12 +498,287 @@ impl App {
         };
         if drive.is_system {
             self.toast = Some((
-                Toast::error("operação bloqueada: disco de sistema"),
+                Toast::error(self.lang.messages().storage_err_system),
                 Instant::now(),
             ));
             return;
         }
         let _ = action_tx.send(Action::StorageEject(drive.id.clone()));
+    }
+
+    /// `true` quando um modal de storage (formatação ou flasher) está aberto
+    /// — usado para desviar a navegação/teclado da aba.
+    pub fn storage_modal_open(&self) -> bool {
+        !matches!(self.storage_modal, StorageModal::None)
+    }
+
+    /// `true` quando o campo com foco no modal de storage é um campo de
+    /// texto livre — o `InputStream` passa a repassar todos os caracteres
+    /// digitados como `Action::StorageModalChar` em vez das teclas de atalho
+    /// globais.
+    pub fn text_input_active(&self) -> bool {
+        match &self.storage_modal {
+            StorageModal::Format(s) => s.field == FormatField::Label,
+            StorageModal::Flasher(s) => matches!(
+                s.stage,
+                FlasherStage::SelectIso { .. } | FlasherStage::Confirm2 { .. }
+            ),
+            StorageModal::None => false,
+        }
+    }
+
+    /// Tecla `f`: abre o modal de formatação para o item selecionado na
+    /// árvore de Storage. Recusa discos de sistema (camada 1 da trava).
+    fn storage_format_open(&mut self) {
+        let Some((drive, partition)) = self.storage_selection() else {
+            return;
+        };
+        let (device_id, target_label, is_system) = match partition {
+            Some(p) => (
+                p.id.0.clone(),
+                if p.label.is_empty() {
+                    p.dev_node.clone()
+                } else {
+                    p.label.clone()
+                },
+                p.is_system,
+            ),
+            None => (
+                drive.id.0.clone(),
+                format!("{} {}", drive.vendor, drive.model)
+                    .trim()
+                    .to_string(),
+                drive.is_system,
+            ),
+        };
+        if is_system {
+            self.toast = Some((
+                Toast::error(self.lang.messages().storage_err_system),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.storage_modal = StorageModal::Format(FormatModalState {
+            device_id,
+            target_label,
+            fs_idx: 0,
+            label: "PENDRIVE".to_string(),
+            field: FormatField::Fs,
+        });
+    }
+
+    /// Tecla `g`/`b`: abre o wizard do ISO Flasher para o drive selecionado.
+    /// Recusa discos de sistema (camada 1 da trava).
+    fn storage_flasher_open(&mut self) {
+        let Some((drive, _)) = self.storage_selection() else {
+            return;
+        };
+        if drive.is_system {
+            self.toast = Some((
+                Toast::error(self.lang.messages().storage_err_system),
+                Instant::now(),
+            ));
+            return;
+        }
+        let target_label = format!("{} {}", drive.vendor, drive.model)
+            .trim()
+            .to_string();
+        self.storage_modal = StorageModal::Flasher(FlasherModalState {
+            device_id: drive.id.0.clone(),
+            target_label,
+            target_dev_node: drive.dev_node.clone(),
+            target_size: drive.size,
+            iso_path: PathBuf::new(),
+            iso_size: 0,
+            stage: FlasherStage::SelectIso {
+                input: String::new(),
+                error: None,
+            },
+        });
+    }
+
+    /// Roteia uma `Action` para o modal de storage ativo (formatação ou
+    /// flasher), retornando o controle ao fechar (`Esc`/conclusão).
+    fn dispatch_storage_modal(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
+        let modal = std::mem::take(&mut self.storage_modal);
+        self.storage_modal = match modal {
+            StorageModal::None => StorageModal::None,
+            StorageModal::Format(s) => self.dispatch_format_modal(s, action, action_tx),
+            StorageModal::Flasher(s) => self.dispatch_flasher_modal(s, action, action_tx),
+        };
+    }
+
+    fn dispatch_format_modal(
+        &mut self,
+        mut s: FormatModalState,
+        action: Action,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        match action {
+            Action::Quit => self.should_quit = true,
+            // `Esc` é mapeado globalmente para `ToggleConfig`; dentro de um
+            // modal de storage, reaproveitamos o sinal para fechar o modal.
+            Action::ToggleConfig => return StorageModal::None,
+            Action::Up => {
+                s.field = match s.field {
+                    FormatField::Label => FormatField::Fs,
+                    FormatField::Confirm => FormatField::Label,
+                    FormatField::Fs => FormatField::Fs,
+                };
+            }
+            Action::Down => {
+                s.field = match s.field {
+                    FormatField::Fs => FormatField::Label,
+                    FormatField::Label => FormatField::Confirm,
+                    FormatField::Confirm => FormatField::Confirm,
+                };
+            }
+            Action::Left => {
+                if s.field == FormatField::Fs {
+                    let n = FsChoice::ALL.len();
+                    s.fs_idx = (s.fs_idx + n - 1) % n;
+                }
+            }
+            Action::Right => {
+                if s.field == FormatField::Fs {
+                    s.fs_idx = (s.fs_idx + 1) % FsChoice::ALL.len();
+                }
+            }
+            Action::StorageModalChar(c) => {
+                if s.field == FormatField::Label && !c.is_control() && s.label.chars().count() < 32
+                {
+                    s.label.push(c);
+                }
+            }
+            Action::StorageModalBackspace => {
+                if s.field == FormatField::Label {
+                    s.label.pop();
+                }
+            }
+            Action::Enter => match s.field {
+                FormatField::Fs => {
+                    s.fs_idx = (s.fs_idx + 1) % FsChoice::ALL.len();
+                }
+                FormatField::Label => {
+                    s.field = FormatField::Confirm;
+                }
+                FormatField::Confirm => {
+                    let fs = FsChoice::ALL[s.fs_idx];
+                    let label = if s.label.trim().is_empty() {
+                        "PENDRIVE".to_string()
+                    } else {
+                        s.label.clone()
+                    };
+                    let _ = action_tx.send(Action::StorageFormat {
+                        device_id: s.device_id.clone(),
+                        fs_type: fs.udisks_type().to_string(),
+                        label,
+                    });
+                    return StorageModal::None;
+                }
+            },
+            _ => {}
+        }
+        StorageModal::Format(s)
+    }
+
+    fn dispatch_flasher_modal(
+        &mut self,
+        mut s: FlasherModalState,
+        action: Action,
+        action_tx: &broadcast::Sender<Action>,
+    ) -> StorageModal {
+        if matches!(action, Action::Quit) {
+            self.should_quit = true;
+            return StorageModal::Flasher(s);
+        }
+        // `Esc`: cancela uma gravação em curso (se houver) e fecha o modal.
+        if matches!(action, Action::ToggleConfig) {
+            if matches!(s.stage, FlasherStage::Flashing { .. }) {
+                let _ = action_tx.send(Action::StorageFlashCancel {
+                    device_id: s.device_id.clone(),
+                });
+            }
+            return StorageModal::None;
+        }
+
+        let m = self.lang.messages();
+        match &mut s.stage {
+            FlasherStage::SelectIso { input, error } => match action {
+                Action::StorageModalChar(c) if !c.is_control() => input.push(c),
+                Action::StorageModalBackspace => {
+                    input.pop();
+                }
+                Action::Enter => match std::fs::metadata(input.trim()) {
+                    Ok(meta) if meta.is_file() && meta.len() > 0 => {
+                        let size = meta.len();
+                        if size > s.target_size {
+                            *error = Some(m.storage_flash_err_too_big.to_string());
+                        } else {
+                            s.iso_path = PathBuf::from(input.trim());
+                            s.iso_size = size;
+                            s.stage = FlasherStage::Ready { sha256: None };
+                        }
+                    }
+                    Ok(_) => *error = Some(m.storage_flash_err_not_file.to_string()),
+                    Err(_) => *error = Some(m.storage_flash_err_not_found.to_string()),
+                },
+                _ => {}
+            },
+            // Aguarda `AppEvent::StorageChecksumProgress`/`Done`; sem input direto.
+            FlasherStage::Checksumming { .. } => {}
+            FlasherStage::Ready { sha256 } => match action {
+                Action::StorageModalChar('c') if sha256.is_none() => {
+                    let _ = action_tx.send(Action::StorageChecksumIso(
+                        s.iso_path.to_string_lossy().to_string(),
+                    ));
+                    s.stage = FlasherStage::Checksumming { pct: 0.0 };
+                }
+                Action::Enter => s.stage = FlasherStage::Confirm1,
+                _ => {}
+            },
+            FlasherStage::Confirm1 => {
+                if matches!(action, Action::Enter) {
+                    s.stage = FlasherStage::Confirm2 {
+                        typed: String::new(),
+                    };
+                }
+            }
+            FlasherStage::Confirm2 { typed } => match action {
+                Action::StorageModalChar(c) if !c.is_control() => typed.push(c),
+                Action::StorageModalBackspace => {
+                    typed.pop();
+                }
+                Action::Enter => {
+                    if typed.trim() == s.target_dev_node {
+                        let _ = action_tx.send(Action::StorageFlashIso {
+                            device_id: s.device_id.clone(),
+                            iso_path: s.iso_path.to_string_lossy().to_string(),
+                        });
+                        s.stage = FlasherStage::Flashing {
+                            bytes_written: 0,
+                            total_bytes: s.iso_size,
+                            speed_mbps: 0.0,
+                            eta_secs: 0,
+                        };
+                    } else {
+                        self.toast = Some((
+                            Toast::error(m.storage_flash_err_mismatch),
+                            Instant::now(),
+                        ));
+                    }
+                }
+                _ => {}
+            },
+            // Progresso chega via `AppEvent::StorageFlashProgress`/`Done`.
+            FlasherStage::Flashing { .. } => {}
+            FlasherStage::Done { .. } => {
+                if matches!(action, Action::Enter) {
+                    return StorageModal::None;
+                }
+            }
+        }
+        StorageModal::Flasher(s)
     }
 
     /// Salva a configuração atual em disco e notifica via toast.
@@ -360,6 +803,13 @@ impl App {
         // Durante a splash, qualquer tecla pula para o dashboard.
         if self.phase == Phase::Splash {
             self.phase = Phase::Running;
+        }
+
+        // Se um modal de storage (formatação/flasher) estiver aberto, captura
+        // a navegação e o input de texto antes de qualquer outro roteamento.
+        if self.storage_modal_open() {
+            self.dispatch_storage_modal(action, action_tx);
+            return;
         }
 
         // Se o modal de configurações estiver aberto, captura a navegação e controles.
@@ -434,14 +884,23 @@ impl App {
             Action::Redraw => {}
             Action::StorageMountToggleSelected => self.storage_mount_toggle(action_tx),
             Action::StorageEjectSelected => self.storage_eject_selected(action_tx),
+            Action::StorageFormatOpen => self.storage_format_open(),
+            Action::StorageFlasherOpen => self.storage_flasher_open(),
             Action::StorageMount(_)
             | Action::StorageUnmount(_)
             | Action::StorageEject(_)
-            | Action::StorageRefresh => {
-                // Já totalmente formadas (com DeviceId resolvido); repassa
-                // direto ao backend de storage.
+            | Action::StorageRefresh
+            | Action::StorageFormat { .. }
+            | Action::StorageChecksumIso(_)
+            | Action::StorageFlashIso { .. }
+            | Action::StorageFlashCancel { .. } => {
+                // Já totalmente formadas (com DeviceId/paths resolvidos);
+                // repassa direto ao backend de storage.
                 let _ = action_tx.send(action);
             }
+            // Sem modal de storage aberto, não há campo de texto para
+            // receber estes caracteres; ignora.
+            Action::StorageModalChar(_) | Action::StorageModalBackspace => {}
             Action::Raw(_key) => {
                 // Reservado para foco de terminal (aba 8) — repasse ao PTY.
             }

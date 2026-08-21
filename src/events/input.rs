@@ -22,11 +22,17 @@ impl InputStream {
     /// Próxima ação, ou `None` quando o stream de terminal encerra. `active`
     /// desambigua teclas que mudam de significado conforme a aba (ex.: `m`
     /// alterna mudo global, mas monta/desmonta na aba Storage).
-    pub async fn next(&mut self, active: Tab) -> Option<Action> {
+    ///
+    /// `storage_modal_open` e `text_mode` desviam o teclado para os modais
+    /// interativos de Storage (formatação/ISO Flasher): com um modal aberto,
+    /// atalhos globais (`m`, `r`, dígitos de aba, etc.) ficam suspensos; em
+    /// `text_mode` (campo de caminho de ISO, rótulo ou confirmação digitada),
+    /// todo caractere vira `Action::StorageModalChar`.
+    pub async fn next(&mut self, active: Tab, storage_modal_open: bool, text_mode: bool) -> Option<Action> {
         loop {
             match self.inner.next().await {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    if let Some(action) = map_key(key, active) {
+                    if let Some(action) = map_key(key, active, storage_modal_open, text_mode) {
                         return Some(action);
                     }
                     // Tecla ignorada; continua aguardando.
@@ -48,16 +54,49 @@ impl Default for InputStream {
 
 /// Keymap global. Teclas não reconhecidas viram [`Action::Raw`] para eventual
 /// repasse ao PTY da aba de terminal.
-fn map_key(key: KeyEvent, active: Tab) -> Option<Action> {
+fn map_key(key: KeyEvent, active: Tab, storage_modal_open: bool, text_mode: bool) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    // Ctrl+C sempre encerra, mesmo dentro de um campo de texto de modal.
+    if ctrl && key.code == KeyCode::Char('c') {
+        return Some(Action::Quit);
+    }
+
+    // Campo de texto ativo num modal de Storage (caminho da ISO, rótulo do
+    // volume, confirmação digitada): repassa caracteres/backspace direto,
+    // suspendendo todos os atalhos globais para não "vazar" letras como `m`,
+    // `r`, dígitos de troca de aba etc. para dentro do texto digitado.
+    if active == Tab::Storage && text_mode {
+        return match key.code {
+            KeyCode::Char(c) => Some(Action::StorageModalChar(c)),
+            KeyCode::Backspace => Some(Action::StorageModalBackspace),
+            KeyCode::Enter => Some(Action::Enter),
+            KeyCode::Esc => Some(Action::ToggleConfig),
+            KeyCode::Up => Some(Action::Up),
+            KeyCode::Down => Some(Action::Down),
+            _ => None,
+        };
+    }
 
     // Aba Storage: `m`/`e`/`r` têm significado próprio (montar/ejetar/refresh
     // da árvore de discos), sobrepondo os atalhos globais de mudo/refresh.
+    // `f`/`g`/`b` abrem os modais de formatação/ISO Flasher; com um modal já
+    // aberto (mas fora de campo de texto), `c` vira o atalho local de
+    // "calcular checksum" do flasher em vez de abrir o modal de config.
     if active == Tab::Storage {
         match key.code {
-            KeyCode::Char('m') => return Some(Action::StorageMountToggleSelected),
-            KeyCode::Char('e') => return Some(Action::StorageEjectSelected),
-            KeyCode::Char('r') => return Some(Action::StorageRefresh),
+            KeyCode::Char('f') if !storage_modal_open => return Some(Action::StorageFormatOpen),
+            KeyCode::Char('g') | KeyCode::Char('b') if !storage_modal_open => {
+                return Some(Action::StorageFlasherOpen)
+            }
+            KeyCode::Char('c') if storage_modal_open => {
+                return Some(Action::StorageModalChar('c'))
+            }
+            KeyCode::Char('m') if !storage_modal_open => {
+                return Some(Action::StorageMountToggleSelected)
+            }
+            KeyCode::Char('e') if !storage_modal_open => return Some(Action::StorageEjectSelected),
+            KeyCode::Char('r') if !storage_modal_open => return Some(Action::StorageRefresh),
             _ => {}
         }
     }

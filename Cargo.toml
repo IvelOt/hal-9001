@@ -32,6 +32,10 @@ sysinfo = "0.32"
 # --- D-Bus (NetworkManager / bluez / UDisks2 / UPower) ---
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
+# --- ISO Flasher (checksum + gravação de blocos) ---
+sha2 = "0.10"
+libc = "0.2"
+
 # --- embedded PTY (Terminal Deck / Yazi) ---
 portable-pty = "0.8"
 

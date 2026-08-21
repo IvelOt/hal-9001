@@ -5,6 +5,8 @@
 
 pub mod input;
 
+use std::path::PathBuf;
+
 use crossterm::event::KeyEvent;
 
 use crate::backend::storage::StorageSnapshot;
@@ -64,6 +66,23 @@ pub enum AppEvent {
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
     ServiceDegraded { name: &'static str, reason: String },
+    /// Progresso do cálculo de SHA256 de uma ISO selecionada no Flasher.
+    StorageChecksumProgress { path: PathBuf, pct: f32 },
+    /// Cálculo de SHA256 da ISO concluído.
+    StorageChecksumDone { path: PathBuf, sha256: String },
+    /// Progresso contínuo da gravação de blocos do ISO Flasher (throttled a
+    /// ~200ms), emitido pela task `flash_task`.
+    StorageFlashProgress {
+        bytes_written: u64,
+        total_bytes: u64,
+        speed_mbps: f64,
+        eta_secs: u64,
+    },
+    /// Conclusão (sucesso ou falha) da gravação de ISO.
+    StorageFlashDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
 }
 
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
@@ -115,6 +134,30 @@ pub enum Action {
     /// Intenção de tecla (`e`) sobre o drive selecionado na aba Storage; o
     /// `App` resolve a seleção atual e emite `StorageEject`.
     StorageEjectSelected,
+    /// Tecla `f`: abre o modal de formatação para o item selecionado.
+    StorageFormatOpen,
+    /// Tecla `g`/`b`: abre o wizard do ISO Flasher para o drive selecionado.
+    StorageFlasherOpen,
+    /// Formata `device_id` com o sistema de arquivos e rótulo informados.
+    /// Rejeitada pelo backend (e pelo `App`) quando o alvo é um disco de
+    /// sistema (ver `is_system_disk`).
+    StorageFormat {
+        device_id: String,
+        fs_type: String,
+        label: String,
+    },
+    /// Solicita o cálculo assíncrono do SHA256 do arquivo `.iso` informado.
+    StorageChecksumIso(String),
+    /// Inicia a gravação em streaming do `.iso` no dispositivo de bloco
+    /// identificado. Rejeitada quando o alvo é um disco de sistema.
+    StorageFlashIso { device_id: String, iso_path: String },
+    /// Cancela uma gravação de ISO em curso para o dispositivo identificado.
+    StorageFlashCancel { device_id: String },
+    /// Caractere digitado num campo de texto de um modal de storage (rótulo
+    /// do volume, caminho da ISO, confirmação digitada).
+    StorageModalChar(char),
+    /// Apaga o último caractere do campo de texto ativo num modal de storage.
+    StorageModalBackspace,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }

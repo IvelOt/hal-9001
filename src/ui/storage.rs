@@ -3,10 +3,12 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{
+    App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice, StorageModal,
+};
 use crate::backend::storage::{BusType, DriveInfo, PartitionInfo, StorageRow};
 
 use super::theme::Palette;
@@ -311,5 +313,271 @@ fn kv<'a>(label: &'a str, value: impl Into<String>, pal: &Palette) -> Line<'a> {
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.into(), Style::default().fg(pal.fg)),
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// Modais interativos: Formatação (Épico G) e ISO Flasher (Épico H)
+// ---------------------------------------------------------------------------
+
+/// Ponto de entrada dos modais de storage — despachado por `ui::draw` quando
+/// `App::storage_modal_open()` é `true` e a aba ativa é Storage.
+pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
+    match &app.storage_modal {
+        StorageModal::Format(s) => draw_format_modal(app, pal, f, s),
+        StorageModal::Flasher(s) => draw_flasher_modal(app, pal, f, s),
+        StorageModal::None => {}
+    }
+}
+
+fn modal_block<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(pal.accent))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ))
+}
+
+fn draw_format_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FormatModalState) {
+    let m = app.lang.messages();
+    let area = super::centered(56, 40, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block(m.storage_format_title, pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(kv(m.storage_format_target, &s.target_label, pal));
+    lines.push(Line::from(""));
+
+    let fs_style = |focused: bool| {
+        if focused {
+            Style::default()
+                .fg(pal.bg)
+                .bg(pal.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(pal.fg)
+        }
+    };
+    let mut fs_spans = vec![Span::styled(
+        format!("{}: ", m.storage_format_fs_label),
+        Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+    )];
+    for (idx, choice) in FsChoice::ALL.iter().enumerate() {
+        let selected = idx == s.fs_idx;
+        let focused = selected && s.field == FormatField::Fs;
+        let text = if selected {
+            format!("[{}] ", choice.label())
+        } else {
+            format!(" {} ", choice.label())
+        };
+        fs_spans.push(Span::styled(text, fs_style(focused)));
+    }
+    lines.push(Line::from(fs_spans));
+    lines.push(Line::from(""));
+
+    let label_focused = s.field == FormatField::Label;
+    let label_display = if label_focused {
+        format!("{}▏", s.label)
+    } else {
+        s.label.clone()
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{}: ", m.storage_format_label_label),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            label_display,
+            if label_focused {
+                Style::default().fg(pal.bg).bg(pal.accent)
+            } else {
+                Style::default().fg(pal.fg)
+            },
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        m.storage_format_warning,
+        Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    let confirm_focused = s.field == FormatField::Confirm;
+    lines.push(Line::from(Span::styled(
+        m.storage_format_confirm,
+        if confirm_focused {
+            Style::default()
+                .fg(pal.bg)
+                .bg(pal.err)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(pal.dim)
+        },
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        m.storage_format_hint,
+        Style::default().fg(pal.dim),
+    )));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_flasher_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FlasherModalState) {
+    let m = app.lang.messages();
+    let area = super::centered(70, 60, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block(m.storage_flash_title, pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![
+        kv(m.storage_flash_target_label, &s.target_label, pal),
+        kv(m.storage_label_node, &s.target_dev_node, pal),
+        kv(m.storage_label_size, human_bytes(s.target_size), pal),
+        Line::from(""),
+    ];
+
+    match &s.stage {
+        FlasherStage::SelectIso { input, error } => {
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_path_prompt,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("{input}▏"),
+                Style::default().fg(pal.bg).bg(pal.accent),
+            )));
+            if let Some(err) = error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    err.as_str(),
+                    Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+                )));
+            }
+        }
+        FlasherStage::Checksumming { pct } => {
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_checksumming,
+                Style::default().fg(pal.accent),
+            )));
+            lines.push(progress_line(*pct, pal));
+        }
+        FlasherStage::Ready { sha256 } => {
+            lines.push(kv(
+                m.storage_flash_iso_label,
+                s.iso_path.display().to_string(),
+                pal,
+            ));
+            lines.push(kv(m.storage_flash_size_label, human_bytes(s.iso_size), pal));
+            if let Some(sha) = sha256 {
+                lines.push(kv(m.storage_flash_sha_label, sha, pal));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_checksum_hint,
+                Style::default().fg(pal.dim),
+            )));
+        }
+        FlasherStage::Confirm1 => {
+            lines.push(kv(
+                m.storage_flash_iso_label,
+                s.iso_path.display().to_string(),
+                pal,
+            ));
+            lines.push(kv(m.storage_flash_size_label, human_bytes(s.iso_size), pal));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_confirm1_title,
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(m.storage_flash_hint_continue, Style::default().fg(pal.dim)),
+                Span::raw("  "),
+                Span::styled(m.storage_flash_hint_cancel, Style::default().fg(pal.dim)),
+            ]));
+        }
+        FlasherStage::Confirm2 { typed } => {
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_confirm2_title,
+                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("{}: {}", m.storage_flash_confirm2_prompt, s.target_dev_node),
+                Style::default().fg(pal.accent),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("{typed}▏"),
+                Style::default().fg(pal.bg).bg(pal.accent),
+            )));
+        }
+        FlasherStage::Flashing {
+            bytes_written,
+            total_bytes,
+            speed_mbps,
+            eta_secs,
+        } => {
+            let pct = if *total_bytes > 0 {
+                (*bytes_written as f32 / *total_bytes as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_flashing,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(progress_line(pct, pal));
+            lines.push(Line::from(format!(
+                "{} / {}   {:.1} MB/s   ETA {}s",
+                human_bytes(*bytes_written),
+                human_bytes(*total_bytes),
+                speed_mbps,
+                eta_secs
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_hint_cancel,
+                Style::default().fg(pal.dim),
+            )));
+        }
+        FlasherStage::Done { ok, message } => {
+            let (color, text) = if *ok {
+                (pal.ok, m.storage_flash_success)
+            } else {
+                (pal.err, m.storage_flash_failed)
+            };
+            lines.push(Line::from(Span::styled(
+                text,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                message.as_str(),
+                Style::default().fg(pal.dim),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_hint_continue,
+                Style::default().fg(pal.dim),
+            )));
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
+    let bar_w = 30usize;
+    let filled = (pct.clamp(0.0, 1.0) * bar_w as f32).round() as usize;
+    let empty = bar_w.saturating_sub(filled);
+    Line::from(vec![
+        Span::styled("█".repeat(filled), Style::default().fg(pal.gauge_color(pct as f64))),
+        Span::styled("░".repeat(empty), Style::default().fg(pal.dim)),
+        Span::styled(format!(" {:>3.0}%", pct * 100.0), Style::default().fg(pal.dim)),
     ])
 }
