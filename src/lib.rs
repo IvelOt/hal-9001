@@ -21,7 +21,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::app::App;
 use crate::config::Config;
 use crate::events::input::InputStream;
-use crate::events::{Action, AppEvent};
+use crate::events::{Action, AppEvent, SuspendTerminalRequest};
 
 /// Executa o loop principal do Assistente de Sistema até o usuário sair.
 ///
@@ -31,9 +31,10 @@ use crate::events::{Action, AppEvent};
 pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
     let (action_tx, _action_rx) = broadcast::channel::<Action>(64);
+    let (term_tx, mut term_rx) = mpsc::unbounded_channel::<SuspendTerminalRequest>();
 
     // Sobe uma task Tokio por serviço de backend.
-    backend::spawn_all(&config, event_tx.clone(), &action_tx);
+    backend::spawn_all(&config, event_tx.clone(), &action_tx, term_tx);
 
     let mut app = App::new(config);
     let mut input = InputStream::new();
@@ -51,6 +52,16 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                 }
             }
             Some(action) = input.next(app.active, app.storage_modal_open(), app.text_input_active()) => app.dispatch(action, &action_tx),
+            Some(req) = term_rx.recv() => {
+                // Suspende a TUI (sai do raw mode/alt-screen) para que um
+                // prompt interativo de `pkexec`/`sudo` possa ser exibido sem
+                // corromper a grade do Ratatui, aguarda o backend sinalizar
+                // que o comando elevado terminou, e reinicializa o terminal.
+                ratatui::restore();
+                let _ = req.ack.send(());
+                let _ = req.restore.await;
+                terminal = ratatui::init();
+            }
             _ = render_tick.tick() => {
                 app.on_tick();
                 terminal.draw(|f| ui::draw(&app, f))?;

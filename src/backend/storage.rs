@@ -12,12 +12,12 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use sysinfo::Disks;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
-use crate::events::{Action, AppEvent, DeviceId, EventTx, Toast};
+use crate::events::{Action, AppEvent, DeviceId, EventTx, SuspendTerminalRequest, TerminalCtlTx, Toast};
 
 /// Tamanho do buffer de I/O para checksum e gravação de blocos (4 MiB),
 /// conforme especificado no Épico H.
@@ -343,6 +343,136 @@ fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
         }
     }
     format!("Falha ao formatar: {err}")
+}
+
+/// `true` quando o erro cru (D-Bus ou I/O) indica que a operação foi negada
+/// por falta de permissão do processo local (não pertence ao grupo `disk`,
+/// nem é root) — o gatilho para cair para o fluxo de elevação interativa
+/// (`pkexec`/`sudo`) em vez de expor um `Permission denied` cru ao usuário.
+pub fn is_permission_denied_error(err: &anyhow::Error) -> bool {
+    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+        if io_err.kind() == std::io::ErrorKind::PermissionDenied {
+            return true;
+        }
+    }
+    err.to_string().to_ascii_lowercase().contains("permission denied")
+}
+
+/// `true` quando o erro cru do `Block.Format`/`Block.OpenDevice` (D-Bus)
+/// indica que a chamada foi recusada pelo Polkit por falta de um agente de
+/// autenticação gráfico ativo na sessão (`NotAuthorized` /
+/// "No polkit agent available to authenticate"), tipicamente numa sessão TTY
+/// pura sem `polkit-gnome`/`polkit-kde` rodando — o gatilho para cair para o
+/// fluxo de elevação interativa via `pkexec`/`sudo` num terminal suspenso.
+pub fn is_not_authorized_error(err: &anyhow::Error) -> bool {
+    let lower = err.to_string().to_ascii_lowercase();
+    lower.contains("notauthorized")
+        || lower.contains("not authorized")
+        || lower.contains("no polkit agent")
+        || lower.contains("authentication is required")
+}
+
+/// Monta o binário `mkfs.*` e os argumentos necessários para formatar
+/// `dev_node` como `fs_type` com o rótulo `label`, para uso pelo fallback de
+/// elevação interativa (`run_elevated_interactive`) quando o `Block.Format`
+/// do UDisks2 é recusado por falta de agente Polkit. Devolve `None` quando
+/// `fs_type` não tem um `mkfs.*` mapeado (ver [`mkfs_hint`]).
+pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(String, Vec<String>)> {
+    let (bin, _pkg) = mkfs_hint(fs_type)?;
+    let mut args = Vec::new();
+    match fs_type.trim().to_ascii_lowercase().as_str() {
+        "vfat" | "fat32" | "fat" => {
+            args.push("-F".to_string());
+            args.push("32".to_string());
+            if !label.is_empty() {
+                args.push("-n".to_string());
+                args.push(label.to_string());
+            }
+        }
+        "exfat" => {
+            if !label.is_empty() {
+                args.push("-n".to_string());
+                args.push(label.to_string());
+            }
+        }
+        "ext4" | "ext3" | "ext2" => {
+            args.push("-F".to_string());
+            if !label.is_empty() {
+                args.push("-L".to_string());
+                args.push(label.to_string());
+            }
+        }
+        "ntfs" => {
+            args.push("-f".to_string());
+            if !label.is_empty() {
+                args.push("-L".to_string());
+                args.push(label.to_string());
+            }
+        }
+        "btrfs" => {
+            args.push("-f".to_string());
+            if !label.is_empty() {
+                args.push("-L".to_string());
+                args.push(label.to_string());
+            }
+        }
+        _ => return None,
+    }
+    args.push(dev_node.to_string());
+    Some((bin.to_string(), args))
+}
+
+/// `true` quando `name` está disponível em algum diretório do `$PATH` —
+/// usado para preferir `pkexec` (autenticação gráfica/Polkit) e cair para
+/// `sudo` apenas quando `pkexec` não estiver instalado no host.
+fn binary_in_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+        .unwrap_or(false)
+}
+
+/// Executa `program` com `args` sob elevação interativa (`pkexec`, caindo
+/// para `sudo` quando `pkexec` não está instalado), com stdin/stdout/stderr
+/// **herdados** do processo do HAL-9001 — para que o usuário veja e responda
+/// ao prompt de senha do Polkit/`sudo` diretamente no terminal real, sem
+/// nenhuma camada de captura no meio.
+///
+/// Antes de spawnar o comando, envia um [`SuspendTerminalRequest`] pelo
+/// canal `term_tx` e aguarda o loop principal confirmar (`ack`) que já saiu
+/// do modo raw/alt-screen do Ratatui — só então o comando é iniciado, o que
+/// evita que o prompt de senha seja escrito por cima da grade da TUI ainda
+/// ativa (a corrupção de TTY relatada pelo capitão). Ao final (sucesso ou
+/// falha), sinaliza `restore` para que o loop principal reinicialize a TUI —
+/// mesmo em caso de erro, nunca deixa o terminal preso fora do raw mode.
+async fn run_elevated_interactive(
+    term_tx: &TerminalCtlTx,
+    program: &str,
+    args: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
+    term_tx
+        .send(SuspendTerminalRequest {
+            ack: ack_tx,
+            restore: restore_rx,
+        })
+        .map_err(|_| anyhow::anyhow!("loop principal indisponível para suspender o terminal"))?;
+    let _ = ack_rx.await;
+
+    let elevator = if binary_in_path("pkexec") { "pkexec" } else { "sudo" };
+    let status = tokio::process::Command::new(elevator)
+        .arg(program)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await;
+
+    // Restaura a TUI independentemente do resultado do comando.
+    let _ = restore_tx.send(());
+
+    Ok(status?)
 }
 
 /// `true` quando `fs_type` (como enviado ao `Block.Format`) identifica um
@@ -1069,7 +1199,20 @@ fn resolve_ventoy_script_path() -> Option<std::path::PathBuf> {
 
 /// Executa `scripts/ventoy.sh <dev_node>`, repassando cada linha de saída
 /// (stdout/stderr) como progresso e emitindo o resultado final ao término.
-async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx) {
+/// `scripts/ventoy.sh` se auto-eleva via `pkexec bash "$0" "$@"` (ou `sudo`)
+/// quando não roda como root (ver `scripts/ventoy.sh:47-55`). Sem um agente
+/// Polkit gráfico ativo na sessão, o `pkexec` cai para seu agente de
+/// autenticação em modo texto, que lê/escreve diretamente no terminal
+/// controlador — algo que corrompe a grade do Ratatui se o processo estiver
+/// com stdio capturado (`piped`) sob o raw mode/alt-screen ainda ativos.
+///
+/// Por isso, ao contrário do antigo fluxo (stdout/stderr `piped`, repassados
+/// linha a linha como `StorageVentoyProgress`), esta task suspende a TUI
+/// (via `run_elevated_interactive`-style handshake) e herda todo o stdio do
+/// script: o usuário vê o prompt de senha e a saída do `ventoy.sh` no
+/// terminal real, sem intermediação. Ao terminar, a TUI é restaurada e o
+/// próximo tick do poller já republica o snapshot da árvore de discos.
+async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx, term_tx: TerminalCtlTx) {
     let Some(script) = resolve_ventoy_script_path() else {
         let _ = tx.send(AppEvent::StorageVentoyDone {
             device_id,
@@ -1078,56 +1221,39 @@ async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx) {
         return;
     };
 
-    let mut child = match tokio::process::Command::new("bash")
+    let _ = tx.send(AppEvent::StorageVentoyProgress {
+        device_id: device_id.clone(),
+        line: "suspendendo a TUI para autenticação Polkit/sudo interativa...".to_string(),
+    });
+
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
+    if term_tx
+        .send(SuspendTerminalRequest {
+            ack: ack_tx,
+            restore: restore_rx,
+        })
+        .is_err()
+    {
+        let _ = tx.send(AppEvent::StorageVentoyDone {
+            device_id,
+            result: Err("loop principal indisponível para suspender o terminal".to_string()),
+        });
+        return;
+    }
+    let _ = ack_rx.await;
+
+    let status = tokio::process::Command::new("bash")
         .arg(&script)
         .arg(&dev_node)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = tx.send(AppEvent::StorageVentoyDone {
-                device_id,
-                result: Err(format!("falha ao iniciar ventoy.sh: {e}")),
-            });
-            return;
-        }
-    };
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await;
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let tx_out = tx.clone();
-    let id_out = device_id.clone();
-    let out_task = tokio::spawn(async move {
-        if let Some(stdout) = stdout {
-            let mut lines = tokio::io::BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx_out.send(AppEvent::StorageVentoyProgress {
-                    device_id: id_out.clone(),
-                    line,
-                });
-            }
-        }
-    });
-    let tx_err = tx.clone();
-    let id_err = device_id.clone();
-    let err_task = tokio::spawn(async move {
-        if let Some(stderr) = stderr {
-            let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx_err.send(AppEvent::StorageVentoyProgress {
-                    device_id: id_err.clone(),
-                    line,
-                });
-            }
-        }
-    });
-
-    let status = child.wait().await;
-    let _ = out_task.await;
-    let _ = err_task.await;
+    // Restaura a TUI independentemente do resultado do script.
+    let _ = restore_tx.send(());
 
     let result = match status {
         Ok(st) if st.success() => Ok("Ventoy instalado com sucesso".to_string()),
@@ -1137,17 +1263,57 @@ async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx) {
     let _ = tx.send(AppEvent::StorageVentoyDone { device_id, result });
 }
 
+/// Fallback de gravação de ISO usado quando o processo do HAL-9001 não tem
+/// permissão direta sobre `dev_node` (não é root nem pertence ao grupo
+/// `disk`): roda `dd` sob elevação interativa (`pkexec`/`sudo`), herdando o
+/// stdio real do terminal (suspenso durante a operação) — o próprio `dd`
+/// imprime seu progresso (`status=progress`) diretamente no terminal.
+async fn flash_elevated(
+    iso_path: &str,
+    dev_node: &str,
+    term_tx: &TerminalCtlTx,
+) -> anyhow::Result<()> {
+    let args = vec![
+        format!("if={iso_path}"),
+        format!("of={dev_node}"),
+        "bs=4M".to_string(),
+        "status=progress".to_string(),
+        "conv=fsync".to_string(),
+    ];
+    let status = run_elevated_interactive(term_tx, "dd", &args).await?;
+    if !status.success() {
+        anyhow::bail!("dd elevado terminou com {status}");
+    }
+    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
+    // insegura; apenas força o flush de todos os buffers do kernel.
+    unsafe {
+        libc::sync();
+    }
+    Ok(())
+}
+
 async fn flash_task(
     device_id: String,
     iso_path: String,
     dev_node: String,
     cancel: Arc<AtomicBool>,
     tx: EventTx,
+    term_tx: TerminalCtlTx,
 ) {
-    let result = flash_inner(&iso_path, &dev_node, &cancel, &tx)
-        .await
-        .map(|()| "gravação concluída com sucesso".to_string())
-        .map_err(|e| e.to_string());
+    let result = match flash_inner(&iso_path, &dev_node, &cancel, &tx).await {
+        Ok(()) => Ok("gravação concluída com sucesso".to_string()),
+        Err(e) if is_permission_denied_error(&e) => {
+            tracing::warn!(target: "hal9001::storage", device = %device_id, "permissão negada ao abrir dispositivo de bloco — usando fallback de dd elevado");
+            let _ = tx.send(AppEvent::Toast(Toast::info(
+                "permissão negada — solicitando elevação (pkexec/sudo) para gravar o dispositivo",
+            )));
+            flash_elevated(&iso_path, &dev_node, &term_tx)
+                .await
+                .map(|()| "gravação concluída com sucesso (elevado)".to_string())
+                .map_err(|e| e.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    };
     let _ = tx.send(AppEvent::StorageFlashDone { device_id, result });
 }
 
@@ -1343,6 +1509,7 @@ pub async fn run(
     poll_ms: u64,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
+    term_tx: TerminalCtlTx,
 ) -> anyhow::Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(poll_ms.max(1000)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1377,7 +1544,7 @@ pub async fn run(
             res = actions.recv() => match res {
                 Ok(action) => {
                     if let Some(c) = &conn {
-                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels).await;
+                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels, &term_tx).await;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -1396,19 +1563,67 @@ async fn handle_action(
     snapshot: &Option<StorageSnapshot>,
     tx: &EventTx,
     flash_cancels: &mut HashMap<String, Arc<AtomicBool>>,
+    term_tx: &TerminalCtlTx,
 ) {
     match action {
         Action::StorageMount(id) => {
-            let toast = match mount(conn, &id.0).await {
-                Ok(()) => Toast::info("Dispositivo montado"),
-                Err(e) => Toast::error(format!("Falha ao montar: {e}")),
+            // `Drive`s do UDisks2 nunca implementam a interface `Filesystem`
+            // (só os `block_devices` de partição/disco não particionado a
+            // implementam) — chamar `Filesystem.Mount` num caminho de
+            // `drives/...` falha sempre. Quando `id` é um drive, monta cada
+            // uma de suas partições ainda não montadas; quando já é uma
+            // partição, monta-a diretamente.
+            let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
+                let mut mounted = 0usize;
+                let mut last_err: Option<anyhow::Error> = None;
+                for part in &drive.partitions {
+                    if part.is_mounted() {
+                        continue;
+                    }
+                    match mount(conn, &part.id.0).await {
+                        Ok(()) => mounted += 1,
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+                match (mounted, last_err) {
+                    (0, Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
+                    (0, None) => Toast::info("nenhuma partição para montar"),
+                    (n, _) => Toast::info(format!("{n} partição(ões) montada(s)")),
+                }
+            } else {
+                match mount(conn, &id.0).await {
+                    Ok(()) => Toast::info("Dispositivo montado"),
+                    Err(e) => Toast::error(format!("Falha ao montar: {e}")),
+                }
             };
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageUnmount(id) => {
-            let toast = match unmount(conn, &id.0).await {
-                Ok(()) => Toast::info("Dispositivo desmontado"),
-                Err(e) => Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}")),
+            // Mesma correção do braço acima, para o sentido inverso.
+            let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
+                let mut unmounted = 0usize;
+                let mut last_err: Option<anyhow::Error> = None;
+                for part in &drive.partitions {
+                    if !part.is_mounted() {
+                        continue;
+                    }
+                    match unmount(conn, &part.id.0).await {
+                        Ok(()) => unmounted += 1,
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+                match (unmounted, last_err) {
+                    (0, Some(e)) => {
+                        Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}"))
+                    }
+                    (0, None) => Toast::info("nenhuma partição montada"),
+                    (n, _) => Toast::info(format!("{n} partição(ões) desmontada(s)")),
+                }
+            } else {
+                match unmount(conn, &id.0).await {
+                    Ok(()) => Toast::info("Dispositivo desmontado"),
+                    Err(e) => Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}")),
+                }
             };
             let _ = tx.send(AppEvent::Toast(toast));
         }
@@ -1531,6 +1746,50 @@ async fn handle_action(
                         )),
                     }
                 }
+                Err(e) if is_not_authorized_error(&e) => {
+                    // Sem agente Polkit gráfico ativo na sessão (TTY pura):
+                    // o `Block.Format`/`OpenDevice` do UDisks2 recusa a
+                    // chamada com `NotAuthorized`. Cai para um helper
+                    // `mkfs.*` executado sob elevação interativa
+                    // (`pkexec`/`sudo`), suspendendo a TUI durante o prompt
+                    // de senha.
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format recusado (NotAuthorized) — usando fallback de mkfs elevado");
+                    match snap.dev_node_for_block_path(&block_path) {
+                        Some(dev_node) => {
+                            match mkfs_command(&fs_type, &label, &dev_node) {
+                                Some((bin, args)) => {
+                                    let _ = tx.send(AppEvent::Toast(Toast::info(format!(
+                                        "sem agente Polkit ativo — solicitando elevação para {bin}"
+                                    ))));
+                                    match run_elevated_interactive(term_tx, &bin, &args).await {
+                                        Ok(status) if status.success() => {
+                                            let _ = udisks_call(
+                                                conn,
+                                                &block_path,
+                                                "org.freedesktop.UDisks2.Block",
+                                                "Rescan",
+                                            )
+                                            .await;
+                                            Toast::info(format!(
+                                                "Formatação concluída ({bin}, elevado)"
+                                            ))
+                                        }
+                                        Ok(status) => Toast::error(format!(
+                                            "{bin} elevado terminou com {status}"
+                                        )),
+                                        Err(e) => Toast::error(format!(
+                                            "Falha ao formatar via {bin} elevado: {e}"
+                                        )),
+                                    }
+                                }
+                                None => Toast::error(format_error_message(&fs_type, &e)),
+                            }
+                        }
+                        None => Toast::error(
+                            "nó de dispositivo não encontrado para formatação elevada",
+                        ),
+                    }
+                }
                 Err(e) => Toast::error(format_error_message(&fs_type, &e)),
             };
             let _ = tx.send(AppEvent::Toast(toast));
@@ -1567,7 +1826,8 @@ async fn handle_action(
             let cancel = Arc::new(AtomicBool::new(false));
             flash_cancels.insert(device_id.clone(), cancel.clone());
             let txc = tx.clone();
-            tokio::spawn(flash_task(device_id, iso_path, dev_node, cancel, txc));
+            let term_txc = term_tx.clone();
+            tokio::spawn(flash_task(device_id, iso_path, dev_node, cancel, txc, term_txc));
         }
         Action::StorageFlashCancel { device_id } => {
             if let Some(cancel) = flash_cancels.get(&device_id) {
@@ -1597,7 +1857,8 @@ async fn handle_action(
             };
             tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "instalação do Ventoy solicitada");
             let txc = tx.clone();
-            tokio::spawn(ventoy_task(device_id, dev_node, txc));
+            let term_txc = term_tx.clone();
+            tokio::spawn(ventoy_task(device_id, dev_node, txc, term_txc));
         }
         Action::StorageVentoyListIsos { device_id } => {
             let id = DeviceId(device_id.clone());

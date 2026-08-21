@@ -7,9 +7,9 @@
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
-    is_iso_or_img, is_system_disk, parse_proc_mounts, parse_proc_swaps,
-    resolve_block_object_path, ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo,
-    StorageRow, StorageSnapshot,
+    is_iso_or_img, is_not_authorized_error, is_permission_denied_error, is_system_disk,
+    mkfs_command, parse_proc_mounts, parse_proc_swaps, resolve_block_object_path,
+    ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo, StorageRow, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId};
@@ -442,6 +442,75 @@ fn resolve_block_object_path_never_resolves_a_drive_id_to_itself() {
 
     let resolved = resolve_block_object_path(&snap, &d.id);
     assert_ne!(resolved.as_deref(), Some(d.id.0.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// Elevação interativa (pkexec/sudo) — detecção de erro e construção de
+// comando `mkfs.*`, usadas pelos fallbacks de montagem/formatação/gravação
+// sem agente Polkit gráfico ativo na sessão.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn is_permission_denied_error_detects_io_permission_denied() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+    let err: anyhow::Error = io_err.into();
+    assert!(is_permission_denied_error(&err));
+}
+
+#[test]
+fn is_permission_denied_error_detects_message_text_fallback() {
+    let err = anyhow::anyhow!("dd: failed to open '/dev/sdz': Permission denied");
+    assert!(is_permission_denied_error(&err));
+}
+
+#[test]
+fn is_permission_denied_error_is_false_for_unrelated_errors() {
+    let err = anyhow::anyhow!("dispositivo não encontrado");
+    assert!(!is_permission_denied_error(&err));
+}
+
+#[test]
+fn is_not_authorized_error_detects_polkit_refusal_variants() {
+    for msg in [
+        "GDBus.Error:org.freedesktop.PolicyKit1.Error.NotAuthorized: Not authorized",
+        "No polkit agent available to authenticate",
+        "Authentication is required to format the device",
+    ] {
+        let err = anyhow::anyhow!(msg.to_string());
+        assert!(is_not_authorized_error(&err), "esperava match para: {msg}");
+    }
+}
+
+#[test]
+fn is_not_authorized_error_is_false_for_missing_mkfs() {
+    let err = anyhow::anyhow!("mkfs.vfat: command not found");
+    assert!(!is_not_authorized_error(&err));
+}
+
+#[test]
+fn mkfs_command_builds_vfat_args_with_label_and_fat32_flag() {
+    let (bin, args) = mkfs_command("vfat", "PENDRIVE", "/dev/sdz1").expect("vfat mapeado");
+    assert_eq!(bin, "mkfs.vfat");
+    assert_eq!(args, vec!["-F", "32", "-n", "PENDRIVE", "/dev/sdz1"]);
+}
+
+#[test]
+fn mkfs_command_builds_ext4_args_with_force_flag() {
+    let (bin, args) = mkfs_command("ext4", "DATA", "/dev/sdz1").expect("ext4 mapeado");
+    assert_eq!(bin, "mkfs.ext4");
+    assert_eq!(args, vec!["-F", "-L", "DATA", "/dev/sdz1"]);
+}
+
+#[test]
+fn mkfs_command_omits_label_flag_when_label_is_empty() {
+    let (bin, args) = mkfs_command("exfat", "", "/dev/sdz1").expect("exfat mapeado");
+    assert_eq!(bin, "mkfs.exfat");
+    assert_eq!(args, vec!["/dev/sdz1"]);
+}
+
+#[test]
+fn mkfs_command_returns_none_for_unmapped_fs_type() {
+    assert_eq!(mkfs_command("zfs", "X", "/dev/sdz1"), None);
 }
 
 // ---------------------------------------------------------------------------

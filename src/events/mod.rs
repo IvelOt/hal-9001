@@ -115,6 +115,25 @@ pub enum AppEvent {
     },
 }
 
+/// Solicitação de um backend para suspender temporariamente o modo raw/
+/// alt-screen do terminal (ex.: antes de rodar `pkexec`/`sudo` de forma
+/// interativa, para que o prompt de senha não corrompa a grade do Ratatui).
+///
+/// Trafega num canal dedicado (`TerminalCtlTx`), separado de `AppEvent`,
+/// porque `oneshot::Sender`/`Receiver` não implementam `Clone`/`Debug` — e
+/// `AppEvent` precisa de ambos. O loop principal (`lib::run`) consome este
+/// canal: restaura o terminal, sinaliza `ack`, aguarda `restore` ser
+/// preenchido pelo backend (indicando que o comando elevado terminou), e só
+/// então reinicializa o terminal.
+pub struct SuspendTerminalRequest {
+    pub ack: tokio::sync::oneshot::Sender<()>,
+    pub restore: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// Sender usado pelos backends para solicitar a suspensão temporária do
+/// terminal (ver [`SuspendTerminalRequest`]).
+pub type TerminalCtlTx = tokio::sync::mpsc::UnboundedSender<SuspendTerminalRequest>;
+
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
 /// canal `broadcast`.
 #[derive(Debug, Clone)]
