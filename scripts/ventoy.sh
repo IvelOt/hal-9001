@@ -19,7 +19,7 @@
 set -euo pipefail
 umask 077
 
-log() { printf '[ventoy] %s\n' "$1"; }
+log() { printf '[ventoy] %s\n' "$1" >&2; }
 die() {
   printf '[ventoy] ERRO: %s\n' "$1" >&2
   exit 1
@@ -139,7 +139,7 @@ ensure_ventoy_available() {
 
   tmp_tar="$CACHE_DIR/${asset_name}"
   log "baixando $asset_name (release $tag)..."
-  curl -fSL --retry 3 --retry-delay 2 -o "$tmp_tar" "$asset_url" || die "falha ao baixar $asset_name"
+  curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_tar" "$asset_url" || die "falha ao baixar $asset_name"
 
   # A release do Ventoy publica os hashes SHA256 no corpo da nota de versão
   # (ex.: "sha256sum:\nXXXX  ventoy-X.Y.Z-linux.tar.gz"). Também tenta um

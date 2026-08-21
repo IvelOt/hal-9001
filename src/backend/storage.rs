@@ -1082,10 +1082,6 @@ async fn udisks_call(
     Ok(())
 }
 
-async fn mount(conn: &Connection, path: &str) -> anyhow::Result<()> {
-    udisks_call(conn, path, "org.freedesktop.UDisks2.Filesystem", "Mount").await
-}
-
 /// Monta `path` e devolve o ponto de montagem escolhido pelo UDisks2 (o
 /// método `Filesystem.Mount` retorna a string do caminho). Usado pelo
 /// gerenciador de ISOs do Ventoy, que precisa do caminho real para ler/
@@ -1444,6 +1440,58 @@ async fn format_via_sudo(
             continue;
         }
         return Err(format!("{status}: {stderr_text}"));
+    }
+}
+
+/// Tenta formatar `block_path` como FAT32 usando o formatador Rust puro
+/// (`fatfs`), abrindo o descritor via `Block.OpenDevice` do UDisks2 — usado
+/// como primeira tentativa quando `mkfs.vfat` não está instalado no host.
+/// Devolve `Err` (sem nunca emitir toast) tanto para falha de
+/// `Block.OpenDevice` (ex.: `NotAuthorized`) quanto para falha do próprio
+/// `fatfs::format_volume`, deixando o chamador decidir o próximo fallback.
+async fn try_pure_rust_fat32(conn: &Connection, block_path: &str, label: &str) -> Result<(), String> {
+    let file = open_device_fd(conn, block_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let label_owned = label.to_string();
+    tokio::task::spawn_blocking(move || format_fat32_on_file(file, &label_owned))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Fallback final de formatação: eleva via `sudo -S`/`sudo -n` (modal nativo
+/// da TUI) e roda o `mkfs.*` correspondente diretamente sobre o nó de
+/// dispositivo — acionado sempre que `Block.Format`/`Block.OpenDevice` do
+/// UDisks2 são recusados, por qualquer motivo (`NotAuthorized`, permissão
+/// negada, ou qualquer outro erro de D-Bus), **sem** emitir um toast de erro
+/// prematuro antes de tentar a elevação interativa. Ao final, dispara
+/// `Block.Rescan` para que o UDisks2 reconheça o novo filesystem.
+#[allow(clippy::too_many_arguments)]
+async fn format_with_sudo_fallback(
+    conn: &Connection,
+    snap: &StorageSnapshot,
+    block_path: &str,
+    device_id: &str,
+    fs_type: &str,
+    label: &str,
+    original_err: &anyhow::Error,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Toast {
+    let Some(dev_node) = snap.dev_node_for_block_path(block_path) else {
+        return Toast::error(format_error_message(fs_type, original_err));
+    };
+    let Some((bin, args)) = mkfs_command(fs_type, label, &dev_node) else {
+        return Toast::error(format_error_message(fs_type, original_err));
+    };
+    tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format/OpenDevice recusado — usando fallback de mkfs via sudo");
+    match format_via_sudo(&dev_node, &bin, &args, sudo_tx, tx).await {
+        Ok(()) => {
+            let _ = udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
+            Toast::info(format!("Formatação concluída ({bin}, sudo)"))
+        }
+        Err(msg) => Toast::error(format!("Falha ao formatar via {bin}: {msg}")),
     }
 }
 
@@ -1812,25 +1860,30 @@ async fn handle_action(
             // uma de suas partições ainda não montadas; quando já é uma
             // partição, monta-a diretamente.
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
-                let mut mounted = 0usize;
+                let mut mount_points: Vec<String> = Vec::new();
                 let mut last_err: Option<anyhow::Error> = None;
                 for part in &drive.partitions {
                     if part.is_mounted() {
                         continue;
                     }
-                    match mount(conn, &part.id.0).await {
-                        Ok(()) => mounted += 1,
+                    match mount_and_get_path(conn, &part.id.0).await {
+                        Ok(mp) => mount_points.push(mp),
                         Err(e) => last_err = Some(e),
                     }
                 }
-                match (mounted, last_err) {
-                    (0, Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
-                    (0, None) => Toast::info("nenhuma partição para montar"),
-                    (n, _) => Toast::info(format!("{n} partição(ões) montada(s)")),
+                match (mount_points.as_slice(), last_err) {
+                    ([], Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
+                    ([], None) => Toast::info("nenhuma partição para montar"),
+                    ([mp], _) => Toast::info(format!("Partição montada em {mp}")),
+                    (mps, _) => Toast::info(format!(
+                        "{} partição(ões) montada(s) em: {}",
+                        mps.len(),
+                        mps.join(", ")
+                    )),
                 }
             } else {
-                match mount(conn, &id.0).await {
-                    Ok(()) => Toast::info("Dispositivo montado"),
+                match mount_and_get_path(conn, &id.0).await {
+                    Ok(mp) => Toast::info(format!("Partição montada em {mp}")),
                     Err(e) => Toast::error(format!("Falha ao montar: {e}")),
                 }
             };
@@ -1947,79 +2000,48 @@ async fn handle_action(
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info("Formatação concluída"),
                 Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {
-                    // O host não tem `dosfstools` instalado — cai de volta
-                    // para o formatador FAT32 100% Rust puro (`fatfs`), sem
-                    // NUNCA expor ao usuário um erro pedindo para instalar
-                    // pacotes externos no sistema operacional.
-                    tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — usando formatador FAT32 Rust puro via Block.OpenDevice");
-                    match open_device_fd(conn, &block_path).await {
-                        Ok(file) => {
-                            let label_owned = label.clone();
-                            let result = tokio::task::spawn_blocking(move || {
-                                format_fat32_on_file(file, &label_owned)
-                            })
+                    // O host não tem `dosfstools` instalado — tenta primeiro
+                    // o formatador FAT32 100% Rust puro (`fatfs`); se também
+                    // falhar (ex.: `Block.OpenDevice` recusado por falta de
+                    // agente Polkit), cai para o fallback de `sudo` sem
+                    // NUNCA expor um erro cru ao usuário nesse meio-tempo.
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — tentando formatador FAT32 Rust puro via Block.OpenDevice");
+                    match try_pure_rust_fat32(conn, &block_path, &label).await {
+                        Ok(()) => {
+                            // Notifica o UDisks2/kernel para rescanear o
+                            // dispositivo — a formatação foi feita
+                            // diretamente no descritor aberto via
+                            // `OpenDevice`, por fora do `Block.Format`.
+                            let _ = udisks_call(
+                                conn,
+                                &block_path,
+                                "org.freedesktop.UDisks2.Block",
+                                "Rescan",
+                            )
                             .await;
-                            match result {
-                                Ok(Ok(())) => {
-                                    // Notifica o UDisks2/kernel para
-                                    // rescanear o dispositivo — a
-                                    // formatação foi feita diretamente no
-                                    // descritor aberto via `OpenDevice`,
-                                    // por fora do `Block.Format`.
-                                    let _ = udisks_call(
-                                        conn,
-                                        &block_path,
-                                        "org.freedesktop.UDisks2.Block",
-                                        "Rescan",
-                                    )
-                                    .await;
-                                    Toast::info("Formatação concluída (FAT32 Rust puro)")
-                                }
-                                Ok(Err(e)) => Toast::error(format!(
-                                    "Falha ao formatar (FAT32 Rust puro): {e}"
-                                )),
-                                Err(e) => Toast::error(format!("Falha ao formatar: {e}")),
-                            }
+                            Toast::info("Formatação concluída (FAT32 Rust puro)")
                         }
-                        Err(e) => {
-                            Toast::error(format!("Falha ao abrir dispositivo via OpenDevice: {e}"))
+                        Err(_) => {
+                            format_with_sudo_fallback(
+                                conn, snap, &block_path, &device_id, &fs_type, &label, &e,
+                                sudo_tx, tx,
+                            )
+                            .await
                         }
                     }
                 }
-                Err(e) if is_not_authorized_error(&e) => {
-                    // Sem agente Polkit gráfico ativo na sessão (TTY pura):
-                    // o `Block.Format`/`OpenDevice` do UDisks2 recusa a
-                    // chamada com `NotAuthorized`. Cai para um helper
-                    // `mkfs.*` executado via `sudo -S`/`sudo -n`, com a senha
-                    // pedida pelo modal nativo da TUI quando necessário.
-                    tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format recusado (NotAuthorized) — usando fallback de mkfs via sudo");
-                    match snap.dev_node_for_block_path(&block_path) {
-                        Some(dev_node) => match mkfs_command(&fs_type, &label, &dev_node) {
-                            Some((bin, args)) => {
-                                match format_via_sudo(&dev_node, &bin, &args, sudo_tx, tx).await {
-                                    Ok(()) => {
-                                        let _ = udisks_call(
-                                            conn,
-                                            &block_path,
-                                            "org.freedesktop.UDisks2.Block",
-                                            "Rescan",
-                                        )
-                                        .await;
-                                        Toast::info(format!("Formatação concluída ({bin}, sudo)"))
-                                    }
-                                    Err(msg) => {
-                                        Toast::error(format!("Falha ao formatar via {bin}: {msg}"))
-                                    }
-                                }
-                            }
-                            None => Toast::error(format_error_message(&fs_type, &e)),
-                        },
-                        None => {
-                            Toast::error("nó de dispositivo não encontrado para formatação elevada")
-                        }
-                    }
+                Err(e) => {
+                    // Qualquer outra falha de `Block.Format` (`NotAuthorized`
+                    // por falta de agente Polkit, permissão negada, ou outro
+                    // erro de D-Bus) aciona IMEDIATAMENTE o fallback de
+                    // elevação via `sudo` — nunca expõe o erro cru do
+                    // UDisks2 ao usuário antes de tentar a elevação
+                    // interativa pelo modal nativo da TUI.
+                    format_with_sudo_fallback(
+                        conn, snap, &block_path, &device_id, &fs_type, &label, &e, sudo_tx, tx,
+                    )
+                    .await
                 }
-                Err(e) => Toast::error(format_error_message(&fs_type, &e)),
             };
             let _ = tx.send(AppEvent::Toast(toast));
         }
