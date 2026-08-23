@@ -6,6 +6,7 @@
 //! que impede que discos de sistema virem alvo de operações destrutivas.
 
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1389,14 +1390,30 @@ async fn format_via_sudo(
     tx: &EventTx,
 ) -> Result<(), String> {
     let label = format!("Formatar {dev_node} ({bin})");
+    run_sudo_command(&label, bin, args, sudo_tx, tx).await
+}
+
+/// Núcleo comum de elevação via `sudo -S`/`sudo -n`: roda `program`/`args`
+/// pedindo a senha pelo modal nativo da TUI quando necessário, repetindo em
+/// caso de senha incorreta — usado tanto por [`format_via_sudo`] (roda o
+/// `mkfs.*` inteiro) quanto por [`format_fat32_elevated`] (roda apenas o
+/// `chmod` de elevação temporária, já que a formatação em si é feita em
+/// processo via `fatfs`).
+async fn run_sudo_command(
+    label: &str,
+    program: &str,
+    args: &[String],
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<(), String> {
     let mut retry_error: Option<String> = None;
     loop {
-        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+        let password = match next_sudo_attempt(sudo_tx, label, &mut retry_error).await {
             Ok(pw) => pw,
             Err(msg) => return Err(msg),
         };
-        let mut run =
-            spawn_sudo(password, bin.to_string(), args.to_vec()).map_err(|e| e.to_string())?;
+        let mut run = spawn_sudo(password, program.to_string(), args.to_vec())
+            .map_err(|e| e.to_string())?;
         while let Some(line) = run.lines.recv().await {
             let _ = tx.send(AppEvent::Toast(Toast::info(line)));
         }
@@ -1414,6 +1431,57 @@ async fn format_via_sudo(
         }
         return Err(format!("{status}: {stderr_text}"));
     }
+}
+
+/// `true` quando o binário `mkfs.vfat` existe em algum diretório do `PATH` —
+/// usado pelo fallback de `sudo` para decidir entre invocar `mkfs.vfat`
+/// diretamente ou usar o formatador FAT32 100% Rust puro (`fatfs`) sobre o
+/// nó de dispositivo, já que rodar `sudo mkfs.vfat` num host sem
+/// `dosfstools` instalado sempre falha com "comando não encontrado".
+fn mkfs_vfat_available() -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join("mkfs.vfat").is_file()))
+        .unwrap_or(false)
+}
+
+/// Formata `dev_node` como FAT32 sem depender de `mkfs.vfat`/`dosfstools`
+/// instalado no host: eleva via `sudo chmod` a permissão de escrita sobre o
+/// nó de dispositivo, formata diretamente em processo com `fatfs` (sem
+/// invocar nenhum binário externo), e restaura a permissão original do nó
+/// ao final (melhor esforço) — usado como último fallback de formatação
+/// FAT32 quando tanto `mkfs.vfat` quanto `Block.OpenDevice` (via Polkit)
+/// estão indisponíveis.
+async fn format_fat32_elevated(
+    dev_node: &str,
+    label: &str,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<(), String> {
+    let original_mode = std::fs::metadata(dev_node)
+        .map(|m| m.permissions().mode() & 0o777)
+        .map_err(|e| e.to_string())?;
+    let sudo_label = format!("Formatar {dev_node} (FAT32, sem mkfs.vfat)");
+    run_sudo_command(
+        &sudo_label,
+        "chmod",
+        &["666".to_string(), dev_node.to_string()],
+        sudo_tx,
+        tx,
+    )
+    .await?;
+
+    let dev_owned = dev_node.to_string();
+    let label_owned = label.to_string();
+    let format_result =
+        tokio::task::spawn_blocking(move || format_fat32_pure_rust(&dev_owned, &label_owned))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
+
+    let restore_args = vec![format!("{original_mode:o}"), dev_node.to_string()];
+    let _ = run_sudo_command(&sudo_label, "chmod", &restore_args, sudo_tx, tx).await;
+
+    format_result
 }
 
 /// Tenta formatar `block_path` como FAT32 usando o formatador Rust puro
@@ -1455,6 +1523,21 @@ async fn format_with_sudo_fallback(
     let Some(dev_node) = snap.dev_node_for_block_path(block_path) else {
         return Toast::error(format_error_message(fs_type, original_err));
     };
+    if is_fat_fs_type(fs_type) && !mkfs_vfat_available() {
+        // Host sem `dosfstools`: rodar `sudo mkfs.vfat` falharia sempre com
+        // "comando não encontrado". Formata via `fatfs` (Rust puro) sobre o
+        // nó de dispositivo, elevando a permissão de escrita temporariamente
+        // via `sudo chmod` em vez de depender do `mkfs.vfat` do host.
+        tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — formatando FAT32 via fatfs com permissão elevada (sudo chmod)");
+        return match format_fat32_elevated(&dev_node, label, sudo_tx, tx).await {
+            Ok(()) => {
+                let _ = udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan")
+                    .await;
+                Toast::info("Formatação concluída (FAT32 Rust puro, sudo)")
+            }
+            Err(msg) => Toast::error(format!("Falha ao formatar FAT32: {msg}")),
+        };
+    }
     let Some((bin, args)) = mkfs_command(fs_type, label, &dev_node) else {
         return Toast::error(format_error_message(fs_type, original_err));
     };
@@ -1862,7 +1945,9 @@ async fn handle_action(
                 }
                 match (mount_points.as_slice(), last_err) {
                     ([], Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
-                    ([], None) => Toast::info("nenhuma partição para montar"),
+                    ([], None) => Toast::error(
+                        "Dispositivo sem partição montável — formate com [f] primeiro",
+                    ),
                     ([mp], _) => Toast::info(format!("Partição montada em {mp}")),
                     (mps, _) => Toast::info(format!(
                         "{} partição(ões) montada(s) em: {}",
