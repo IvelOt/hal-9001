@@ -359,18 +359,20 @@ pub struct ServiceStatus {
     pub degraded: Option<String>,
 }
 
-/// Estado do modal nativo (senha mascarada com `•`) de autenticação sudo —
-/// substitui o antigo fluxo de suspender o terminal para exibir o prompt
-/// real de `pkexec`/`sudo`. Aberto pelo `App::open_sudo_prompt` sempre que o
-/// backend de Storage recebe uma `SudoPasswordRequest` (porque `sudo -n
-/// true` falhou antes de uma operação privilegiada: formatação, gravação de
-/// ISO ou preparação de multi-boot).
+/// Estado do modal nativo (senha mascarada com `•`) de autenticação sudo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SudoPromptState {
-    /// Rótulo da operação/dispositivo exibido no modal.
     pub label: String,
     pub password: String,
-    /// `Some("Senha incorreta")` numa nova tentativa após falha de autenticação.
+    pub error: Option<String>,
+}
+
+/// Estado do modal de senha Wi-Fi (WPA2/WPA3 PSK).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WifiPasswordPromptState {
+    pub ap_id: String,
+    pub ssid: String,
+    pub password: String,
     pub error: Option<String>,
 }
 
@@ -398,18 +400,19 @@ pub struct App {
 
     /// Último snapshot da árvore de discos/partições (Módulo 4).
     pub storage: Option<StorageSnapshot>,
-    /// Índice do drive selecionado na lista (um item por drive físico/
-    /// removível — ver o redesenho "Aba 4") da aba Storage.
+    /// Índice do drive selecionado na lista da aba Storage.
     pub storage_selected: usize,
     /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
     pub storage_modal: StorageModal,
-    /// Modal nativo de senha de sudo, aberto sob demanda pelo backend de
-    /// Storage (ver [`SudoPromptState`]); tem prioridade sobre `storage_modal`
-    /// no roteamento de teclado e no render.
+    /// Modal nativo de senha de sudo.
     pub sudo_prompt: Option<SudoPromptState>,
-    /// Canal de resposta guardado enquanto `sudo_prompt` está aberto —
-    /// respondido diretamente ao confirmar (`Enter`) ou cancelar (`Esc`).
     sudo_respond: Option<tokio::sync::oneshot::Sender<Option<String>>>,
+
+    /// Estado do Wi-Fi e rede (Módulo 2).
+    pub network: Option<Box<crate::backend::network::NetworkSnapshot>>,
+    pub network_selected: usize,
+    pub network_scanning: bool,
+    pub wifi_prompt: Option<WifiPasswordPromptState>,
 
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
@@ -445,6 +448,10 @@ impl App {
             storage_modal: StorageModal::None,
             sudo_prompt: None,
             sudo_respond: None,
+            network: None,
+            network_selected: 0,
+            network_scanning: false,
+            wifi_prompt: None,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -479,6 +486,14 @@ impl App {
         match event {
             AppEvent::System(snap) => self.system = Some(*snap),
             AppEvent::Storage(snap) => self.storage = Some(*snap),
+            AppEvent::Network(snap) => {
+                let ap_count = snap.access_points.len();
+                self.network = Some(snap);
+                if ap_count > 0 && self.network_selected >= ap_count {
+                    self.network_selected = ap_count - 1;
+                }
+            }
+            AppEvent::NetworkScanning(flag) => self.network_scanning = flag,
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
             AppEvent::ServiceDegraded { name, reason } => {
                 self.services.insert(
@@ -842,12 +857,47 @@ impl App {
         self.toast = Some((Toast::error(msg), Instant::now()));
     }
 
-    /// `true` quando o campo com foco no modal de storage é um campo de
-    /// texto livre — o `InputStream` passa a repassar todos os caracteres
-    /// digitados como `Action::StorageModalChar` em vez das teclas de atalho
-    /// globais.
+    pub fn wifi_prompt_open(&self) -> bool {
+        self.wifi_prompt.is_some()
+    }
+
+    fn dispatch_wifi_prompt(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
+        let Some(state) = &mut self.wifi_prompt else {
+            return;
+        };
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::NetworkModalChar(c) => {
+                if !c.is_control() {
+                    state.password.push(c);
+                }
+            }
+            Action::NetworkModalBackspace => {
+                state.password.pop();
+            }
+            Action::Enter => {
+                let ap_id = state.ap_id.clone();
+                let ssid = state.ssid.clone();
+                let password = state.password.clone();
+                self.wifi_prompt = None;
+                let _ = action_tx.send(Action::NetworkConnect {
+                    ap_id,
+                    ssid,
+                    password: Some(password),
+                });
+            }
+            Action::ToggleConfig => {
+                // Esc: cancela o modal
+                self.wifi_prompt = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// `true` quando o campo com foco no modal de storage ou wifi é um campo de
+    /// texto livre.
     pub fn text_input_active(&self) -> bool {
-        if self.sudo_prompt.is_some() {
+        if self.sudo_prompt.is_some() || self.wifi_prompt.is_some() {
             return true;
         }
         match &self.storage_modal {
@@ -856,8 +906,6 @@ impl App {
                 s.stage,
                 FlasherStage::SelectIso { .. } | FlasherStage::Confirm2 { .. }
             ),
-            // Navegação pura: teclas únicas (hjkl, saltos) chegam como
-            // `Action::StorageModalChar`, mas não há campo de texto livre.
             StorageModal::FilePicker(_) => false,
             StorageModal::MultibootIsoManager(_) => false,
             StorageModal::None => false,
@@ -1433,6 +1481,12 @@ impl App {
             return;
         }
 
+        // Modal de senha de Wi-Fi: captura digitação antes da navegação comum.
+        if self.wifi_prompt_open() {
+            self.dispatch_wifi_prompt(action, action_tx);
+            return;
+        }
+
         // Se um modal de storage (formatação/flasher) estiver aberto, captura
         // a navegação e o input de texto antes de qualquer outro roteamento.
         if self.storage_modal_open() {
@@ -1468,6 +1522,8 @@ impl App {
             Action::Up => {
                 if self.active == Tab::Storage {
                     self.storage_selected = self.storage_selected.saturating_sub(1);
+                } else if self.active == Tab::Network {
+                    self.network_selected = self.network_selected.saturating_sub(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_sub(1);
@@ -1476,6 +1532,8 @@ impl App {
             Action::Down => {
                 if self.active == Tab::Storage {
                     self.storage_selected = self.storage_selected.saturating_add(1);
+                } else if self.active == Tab::Network {
+                    self.network_selected = self.network_selected.saturating_add(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_add(1);
@@ -1496,17 +1554,57 @@ impl App {
             }
             Action::SaveConfig => self.save_config(),
             Action::ToggleDetail => self.detailed_overview = !self.detailed_overview,
-            Action::Enter
-            | Action::Refresh
+            Action::Enter => {
+                if self.active == Tab::Network {
+                    if let Some(net) = &self.network {
+                        if let Some(ap) = net.access_points.get(self.network_selected) {
+                            if ap.security.needs_password() && !ap.is_saved {
+                                self.wifi_prompt = Some(WifiPasswordPromptState {
+                                    ap_id: ap.id.0.clone(),
+                                    ssid: ap.ssid.clone(),
+                                    password: String::new(),
+                                    error: None,
+                                });
+                            } else {
+                                let _ = action_tx.send(Action::NetworkConnect {
+                                    ap_id: ap.id.0.clone(),
+                                    ssid: ap.ssid.clone(),
+                                    password: None,
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    let _ = action_tx.send(action);
+                }
+            }
+            Action::NetworkRescan | Action::NetworkToggleRadio | Action::NetworkConnect { .. } => {
+                let _ = action_tx.send(action);
+            }
+            Action::NetworkDisconnect(_) => {
+                if let Some(net) = &self.network {
+                    if let Some(dev) = &net.wifi_device {
+                        let _ = action_tx.send(Action::NetworkDisconnect(dev.id.clone()));
+                    }
+                }
+            }
+            Action::NetworkForget(_) => {
+                if let Some(net) = &self.network {
+                    if let Some(ap) = net.access_points.get(self.network_selected) {
+                        if let Some(saved_path) = &ap.saved_conn_path {
+                            let _ = action_tx.send(Action::NetworkForget(saved_path.clone()));
+                        }
+                    }
+                }
+            }
+            Action::NetworkModalChar(_) | Action::NetworkModalBackspace => {}
+            Action::Refresh
             | Action::BrightnessUp
             | Action::BrightnessDown
             | Action::VolumeUp
             | Action::VolumeDown
             | Action::ToggleMute
             | Action::CyclePowerProfile => {
-                // Repassa aos backends; cada worker filtra o que lhe interessa.
-                // Brilho/volume são aplicados pela task `system`, que emite um
-                // toast e um snapshot atualizado imediatamente.
                 let _ = action_tx.send(action);
             }
             Action::Redraw => {}

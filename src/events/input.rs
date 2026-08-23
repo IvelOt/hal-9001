@@ -93,18 +93,24 @@ fn map_key(
         };
     }
 
+    // Modal de senha de Wi-Fi: digitação mascarada da PSK.
+    if active == Tab::Network && text_mode {
+        return match key.code {
+            KeyCode::Char(c) => Some(Action::NetworkModalChar(c)),
+            KeyCode::Backspace => Some(Action::NetworkModalBackspace),
+            KeyCode::Enter => Some(Action::Enter),
+            KeyCode::Esc => Some(Action::ToggleConfig),
+            _ => None,
+        };
+    }
+
     // Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a partir
-    // de qualquer modal de storage — funciona mesmo em `text_mode` (ex.:
-    // `SelectIso` do Flasher, onde o usuário normalmente digitaria o caminho)
-    // porque usa um `KeyCode` próprio, nunca um `Char` digitável.
+    // de qualquer modal de storage.
     if active == Tab::Storage && storage_modal_open && key.code == KeyCode::F(3) {
         return Some(Action::StorageModalOpenPicker);
     }
 
-    // Campo de texto ativo num modal de Storage (caminho da ISO, rótulo do
-    // volume, confirmação digitada): repassa caracteres/backspace direto,
-    // suspendendo todos os atalhos globais para não "vazar" letras como `m`,
-    // `r`, dígitos de troca de aba etc. para dentro do texto digitado.
+    // Campo de texto ativo num modal de Storage:
     if active == Tab::Storage && text_mode {
         return match key.code {
             KeyCode::Char(c) => Some(Action::StorageModalChar(c)),
@@ -113,25 +119,24 @@ fn map_key(
             KeyCode::Esc => Some(Action::ToggleConfig),
             KeyCode::Up => Some(Action::Up),
             KeyCode::Down => Some(Action::Down),
-            // `Tab`/`Shift-Tab` alternam o foco mesmo com um campo de texto
-            // (ex.: rótulo do volume) ativo — não digitam caractere algum.
             KeyCode::Tab => Some(Action::NextTab),
             KeyCode::BackTab => Some(Action::PrevTab),
             _ => None,
         };
     }
 
-    // Aba Storage: `m`/`e`/`r` têm significado próprio (montar/ejetar/refresh
-    // da árvore de discos), sobrepondo os atalhos globais de mudo/refresh.
-    // `f`/`g`/`b` abrem os modais de formatação/ISO Flasher; `B`/`G` disparam
-    // a preparação de multi-boot e abrem o gerenciador de ISOs multi-boot,
-    // respectivamente. Com um modal já aberto (mas fora de campo de texto),
-    // qualquer `Char` simples vira `Action::StorageModalChar` — os modais de
-    // navegação pura (seletor de arquivos, gerenciador de ISOs multi-boot)
-    // usam letras únicas (`a`, `d`, `x`, `y`, `n`, atalhos de salto) e o `c`
-    // do Flasher continua funcionando como "calcular checksum" por este
-    // mesmo caminho. Os campos com `KeyCode` dedicado (setas, Enter, Tab) do
-    // modal de formatação não são afetados por esta generalização.
+    // Aba Network (Wi-Fi):
+    if active == Tab::Network {
+        match key.code {
+            KeyCode::Char('r') => return Some(Action::NetworkRescan),
+            KeyCode::Char('t') => return Some(Action::NetworkToggleRadio),
+            KeyCode::Char('d') => return Some(Action::NetworkDisconnect(crate::events::DeviceId(String::new()))),
+            KeyCode::Char('f') => return Some(Action::NetworkForget(String::new())),
+            _ => {}
+        }
+    }
+
+    // Aba Storage:
     if active == Tab::Storage {
         match key.code {
             KeyCode::Char('f') if !storage_modal_open => return Some(Action::StorageFormatOpen),

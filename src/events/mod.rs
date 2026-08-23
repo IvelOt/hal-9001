@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 
+use crate::backend::network::NetworkSnapshot;
 use crate::backend::storage::{StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
 
@@ -62,6 +63,10 @@ pub enum AppEvent {
     /// Novo snapshot da árvore de discos/partições (UDisks2). Boxed pelo
     /// mesmo motivo de `System`.
     Storage(Box<StorageSnapshot>),
+    /// Novo snapshot de rede e Wi-Fi (NetworkManager). Boxed pelo mesmo motivo.
+    Network(Box<NetworkSnapshot>),
+    /// Flag de estado de escaneamento de redes sem fio.
+    NetworkScanning(bool),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
@@ -179,16 +184,16 @@ pub enum Action {
     /// Intenção de tecla (`m`) sobre o item selecionado na aba Storage; o
     /// `App` resolve a seleção atual e emite `StorageMount`/`StorageUnmount`.
     StorageMountToggleSelected,
-    /// Intenção de tecla (`e`) sobre o drive selecionado na aba Storage; o
+    /// Intenção de tecla (`e`) sobre o item selecionado na aba Storage; o
     /// `App` resolve a seleção atual e emite `StorageEject`.
     StorageEjectSelected,
-    /// Tecla `f`: abre o modal de formatação para o item selecionado.
+    /// Tecla `f`/`F`: abre o modal interativo de formatação para a partição
+    /// ou drive selecionado.
     StorageFormatOpen,
-    /// Tecla `g`/`b`: abre o wizard do ISO Flasher para o drive selecionado.
+    /// Tecla `i`/`I`/`g`/`b`: abre o wizard do gravador de ISO (ISO Flasher).
     StorageFlasherOpen,
-    /// Formata `device_id` com o sistema de arquivos e rótulo informados.
-    /// Rejeitada pelo backend (e pelo `App`) quando o alvo é um disco de
-    /// sistema (ver `is_system_disk`).
+    /// Dispara a formatação da partição/drive `device_id` com o filesystem
+    /// `fs_type` e o rótulo `label` informados.
     StorageFormat {
         device_id: String,
         fs_type: String,
@@ -197,7 +202,7 @@ pub enum Action {
     /// Solicita o cálculo assíncrono do SHA256 do arquivo `.iso` informado.
     StorageChecksumIso(String),
     /// Inicia a gravação em streaming do `.iso` no dispositivo de bloco
-    /// identificado. Rejeitada quando o alvo é um disco de sistema.
+    /// identificado.
     StorageFlashIso {
         device_id: String,
         iso_path: String,
@@ -206,53 +211,48 @@ pub enum Action {
     StorageFlashCancel {
         device_id: String,
     },
-    /// Tecla `B`: prepara (não-destrutivamente) a partição primária do
-    /// drive selecionado para o multi-boot leve embarcado do HAL-9001 — ver
-    /// `Action::StorageMultibootPrepare` e `backend::multiboot`. Resolve a
-    /// partição primária e dispara a ação abaixo.
+    /// Tecla `B`: prepara partição para multi-boot leve.
     StorageMultibootPrepareOpen,
-    /// Prepara `device_id` (o `DeviceId` de uma partição, não de um drive)
-    /// para multi-boot: monta se necessário, grava `EFI/BOOT/BOOTX64.EFI` +
-    /// `boot/grub/grub.cfg` e o arquivo-marcador em `ISOs/`. Rejeitada pelo
-    /// backend (e pelo `App`) quando o alvo é um disco de sistema (ver
-    /// `is_system_disk`) ou não está formatado como FAT32.
+    /// Prepara `device_id` para multi-boot.
     StorageMultibootPrepare {
         device_id: String,
     },
-    /// Tecla `G`: abre o gerenciador de ISOs multi-boot (`<mount>/ISOs/`) da
-    /// partição primária do drive selecionado.
+    /// Tecla `G`: abre o gerenciador de ISOs multi-boot.
     StorageMultibootIsoManagerOpen,
-    /// Lista (ou relista) as ISOs presentes em `ISOs/` na partição
-    /// identificada por `device_id`, montando-a primeiro se necessário.
+    /// Lista ISOs presentes em `ISOs/`.
     StorageMultibootListIsos {
         device_id: String,
     },
-    /// Copia `src_path` para `<mount>/ISOs/` da partição identificada, com
-    /// progresso em streaming. Rejeitada quando o alvo é um disco de sistema.
+    /// Copia `src_path` para `<mount>/ISOs/`.
     StorageMultibootAddIso {
         device_id: String,
         src_path: String,
     },
-    /// Remove `file_name` de `<mount>/ISOs/` da partição identificada.
-    /// Rejeitada quando o alvo é um disco de sistema.
+    /// Remove `file_name` de `<mount>/ISOs/`.
     StorageMultibootRemoveIso {
         device_id: String,
         file_name: String,
     },
-    /// Caractere digitado num campo de texto de um modal de storage (rótulo
-    /// do volume, caminho da ISO, confirmação digitada) — ou atalho de
-    /// caractere único num modal de navegação (file picker, gerenciador de
-    /// ISOs multi-boot).
+    /// Caractere digitado num campo de texto de um modal de storage.
     StorageModalChar(char),
     /// Apaga o último caractere do campo de texto ativo num modal de storage.
     StorageModalBackspace,
-    /// Tecla `Delete`: remove o item selecionado num modal de storage que
-    /// suporte remoção (gerenciador de ISOs multi-boot).
+    /// Tecla `Delete`: remove item num modal de storage.
     StorageModalDelete,
-    /// Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a
-    /// partir de um modal de storage que aceite selecionar uma imagem (ISO
-    /// Flasher, adicionar ISO ao multi-boot).
+    /// Tecla dedicada (F3) que abre o seletor de arquivos.
     StorageModalOpenPicker,
+    /// Ações de Rede e Wi-Fi (Módulo 2)
+    NetworkRescan,
+    NetworkToggleRadio,
+    NetworkConnect {
+        ap_id: String,
+        ssid: String,
+        password: Option<String>,
+    },
+    NetworkDisconnect(DeviceId),
+    NetworkForget(String),
+    NetworkModalChar(char),
+    NetworkModalBackspace,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }
