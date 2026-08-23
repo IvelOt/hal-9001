@@ -123,23 +123,26 @@ fn map_key(
 
     // Aba Storage: `m`/`e`/`r` têm significado próprio (montar/ejetar/refresh
     // da árvore de discos), sobrepondo os atalhos globais de mudo/refresh.
-    // `f`/`g`/`b`/`V`/`i` abrem os modais de formatação/ISO Flasher/Ventoy;
-    // com um modal já aberto (mas fora de campo de texto), qualquer `Char`
-    // simples vira `Action::StorageModalChar` — os modais de navegação pura
-    // (seletor de arquivos, gerenciador de ISOs do Ventoy) usam letras únicas
-    // (`a`, `d`, `x`, `y`, `n`, atalhos de salto) e o `c` do Flasher continua
-    // funcionando como "calcular checksum" por este mesmo caminho. Os campos
-    // com `KeyCode` dedicado (setas, Enter, Tab) do modal de formatação não
-    // são afetados por esta generalização.
+    // `f`/`g`/`b` abrem os modais de formatação/ISO Flasher; `B`/`G` disparam
+    // a preparação de multi-boot e abrem o gerenciador de ISOs multi-boot,
+    // respectivamente. Com um modal já aberto (mas fora de campo de texto),
+    // qualquer `Char` simples vira `Action::StorageModalChar` — os modais de
+    // navegação pura (seletor de arquivos, gerenciador de ISOs multi-boot)
+    // usam letras únicas (`a`, `d`, `x`, `y`, `n`, atalhos de salto) e o `c`
+    // do Flasher continua funcionando como "calcular checksum" por este
+    // mesmo caminho. Os campos com `KeyCode` dedicado (setas, Enter, Tab) do
+    // modal de formatação não são afetados por esta generalização.
     if active == Tab::Storage {
         match key.code {
             KeyCode::Char('f') if !storage_modal_open => return Some(Action::StorageFormatOpen),
             KeyCode::Char('g') | KeyCode::Char('b') if !storage_modal_open => {
                 return Some(Action::StorageFlasherOpen)
             }
-            KeyCode::Char('V') if !storage_modal_open => return Some(Action::StorageVentoyOpen),
-            KeyCode::Char('i') | KeyCode::Char('I') if !storage_modal_open => {
-                return Some(Action::StorageVentoyIsoManagerOpen)
+            KeyCode::Char('B') if !storage_modal_open => {
+                return Some(Action::StorageMultibootPrepareOpen)
+            }
+            KeyCode::Char('G') if !storage_modal_open => {
+                return Some(Action::StorageMultibootIsoManagerOpen)
             }
             KeyCode::Delete if storage_modal_open => return Some(Action::StorageModalDelete),
             KeyCode::Char(c) if storage_modal_open => return Some(Action::StorageModalChar(c)),

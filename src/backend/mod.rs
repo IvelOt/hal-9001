@@ -6,6 +6,7 @@
 //! e a degradação graciosa da UI. Os módulos 2..8 preenchem esses stubs.
 
 pub mod bluetooth;
+pub mod multiboot;
 pub mod network;
 pub mod power;
 pub mod pty;

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
-use crate::backend::storage::{StorageRow, StorageSnapshot, VentoyIsoEntry};
+use crate::backend::storage::{primary_partition, DriveInfo, PartitionInfo, StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
@@ -114,31 +114,9 @@ pub struct FlasherModalState {
     pub stage: FlasherStage,
 }
 
-/// Máquina de estados do modal de instalação do Ventoy (Gadget/Script).
-#[derive(Debug, Clone, PartialEq)]
-pub enum VentoyStage {
-    /// Primeira confirmação: apenas aviso + `Enter`/`Esc`.
-    Confirm1,
-    /// Segunda confirmação: usuário deve digitar o nó do dispositivo alvo.
-    Confirm2 { typed: String },
-    /// `scripts/ventoy.sh` em execução; acumula as últimas linhas de saída.
-    Installing { log: Vec<String> },
-    /// Conclusão (sucesso ou falha) da instalação.
-    Done { ok: bool, message: String },
-}
-
-/// Estado do modal de instalação do Ventoy.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VentoyModalState {
-    pub device_id: String,
-    pub target_label: String,
-    pub target_dev_node: String,
-    pub stage: VentoyStage,
-}
-
 /// Para onde o arquivo escolhido no seletor (Yazi-style) deve ser
 /// encaminhado — carrega os dados necessários para reconstruir o modal de
-/// origem (Flasher ou gerenciador de ISOs do Ventoy) sem precisar manter uma
+/// origem (Flasher ou gerenciador de ISOs multi-boot) sem precisar manter uma
 /// pilha de "modal anterior": ao escolher o arquivo, `App` reconstrói o modal
 /// alvo diretamente a partir destes campos.
 #[derive(Debug, Clone, PartialEq)]
@@ -149,7 +127,7 @@ pub enum FilePickerPurpose {
         target_dev_node: String,
         target_size: u64,
     },
-    VentoyAddIso {
+    MultibootAddIso {
         device_id: String,
         target_label: String,
     },
@@ -268,9 +246,9 @@ impl FilePickerState {
     }
 }
 
-/// Fase do gerenciador de ISOs de um pendrive Ventoy (tecla `i`/`I`).
+/// Fase do gerenciador de ISOs multi-boot (tecla `G`).
 #[derive(Debug, Clone, PartialEq)]
-pub enum VentoyIsoManagerStage {
+pub enum MultibootIsoManagerStage {
     Loading,
     Listing {
         entries: Vec<VentoyIsoEntry>,
@@ -293,12 +271,12 @@ pub enum VentoyIsoManagerStage {
     },
 }
 
-/// Estado do gerenciador de ISOs do Ventoy.
+/// Estado do gerenciador de ISOs multi-boot.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VentoyIsoManagerState {
+pub struct MultibootIsoManagerState {
     pub device_id: String,
     pub target_label: String,
-    pub stage: VentoyIsoManagerStage,
+    pub stage: MultibootIsoManagerStage,
 }
 
 /// Modal interativo ativo na aba Storage (mutuamente exclusivo).
@@ -308,9 +286,8 @@ pub enum StorageModal {
     None,
     Format(FormatModalState),
     Flasher(FlasherModalState),
-    Ventoy(VentoyModalState),
     FilePicker(FilePickerState),
-    VentoyIsoManager(VentoyIsoManagerState),
+    MultibootIsoManager(MultibootIsoManagerState),
 }
 
 /// Abas do Assistente de Sistema, na ordem da tabbar.
@@ -387,7 +364,7 @@ pub struct ServiceStatus {
 /// real de `pkexec`/`sudo`. Aberto pelo `App::open_sudo_prompt` sempre que o
 /// backend de Storage recebe uma `SudoPasswordRequest` (porque `sudo -n
 /// true` falhou antes de uma operação privilegiada: formatação, gravação de
-/// ISO ou instalação do Ventoy).
+/// ISO ou preparação de multi-boot).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SudoPromptState {
     /// Rótulo da operação/dispositivo exibido no modal.
@@ -421,8 +398,8 @@ pub struct App {
 
     /// Último snapshot da árvore de discos/partições (Módulo 4).
     pub storage: Option<StorageSnapshot>,
-    /// Linha selecionada na árvore achatada da aba Storage (ver
-    /// `StorageSnapshot::rows`).
+    /// Índice do drive selecionado na lista (um item por drive físico/
+    /// removível — ver o redesenho "Aba 4") da aba Storage.
     pub storage_selected: usize,
     /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
     pub storage_modal: StorageModal,
@@ -493,7 +470,7 @@ impl App {
     }
 
     /// Consome um evento de backend, mutando o estado. Devolve ações de
-    /// acompanhamento (ex.: relistar ISOs do Ventoy após uma cópia/remoção
+    /// acompanhamento (ex.: relistar ISOs multi-boot após uma cópia/remoção
     /// concluída) que o chamador deve repassar ao `action_tx` — `handle_event`
     /// não recebe o `Sender` diretamente para não quebrar a assinatura usada
     /// em dezenas de testes existentes.
@@ -566,44 +543,14 @@ impl App {
                     }
                 }
             }
-            AppEvent::StorageVentoyProgress { device_id, line } => {
-                if let StorageModal::Ventoy(s) = &mut self.storage_modal {
-                    if s.device_id == device_id {
-                        if let VentoyStage::Installing { log } = &mut s.stage {
-                            log.push(line);
-                            // Mantém só as últimas linhas visíveis no modal.
-                            let overflow = log.len().saturating_sub(12);
-                            if overflow > 0 {
-                                log.drain(0..overflow);
-                            }
-                        }
-                    }
-                }
-            }
-            AppEvent::StorageVentoyDone { device_id, result } => {
-                if let StorageModal::Ventoy(s) = &mut self.storage_modal {
-                    if s.device_id == device_id {
-                        s.stage = match result {
-                            Ok(msg) => VentoyStage::Done {
-                                ok: true,
-                                message: msg,
-                            },
-                            Err(err) => VentoyStage::Done {
-                                ok: false,
-                                message: err,
-                            },
-                        };
-                    }
-                }
-            }
-            AppEvent::StorageVentoyIsoList {
+            AppEvent::StorageMultibootIsoList {
                 device_id,
                 entries,
                 free_bytes,
             } => {
-                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                if let StorageModal::MultibootIsoManager(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
-                        s.stage = VentoyIsoManagerStage::Listing {
+                        s.stage = MultibootIsoManagerStage::Listing {
                             entries,
                             selected: 0,
                             free_bytes,
@@ -611,14 +558,14 @@ impl App {
                     }
                 }
             }
-            AppEvent::StorageVentoyIsoCopyProgress {
+            AppEvent::StorageMultibootIsoCopyProgress {
                 device_id,
                 bytes_written,
                 total_bytes,
             } => {
-                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+                if let StorageModal::MultibootIsoManager(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
-                        if let VentoyIsoManagerStage::Copying {
+                        if let MultibootIsoManagerStage::Copying {
                             bytes_written: bw,
                             total_bytes: tb,
                             ..
@@ -630,35 +577,35 @@ impl App {
                     }
                 }
             }
-            AppEvent::StorageVentoyIsoCopyDone { device_id, result } => {
-                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+            AppEvent::StorageMultibootIsoCopyDone { device_id, result } => {
+                if let StorageModal::MultibootIsoManager(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
                         match result {
                             Ok(_) => {
-                                s.stage = VentoyIsoManagerStage::Loading;
-                                follow_up.push(Action::StorageVentoyListIsos {
+                                s.stage = MultibootIsoManagerStage::Loading;
+                                follow_up.push(Action::StorageMultibootListIsos {
                                     device_id: device_id.clone(),
                                 });
                             }
                             Err(e) => {
-                                s.stage = VentoyIsoManagerStage::Error { message: e };
+                                s.stage = MultibootIsoManagerStage::Error { message: e };
                             }
                         }
                     }
                 }
             }
-            AppEvent::StorageVentoyIsoRemoveDone { device_id, result } => {
-                if let StorageModal::VentoyIsoManager(s) = &mut self.storage_modal {
+            AppEvent::StorageMultibootIsoRemoveDone { device_id, result } => {
+                if let StorageModal::MultibootIsoManager(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
                         match result {
                             Ok(_) => {
-                                s.stage = VentoyIsoManagerStage::Loading;
-                                follow_up.push(Action::StorageVentoyListIsos {
+                                s.stage = MultibootIsoManagerStage::Loading;
+                                follow_up.push(Action::StorageMultibootListIsos {
                                     device_id: device_id.clone(),
                                 });
                             }
                             Err(e) => {
-                                s.stage = VentoyIsoManagerStage::Error { message: e };
+                                s.stage = MultibootIsoManagerStage::Error { message: e };
                             }
                         }
                     }
@@ -763,36 +710,27 @@ impl App {
         }
     }
 
-    /// Linha atualmente selecionada na árvore da aba Storage, já clampeada ao
-    /// tamanho da lista (evita índice fora dos limites após um refresh que
-    /// encolheu a árvore).
-    pub fn storage_row(&self) -> Option<StorageRow> {
+    /// Índice do drive atualmente selecionado na lista da aba Storage, já
+    /// clampeado ao tamanho atual (evita índice fora dos limites após um
+    /// refresh que encolheu a lista de drives).
+    pub fn storage_drive_index(&self) -> Option<usize> {
         let snap = self.storage.as_ref()?;
-        let rows = snap.rows();
-        if rows.is_empty() {
+        if snap.drives.is_empty() {
             return None;
         }
-        let idx = self.storage_selected.min(rows.len() - 1);
-        rows.get(idx).copied()
+        Some(self.storage_selected.min(snap.drives.len() - 1))
     }
 
-    /// Drive (e partição, se o item selecionado for uma partição) atualmente
-    /// realçados na aba Storage.
-    pub fn storage_selection(
-        &self,
-    ) -> Option<(
-        &crate::backend::storage::DriveInfo,
-        Option<&crate::backend::storage::PartitionInfo>,
-    )> {
+    /// Drive selecionado e sua partição "primária" (ver
+    /// [`crate::backend::storage::primary_partition`]) na aba Storage — a
+    /// visão simplificada de um item por drive não expõe mais navegação por
+    /// partição individual; ações como montar/desmontar e multi-boot sempre
+    /// operam sobre a partição primária resolvida automaticamente.
+    pub fn storage_selection(&self) -> Option<(&DriveInfo, Option<&PartitionInfo>)> {
         let snap = self.storage.as_ref()?;
-        match self.storage_row()? {
-            StorageRow::Drive(di) => snap.drive(di).map(|d| (d, None)),
-            StorageRow::Partition(di, pi) => {
-                let drive = snap.drive(di)?;
-                let partition = snap.partition(di, pi)?;
-                Some((drive, Some(partition)))
-            }
-        }
+        let idx = self.storage_drive_index()?;
+        let drive = snap.drive(idx)?;
+        Some((drive, primary_partition(drive)))
     }
 
     /// Tecla `m`: monta a partição selecionada, ou a desmonta se já montada.
@@ -822,7 +760,7 @@ impl App {
         let _ = action_tx.send(Action::StorageEject(drive.id.clone()));
     }
 
-    /// `true` quando um modal de storage (formatação, flasher ou Ventoy) está
+    /// `true` quando um modal de storage (formatação, flasher ou gerenciador
     /// aberto — usado para desviar a navegação/teclado da aba.
     pub fn storage_modal_open(&self) -> bool {
         !matches!(self.storage_modal, StorageModal::None)
@@ -918,45 +856,29 @@ impl App {
                 s.stage,
                 FlasherStage::SelectIso { .. } | FlasherStage::Confirm2 { .. }
             ),
-            StorageModal::Ventoy(s) => matches!(s.stage, VentoyStage::Confirm2 { .. }),
             // Navegação pura: teclas únicas (hjkl, saltos) chegam como
             // `Action::StorageModalChar`, mas não há campo de texto livre.
             StorageModal::FilePicker(_) => false,
-            StorageModal::VentoyIsoManager(_) => false,
+            StorageModal::MultibootIsoManager(_) => false,
             StorageModal::None => false,
         }
     }
 
-    /// Tecla `f`: abre o modal de formatação para o item selecionado na
-    /// árvore de Storage. Recusa discos de sistema (camada 1 da trava).
+    /// Tecla `f`: abre o modal de formatação para o drive selecionado (na
+    /// visão simplificada de um item por drive, formatar sempre opera sobre
+    /// o disco inteiro, não numa partição isolada). Recusa discos de sistema
+    /// (camada 1 da trava).
     fn storage_format_open(&mut self) {
-        let Some((drive, partition)) = self.storage_selection() else {
+        let Some((drive, _)) = self.storage_selection() else {
             return;
         };
-        let (device_id, target_label, is_system) = match partition {
-            Some(p) => (
-                p.id.0.clone(),
-                if p.label.is_empty() {
-                    p.dev_node.clone()
-                } else {
-                    p.label.clone()
-                },
-                p.is_system,
-            ),
-            None => (
-                drive.id.0.clone(),
-                format!("{} {}", drive.vendor, drive.model)
-                    .trim()
-                    .to_string(),
-                drive.is_system,
-            ),
-        };
-        if is_system {
+        if drive.is_system {
             self.toast_system_locked();
             return;
         }
+        let target_label = drive.friendly_label();
         self.storage_modal = StorageModal::Format(FormatModalState {
-            device_id,
+            device_id: drive.id.0.clone(),
             target_label,
             fs_idx: 0,
             label: "PENDRIVE".to_string(),
@@ -977,9 +899,7 @@ impl App {
             self.toast_system_locked();
             return;
         }
-        let target_label = format!("{} {}", drive.vendor, drive.model)
-            .trim()
-            .to_string();
+        let target_label = drive.friendly_label();
         self.storage_modal = StorageModal::FilePicker(FilePickerState::open(
             Self::home_dir(),
             FilePickerPurpose::FlasherIso {
@@ -991,62 +911,61 @@ impl App {
         ));
     }
 
-    /// Tecla `V`: abre o modal de instalação do Ventoy para o drive
-    /// selecionado. Recusa discos de sistema (camada 1 da trava).
-    fn storage_ventoy_open(&mut self) {
-        let Some((drive, _)) = self.storage_selection() else {
+    /// Tecla `B`: prepara (não-destrutivamente) a partição primária do drive
+    /// selecionado para o multi-boot leve embarcado. Recusa discos de
+    /// sistema (camada 1 da trava); exige uma partição primária resolvível
+    /// (o backend revalida e recusa se ela não estiver formatada FAT32).
+    fn storage_multiboot_prepare_open(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some((drive, partition)) = self.storage_selection() else {
             return;
         };
         if drive.is_system {
             self.toast_system_locked();
             return;
         }
-        let target_label = format!("{} {}", drive.vendor, drive.model)
-            .trim()
-            .to_string();
-        self.storage_modal = StorageModal::Ventoy(VentoyModalState {
-            device_id: drive.id.0.clone(),
-            target_label,
-            target_dev_node: drive.dev_node.clone(),
-            stage: VentoyStage::Confirm1,
+        let Some(partition) = partition else {
+            let m = self.lang.messages();
+            self.toast = Some((Toast::error(m.storage_multiboot_no_partition), Instant::now()));
+            return;
+        };
+        let _ = action_tx.send(Action::StorageMultibootPrepare {
+            device_id: partition.id.0.clone(),
         });
     }
 
-    /// Tecla `i`/`I`: abre o gerenciador de ISOs do pendrive Ventoy
-    /// selecionado. Sem efeito se o drive selecionado não for Ventoy (não há
-    /// trava de disco de sistema aqui — apenas discos removíveis chegam a ser
-    /// Ventoy).
-    fn storage_ventoy_iso_manager_open(&mut self, action_tx: &broadcast::Sender<Action>) {
-        let Some((drive, _)) = self.storage_selection() else {
+    /// Tecla `G`: abre o gerenciador de ISOs multi-boot (`<mount>/ISOs/`) da
+    /// partição primária do drive selecionado.
+    fn storage_multiboot_iso_manager_open(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some((drive, partition)) = self.storage_selection() else {
             return;
         };
-        if !drive.is_ventoy {
+        let Some(partition) = partition else {
+            let m = self.lang.messages();
+            self.toast = Some((Toast::error(m.storage_multiboot_no_partition), Instant::now()));
             return;
-        }
-        let target_label = format!("{} {}", drive.vendor, drive.model)
-            .trim()
-            .to_string();
-        let device_id = drive.id.0.clone();
-        self.storage_modal = StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+        };
+        let target_label = drive.friendly_label();
+        let device_id = partition.id.0.clone();
+        self.storage_modal = StorageModal::MultibootIsoManager(MultibootIsoManagerState {
             device_id: device_id.clone(),
             target_label,
-            stage: VentoyIsoManagerStage::Loading,
+            stage: MultibootIsoManagerStage::Loading,
         });
-        let _ = action_tx.send(Action::StorageVentoyListIsos { device_id });
+        let _ = action_tx.send(Action::StorageMultibootListIsos { device_id });
     }
 
     /// Roteia uma `Action` para o modal de storage ativo (formatação,
-    /// flasher ou Ventoy), retornando o controle ao fechar (`Esc`/conclusão).
+    /// flasher ou gerenciador de ISOs multi-boot), retornando o controle ao
+    /// fechar (`Esc`/conclusão).
     fn dispatch_storage_modal(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
         let modal = std::mem::take(&mut self.storage_modal);
         self.storage_modal = match modal {
             StorageModal::None => StorageModal::None,
             StorageModal::Format(s) => self.dispatch_format_modal(s, action, action_tx),
             StorageModal::Flasher(s) => self.dispatch_flasher_modal(s, action, action_tx),
-            StorageModal::Ventoy(s) => self.dispatch_ventoy_modal(s, action, action_tx),
             StorageModal::FilePicker(s) => self.dispatch_file_picker_modal(s, action, action_tx),
-            StorageModal::VentoyIsoManager(s) => {
-                self.dispatch_ventoy_iso_manager_modal(s, action, action_tx)
+            StorageModal::MultibootIsoManager(s) => {
+                self.dispatch_multiboot_iso_manager_modal(s, action, action_tx)
             }
         };
     }
@@ -1272,60 +1191,6 @@ impl App {
         StorageModal::Flasher(s)
     }
 
-    fn dispatch_ventoy_modal(
-        &mut self,
-        mut s: VentoyModalState,
-        action: Action,
-        action_tx: &broadcast::Sender<Action>,
-    ) -> StorageModal {
-        if matches!(action, Action::Quit) {
-            self.should_quit = true;
-            return StorageModal::Ventoy(s);
-        }
-        // `Esc`: fecha o modal. A instalação (se já iniciada) continua em
-        // segundo plano no backend e reporta seu resultado via toast.
-        if matches!(action, Action::ToggleConfig) {
-            return StorageModal::None;
-        }
-
-        let m = self.lang.messages();
-        match &mut s.stage {
-            VentoyStage::Confirm1 => {
-                if matches!(action, Action::Enter) {
-                    s.stage = VentoyStage::Confirm2 {
-                        typed: String::new(),
-                    };
-                }
-            }
-            VentoyStage::Confirm2 { typed } => match action {
-                Action::StorageModalChar(c) if !c.is_control() => typed.push(c),
-                Action::StorageModalBackspace => {
-                    typed.pop();
-                }
-                Action::Enter => {
-                    if typed.trim() == s.target_dev_node {
-                        let _ = action_tx.send(Action::StorageVentoyInstall {
-                            device_id: s.device_id.clone(),
-                        });
-                        s.stage = VentoyStage::Installing { log: Vec::new() };
-                    } else {
-                        self.toast =
-                            Some((Toast::error(m.storage_flash_err_mismatch), Instant::now()));
-                    }
-                }
-                _ => {}
-            },
-            // Progresso chega via `AppEvent::StorageVentoyProgress`/`Done`.
-            VentoyStage::Installing { .. } => {}
-            VentoyStage::Done { .. } => {
-                if matches!(action, Action::Enter) {
-                    return StorageModal::None;
-                }
-            }
-        }
-        StorageModal::Ventoy(s)
-    }
-
     /// Roteia navegação/seleção dentro do seletor de arquivos estilo Yazi.
     /// `h/j/k/l` chegam como `Action::StorageModalChar` (ver generalização em
     /// `events/input.rs`); as setas continuam chegando como `Action::Up/Down/
@@ -1369,7 +1234,7 @@ impl App {
 
     /// Confirma a seleção do seletor de arquivos: navega para dentro de
     /// diretórios, ou — ao escolher um arquivo de imagem válido — reconstrói
-    /// o modal de origem (Flasher ou gerenciador de ISOs do Ventoy) já com o
+    /// o modal de origem (Flasher ou gerenciador de ISOs multi-boot) já com o
     /// caminho escolhido.
     fn file_picker_enter(
         &mut self,
@@ -1418,7 +1283,7 @@ impl App {
                             })
                         }
                     }
-                    FilePickerPurpose::VentoyAddIso {
+                    FilePickerPurpose::MultibootAddIso {
                         device_id,
                         target_label,
                     } => {
@@ -1426,14 +1291,14 @@ impl App {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_default();
-                        let _ = action_tx.send(Action::StorageVentoyAddIso {
+                        let _ = action_tx.send(Action::StorageMultibootAddIso {
                             device_id: device_id.clone(),
                             src_path: path.to_string_lossy().to_string(),
                         });
-                        StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+                        StorageModal::MultibootIsoManager(MultibootIsoManagerState {
                             device_id,
                             target_label,
-                            stage: VentoyIsoManagerStage::Copying {
+                            stage: MultibootIsoManagerStage::Copying {
                                 bytes_written: 0,
                                 total_bytes: size,
                                 file_name,
@@ -1445,27 +1310,27 @@ impl App {
         }
     }
 
-    /// Roteia ações dentro do gerenciador de ISOs de um pendrive Ventoy
+    /// Roteia ações dentro do gerenciador de ISOs multi-boot
     /// (tecla `i`/`I`): listar, adicionar (via seletor de arquivos) e remover
     /// (com confirmação) ISOs na partição de dados.
-    fn dispatch_ventoy_iso_manager_modal(
+    fn dispatch_multiboot_iso_manager_modal(
         &mut self,
-        mut s: VentoyIsoManagerState,
+        mut s: MultibootIsoManagerState,
         action: Action,
         action_tx: &broadcast::Sender<Action>,
     ) -> StorageModal {
         if matches!(action, Action::Quit) {
             self.should_quit = true;
-            return StorageModal::VentoyIsoManager(s);
+            return StorageModal::MultibootIsoManager(s);
         }
 
         match &mut s.stage {
-            VentoyIsoManagerStage::Loading => {
+            MultibootIsoManagerStage::Loading => {
                 if matches!(action, Action::ToggleConfig) {
                     return StorageModal::None;
                 }
             }
-            VentoyIsoManagerStage::Listing {
+            MultibootIsoManagerStage::Listing {
                 entries, selected, ..
             } => match action {
                 Action::ToggleConfig => return StorageModal::None,
@@ -1480,7 +1345,7 @@ impl App {
                 Action::StorageModalChar('a') | Action::StorageModalChar('A') => {
                     return StorageModal::FilePicker(FilePickerState::open(
                         Self::home_dir(),
-                        FilePickerPurpose::VentoyAddIso {
+                        FilePickerPurpose::MultibootAddIso {
                             device_id: s.device_id.clone(),
                             target_label: s.target_label.clone(),
                         },
@@ -1491,48 +1356,48 @@ impl App {
                 | Action::StorageModalDelete => {
                     if let Some(e) = entries.get(*selected) {
                         let file_name = e.name.clone();
-                        s.stage = VentoyIsoManagerStage::ConfirmRemove { file_name };
+                        s.stage = MultibootIsoManagerStage::ConfirmRemove { file_name };
                     }
                 }
                 _ => {}
             },
-            VentoyIsoManagerStage::ConfirmRemove { file_name } => match action {
+            MultibootIsoManagerStage::ConfirmRemove { file_name } => match action {
                 Action::Enter | Action::StorageModalChar('y') | Action::StorageModalChar('Y') => {
-                    let _ = action_tx.send(Action::StorageVentoyRemoveIso {
+                    let _ = action_tx.send(Action::StorageMultibootRemoveIso {
                         device_id: s.device_id.clone(),
                         file_name: file_name.clone(),
                     });
-                    s.stage = VentoyIsoManagerStage::Removing {
+                    s.stage = MultibootIsoManagerStage::Removing {
                         file_name: file_name.clone(),
                     };
                 }
                 Action::ToggleConfig
                 | Action::StorageModalChar('n')
                 | Action::StorageModalChar('N') => {
-                    let _ = action_tx.send(Action::StorageVentoyListIsos {
+                    let _ = action_tx.send(Action::StorageMultibootListIsos {
                         device_id: s.device_id.clone(),
                     });
-                    s.stage = VentoyIsoManagerStage::Loading;
+                    s.stage = MultibootIsoManagerStage::Loading;
                 }
                 _ => {}
             },
-            VentoyIsoManagerStage::Copying { .. } => {
+            MultibootIsoManagerStage::Copying { .. } => {
                 if matches!(action, Action::ToggleConfig) {
                     return StorageModal::None;
                 }
             }
-            VentoyIsoManagerStage::Removing { .. } => {
+            MultibootIsoManagerStage::Removing { .. } => {
                 if matches!(action, Action::ToggleConfig) {
                     return StorageModal::None;
                 }
             }
-            VentoyIsoManagerStage::Error { .. } => {
+            MultibootIsoManagerStage::Error { .. } => {
                 if matches!(action, Action::ToggleConfig | Action::Enter) {
                     return StorageModal::None;
                 }
             }
         }
-        StorageModal::VentoyIsoManager(s)
+        StorageModal::MultibootIsoManager(s)
     }
 
     /// Salva a configuração atual em disco e notifica via toast.
@@ -1561,7 +1426,7 @@ impl App {
 
         // O modal nativo de senha de sudo tem prioridade máxima: captura
         // toda a digitação antes de qualquer outro modal/roteamento, mesmo
-        // enquanto um modal de storage (ex.: instalação do Ventoy, com seu
+        // enquanto um modal de storage (ex.: gravação de ISO, com seu
         // log de progresso) permanece aberto por trás dele.
         if self.sudo_prompt_open() {
             self.dispatch_sudo_prompt(action);
@@ -1649,8 +1514,10 @@ impl App {
             Action::StorageEjectSelected => self.storage_eject_selected(action_tx),
             Action::StorageFormatOpen => self.storage_format_open(),
             Action::StorageFlasherOpen => self.storage_flasher_open(),
-            Action::StorageVentoyOpen => self.storage_ventoy_open(),
-            Action::StorageVentoyIsoManagerOpen => self.storage_ventoy_iso_manager_open(action_tx),
+            Action::StorageMultibootPrepareOpen => self.storage_multiboot_prepare_open(action_tx),
+            Action::StorageMultibootIsoManagerOpen => {
+                self.storage_multiboot_iso_manager_open(action_tx)
+            }
             Action::StorageMount(_)
             | Action::StorageUnmount(_)
             | Action::StorageEject(_)
@@ -1659,10 +1526,10 @@ impl App {
             | Action::StorageChecksumIso(_)
             | Action::StorageFlashIso { .. }
             | Action::StorageFlashCancel { .. }
-            | Action::StorageVentoyInstall { .. }
-            | Action::StorageVentoyListIsos { .. }
-            | Action::StorageVentoyAddIso { .. }
-            | Action::StorageVentoyRemoveIso { .. } => {
+            | Action::StorageMultibootPrepare { .. }
+            | Action::StorageMultibootListIsos { .. }
+            | Action::StorageMultibootAddIso { .. }
+            | Action::StorageMultibootRemoveIso { .. } => {
                 // Já totalmente formadas (com DeviceId/paths resolvidos);
                 // repassa direto ao backend de storage.
                 let _ = action_tx.send(action);

@@ -1,4 +1,9 @@
 //! Aba 4 — Discos & Armazenamento (UDisks2). Render do Módulo 4.
+//!
+//! Redesenho: lista simples com um item por drive físico/removível (sem a
+//! árvore drive→partição de antes) + painel de detalhes com status de
+//! montagem, medidor de capacidade, sistema de arquivos e status do
+//! multi-boot leve embarcado.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -7,10 +12,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{
-    App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice, StorageModal,
-    SudoPromptState, VentoyIsoManagerStage, VentoyIsoManagerState, VentoyModalState, VentoyStage,
+    App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice,
+    MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal, SudoPromptState,
 };
-use crate::backend::storage::{BusType, DriveInfo, PartitionInfo, StorageRow};
+use crate::backend::multiboot;
+use crate::backend::storage::{primary_partition, BusType, DriveInfo, PartitionInfo};
 
 use super::theme::Palette;
 use super::widgets::human_bytes;
@@ -29,7 +35,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 app.lang.messages().storage_hint_eject,
                 app.lang.messages().storage_hint_format,
                 app.lang.messages().storage_hint_iso,
-                app.lang.messages().storage_hint_ventoy,
+                app.lang.messages().storage_hint_multiboot_prepare,
             ],
         );
         return;
@@ -51,7 +57,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let cols =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
 
-    draw_tree(app, pal, f, cols[0]);
+    draw_list(app, pal, f, cols[0]);
     draw_details(app, pal, f, cols[1]);
 }
 
@@ -76,10 +82,6 @@ fn drive_icon(app: &App, drive: &DriveInfo) -> String {
     }
 }
 
-fn partition_icon(app: &App) -> String {
-    icon(app, "\u{f0a0}", "-")
-}
-
 /// Tag "disco de sistema" — Nerd Font de cadeado `\u{f023}` + palavra
 /// traduzida quando `icons = true`, ou o token ASCII `[SISTEMA]`/`[SYSTEM]`
 /// quando `icons = false`.
@@ -92,9 +94,10 @@ fn system_tag(app: &App) -> String {
     }
 }
 
-/// Tag "pendrive Ventoy" — Nerd Font de disco de boot `\u{f17c}` + palavra
-/// traduzida quando `icons = true`, ou o token ASCII `[VENTOY]` caso
-/// contrário (Zero Emojis Policy).
+/// Tag "pendrive Ventoy" (detecção somente-leitura por rótulo — ver
+/// `backend::storage::detect_ventoy`) — Nerd Font de disco de boot
+/// `\u{f17c}` + palavra traduzida quando `icons = true`, ou o token ASCII
+/// `[VENTOY]` caso contrário (Zero Emojis Policy).
 fn ventoy_tag(app: &App) -> String {
     let m = app.lang.messages();
     if app.config.ui.icons {
@@ -104,7 +107,19 @@ fn ventoy_tag(app: &App) -> String {
     }
 }
 
-fn draw_tree(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+/// Ícone de multi-boot ativo — Nerd Font de disco de boot `\u{f17c}` quando
+/// `icons = true`, ou `[MB]` caso contrário.
+fn multiboot_tag(app: &App, n_isos: usize) -> String {
+    let m = app.lang.messages();
+    let base = if app.config.ui.icons {
+        format!("\u{f17c} {}", m.storage_multiboot_active)
+    } else {
+        format!("[MB] {}", m.storage_multiboot_active)
+    };
+    format!("{base} ({n_isos})")
+}
+
+fn draw_list(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
     let block = super::content_block(m.storage_col_tree, pal);
     let inner = block.inner(area);
@@ -113,8 +128,7 @@ fn draw_tree(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let Some(snapshot) = &app.storage else {
         return;
     };
-    let rows = snapshot.rows();
-    if rows.is_empty() {
+    if snapshot.drives.is_empty() {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 m.storage_empty,
@@ -125,22 +139,10 @@ fn draw_tree(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
-    let selected = app.storage_row();
-    let mut lines: Vec<Line> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let is_selected = Some(*row) == selected;
-        let line = match *row {
-            StorageRow::Drive(di) => snapshot
-                .drive(di)
-                .map(|d| drive_line(app, pal, d, is_selected))
-                .unwrap_or_default(),
-            StorageRow::Partition(di, pi) => snapshot
-                .drive(di)
-                .zip(snapshot.partition(di, pi))
-                .map(|(d, p)| partition_line(app, pal, d, p, is_selected))
-                .unwrap_or_default(),
-        };
-        lines.push(line);
+    let selected_idx = app.storage_drive_index();
+    let mut lines: Vec<Line> = Vec::with_capacity(snapshot.drives.len());
+    for (idx, drive) in snapshot.drives.iter().enumerate() {
+        lines.push(drive_line(app, pal, drive, Some(idx) == selected_idx));
     }
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -157,20 +159,16 @@ fn row_style(pal: &Palette, selected: bool) -> Style {
     }
 }
 
+/// Uma linha da lista: ` <rótulo amigável> (<tamanho>)  [tags]`. O rótulo
+/// prefere o `IdLabel` da partição primária (ex.: `MEUPENDRIVE`) ao nome
+/// genérico `<vendor> <model>` — ver [`DriveInfo::friendly_label`].
 fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -> Line<'a> {
     let m = app.lang.messages();
     let style = row_style(pal, selected);
-    let name = if drive.model.is_empty() {
-        drive.dev_node.clone()
-    } else {
-        format!("{} {}", drive.vendor, drive.model)
-            .trim()
-            .to_string()
-    };
     let mut spans = vec![
         Span::styled(drive_icon(app, drive), style),
-        Span::styled(name, style),
-        Span::styled(format!(" {}", human_bytes(drive.size)), style.fg(pal.dim)),
+        Span::styled(drive.friendly_label(), style),
+        Span::styled(format!(" ({})", human_bytes(drive.size)), style.fg(pal.dim)),
     ];
     if drive.is_system {
         spans.push(Span::styled(
@@ -183,6 +181,17 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
             Style::default().fg(pal.accent),
         ));
     }
+    if let Some(p) = primary_partition(drive) {
+        if let Some(mp) = p.mount_points.first() {
+            if multiboot::is_multiboot_installed(mp) {
+                let n = multiboot::count_isos(mp);
+                spans.push(Span::styled(
+                    format!("  {}", multiboot_tag(app, n)),
+                    Style::default().fg(pal.ok),
+                ));
+            }
+        }
+    }
     if drive.is_ventoy {
         spans.push(Span::styled(
             format!("  {}", ventoy_tag(app)),
@@ -192,49 +201,35 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
     Line::from(spans)
 }
 
-fn partition_line<'a>(
-    app: &App,
-    pal: &Palette,
-    _drive: &DriveInfo,
-    partition: &PartitionInfo,
-    selected: bool,
-) -> Line<'a> {
-    let style = row_style(pal, selected);
-    let label = if partition.label.is_empty() {
-        partition.dev_node.clone()
-    } else {
-        partition.label.clone()
+/// Medidor de capacidade "<livre> livres de <total> (<pct>%)" com barra —
+/// baseado no espaço usado/total da partição primária (quando montada e com
+/// uso conhecido via `sysinfo`).
+fn capacity_bar<'a>(pal: &Palette, m: &crate::i18n::Messages, p: &PartitionInfo) -> Vec<Line<'a>> {
+    let mut out = Vec::new();
+    let Some(used) = p.used else {
+        return out;
     };
-    let mut spans = vec![
-        Span::styled("  ", style),
-        Span::styled(partition_icon(app), style.fg(pal.dim)),
-        Span::styled(format!("{label} "), style),
-        Span::styled(format!("{} ", partition.fs.label()), style.fg(pal.dim)),
-    ];
-    if let Some(ratio) = partition.usage_ratio() {
-        let bar_w = 8usize;
-        let filled = (ratio * bar_w as f64).round() as usize;
-        let empty = bar_w.saturating_sub(filled);
-        spans.push(Span::styled(
-            "█".repeat(filled),
-            Style::default().fg(pal.gauge_color(ratio)),
-        ));
-        spans.push(Span::styled(
-            "░".repeat(empty),
-            Style::default().fg(pal.dim),
-        ));
-        spans.push(Span::styled(
-            format!(" {:>3.0}%", ratio * 100.0),
-            style.fg(pal.dim),
-        ));
-    }
-    if partition.is_system {
-        spans.push(Span::styled(
-            format!(" {}", system_tag(app)),
-            Style::default().fg(pal.err),
-        ));
-    }
-    Line::from(spans)
+    let free = p.size.saturating_sub(used);
+    let ratio = p.usage_ratio().unwrap_or(0.0);
+    let bar_w = 24usize;
+    let filled = (ratio * bar_w as f64).round() as usize;
+    let empty = bar_w.saturating_sub(filled);
+    out.push(Line::from(vec![
+        Span::styled("█".repeat(filled), Style::default().fg(pal.gauge_color(ratio))),
+        Span::styled("░".repeat(empty), Style::default().fg(pal.dim)),
+        Span::styled(format!(" {:>3.0}%", ratio * 100.0), Style::default().fg(pal.dim)),
+    ]));
+    out.push(Line::from(Span::styled(
+        format!(
+            "{} {} {} ({:.0}%)",
+            human_bytes(free),
+            m.storage_free_of,
+            human_bytes(p.size),
+            ratio * 100.0
+        ),
+        Style::default().fg(pal.dim),
+    )));
+    out
 }
 
 fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
@@ -250,11 +245,11 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             Style::default().fg(pal.dim),
         ))),
         Some((drive, partition)) => {
-            lines.push(kv(
-                m.storage_label_model,
-                format!("{} {}", drive.vendor, drive.model).trim(),
-                pal,
-            ));
+            lines.push(Line::from(Span::styled(
+                drive.friendly_label(),
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
             lines.push(kv(m.storage_label_node, &drive.dev_node, pal));
             lines.push(kv(m.storage_label_bus, drive.bus.label(), pal));
             lines.push(kv(
@@ -273,44 +268,46 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                     Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
                 )));
             }
-            if drive.is_ventoy {
-                lines.push(Line::from(Span::styled(
-                    m.storage_ventoy_is_multiboot,
-                    Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
-                )));
-            }
 
-            if let Some(p) = partition {
-                lines.push(Line::from(""));
-                let label = if p.label.is_empty() {
-                    p.dev_node.clone()
-                } else {
-                    p.label.clone()
-                };
-                lines.push(Line::from(Span::styled(
-                    label,
-                    Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
-                )));
-                lines.push(kv(m.storage_label_fs, p.fs.label(), pal));
-                lines.push(kv(m.storage_label_size, human_bytes(p.size), pal));
-                if p.is_mounted() {
-                    lines.push(kv(
-                        m.storage_label_mounted_at,
-                        p.mount_points.join(", "),
-                        pal,
-                    ));
-                    if let Some(used) = p.used {
-                        lines.push(kv(
-                            m.storage_label_usage,
-                            format!("{} / {}", human_bytes(used), human_bytes(p.size)),
-                            pal,
-                        ));
-                    }
-                } else {
+            lines.push(Line::from(""));
+            match partition {
+                None => {
                     lines.push(Line::from(Span::styled(
                         m.storage_label_not_mounted,
                         Style::default().fg(pal.dim),
                     )));
+                }
+                Some(p) => {
+                    lines.push(kv(m.storage_label_fs, p.fs.label(), pal));
+                    if p.is_mounted() {
+                        lines.push(kv(
+                            m.storage_label_mounted_at,
+                            p.mount_points.join(", "),
+                            pal,
+                        ));
+                        for line in capacity_bar(pal, m, p) {
+                            lines.push(line);
+                        }
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            m.storage_label_not_mounted,
+                            Style::default().fg(pal.dim),
+                        )));
+                    }
+
+                    lines.push(Line::from(""));
+                    let mb_status = match p.mount_points.first() {
+                        Some(mp) if multiboot::is_multiboot_installed(mp) => {
+                            format!(
+                                "{} ({} ISOs)",
+                                m.storage_multiboot_active,
+                                multiboot::count_isos(mp)
+                            )
+                        }
+                        Some(_) => m.storage_multiboot_not_installed.to_string(),
+                        None => m.storage_multiboot_unknown.to_string(),
+                    };
+                    lines.push(kv(m.storage_label_multiboot, mb_status, pal));
                 }
             }
         }
@@ -327,39 +324,28 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             Style::default().fg(pal.dim),
         ),
         Span::styled(
-            format!("{}  ", m.storage_hint_eject),
-            Style::default().fg(pal.dim),
-        ),
-    ]));
-    let selected_is_ventoy = app
-        .storage_selection()
-        .map(|(d, _)| d.is_ventoy)
-        .unwrap_or(false);
-    let mut last_hint_row = vec![
-        Span::styled(
             format!("{}  ", m.storage_hint_format),
             Style::default().fg(pal.dim),
         ),
+    ]));
+    lines.push(Line::from(vec![
         Span::styled(
-            format!("{}  ", m.storage_hint_iso),
+            format!("{}  ", m.storage_hint_multiboot_prepare),
             Style::default().fg(pal.dim),
         ),
         Span::styled(
-            format!("{}  ", m.storage_hint_ventoy),
+            format!("{}  ", m.storage_hint_iso_manager),
+            Style::default().fg(pal.dim),
+        ),
+        Span::styled(
+            format!("{}  ", m.storage_hint_eject),
             Style::default().fg(pal.dim),
         ),
         Span::styled(
             format!("{}  ", m.storage_hint_refresh),
             Style::default().fg(pal.dim),
         ),
-    ];
-    if selected_is_ventoy {
-        last_hint_row.push(Span::styled(
-            m.storage_hint_iso_manager,
-            Style::default().fg(pal.dim),
-        ));
-    }
-    lines.push(Line::from(last_hint_row));
+    ]));
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -375,7 +361,8 @@ pub(crate) fn kv<'a>(label: &'a str, value: impl Into<String>, pal: &Palette) ->
 }
 
 // ---------------------------------------------------------------------------
-// Modais interativos: Formatação (Épico G) e ISO Flasher (Épico H)
+// Modais interativos: Formatação (Épico G), ISO Flasher (Épico H) e
+// gerenciador de ISOs multi-boot.
 // ---------------------------------------------------------------------------
 
 /// Ponto de entrada dos modais de storage — despachado por `ui::draw` quando
@@ -384,9 +371,8 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     match &app.storage_modal {
         StorageModal::Format(s) => draw_format_modal(app, pal, f, s),
         StorageModal::Flasher(s) => draw_flasher_modal(app, pal, f, s),
-        StorageModal::Ventoy(s) => draw_ventoy_modal(app, pal, f, s),
         StorageModal::FilePicker(s) => super::file_picker::draw(app, pal, f, s),
-        StorageModal::VentoyIsoManager(s) => draw_ventoy_iso_manager_modal(app, pal, f, s),
+        StorageModal::MultibootIsoManager(s) => draw_multiboot_iso_manager_modal(app, pal, f, s),
         StorageModal::None => {}
     }
 }
@@ -675,89 +661,6 @@ fn draw_flasher_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FlasherModalS
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_ventoy_modal(app: &App, pal: &Palette, f: &mut Frame, s: &VentoyModalState) {
-    let m = app.lang.messages();
-    let area = super::centered(64, 55, f.area());
-    f.render_widget(Clear, area);
-    let block = modal_block(m.storage_ventoy_title, pal);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let mut lines: Vec<Line> = vec![
-        kv(m.storage_ventoy_target_label, &s.target_label, pal),
-        kv(m.storage_label_node, &s.target_dev_node, pal),
-        Line::from(""),
-    ];
-
-    match &s.stage {
-        VentoyStage::Confirm1 => {
-            lines.push(Line::from(Span::styled(
-                m.storage_ventoy_confirm1_title,
-                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(m.storage_flash_hint_continue, Style::default().fg(pal.dim)),
-                Span::raw("  "),
-                Span::styled(m.storage_flash_hint_cancel, Style::default().fg(pal.dim)),
-            ]));
-        }
-        VentoyStage::Confirm2 { typed } => {
-            lines.push(Line::from(Span::styled(
-                m.storage_ventoy_confirm2_title,
-                Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{}: {}",
-                    m.storage_ventoy_confirm2_prompt, s.target_dev_node
-                ),
-                Style::default().fg(pal.accent),
-            )));
-            lines.push(Line::from(Span::styled(
-                format!("{typed}▏"),
-                Style::default().fg(pal.bg).bg(pal.accent),
-            )));
-        }
-        VentoyStage::Installing { log } => {
-            lines.push(Line::from(Span::styled(
-                m.storage_ventoy_installing,
-                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            for line in log {
-                lines.push(Line::from(Span::styled(
-                    line.as_str(),
-                    Style::default().fg(pal.dim),
-                )));
-            }
-        }
-        VentoyStage::Done { ok, message } => {
-            let (color, text) = if *ok {
-                (pal.ok, m.storage_ventoy_success)
-            } else {
-                (pal.err, m.storage_ventoy_failed)
-            };
-            lines.push(Line::from(Span::styled(
-                text,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(Span::styled(
-                message.as_str(),
-                Style::default().fg(pal.dim),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                m.storage_flash_hint_continue,
-                Style::default().fg(pal.dim),
-            )));
-        }
-    }
-
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-}
-
 pub(crate) fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
     let bar_w = 30usize;
     let filled = (pct.clamp(0.0, 1.0) * bar_w as f32).round() as usize;
@@ -776,46 +679,46 @@ pub(crate) fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Gerenciador de ISOs do Ventoy (Part 4 do picker/Ventoy manager).
+// Gerenciador de ISOs multi-boot (`<mount>/ISOs/`).
 // ---------------------------------------------------------------------------
 
-fn draw_ventoy_iso_manager_modal(
+fn draw_multiboot_iso_manager_modal(
     app: &App,
     pal: &Palette,
     f: &mut Frame,
-    s: &VentoyIsoManagerState,
+    s: &MultibootIsoManagerState,
 ) {
     let m = app.lang.messages();
     let area = super::centered(70, 60, f.area());
     f.render_widget(Clear, area);
-    let block = modal_block(m.ventoy_iso_mgr_title, pal);
+    let block = modal_block(m.multiboot_iso_mgr_title, pal);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let mut lines: Vec<Line> = vec![
-        kv(m.storage_ventoy_target_label, &s.target_label, pal),
+        kv(m.storage_multiboot_target_label, &s.target_label, pal),
         Line::from(""),
     ];
 
     match &s.stage {
-        VentoyIsoManagerStage::Loading => {
+        MultibootIsoManagerStage::Loading => {
             lines.push(Line::from(Span::styled(
                 m.storage_flash_checksumming, // reaproveita "Calculando..." como placeholder de "Carregando..."
                 Style::default().fg(pal.dim),
             )));
         }
-        VentoyIsoManagerStage::Listing {
+        MultibootIsoManagerStage::Listing {
             entries,
             selected,
             free_bytes,
         } => {
             if let Some(free) = free_bytes {
-                lines.push(kv(m.ventoy_iso_mgr_free_space, human_bytes(*free), pal));
+                lines.push(kv(m.multiboot_iso_mgr_free_space, human_bytes(*free), pal));
                 lines.push(Line::from(""));
             }
             if entries.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    m.ventoy_iso_mgr_empty,
+                    m.multiboot_iso_mgr_empty,
                     Style::default().fg(pal.dim),
                 )));
             } else {
@@ -830,15 +733,15 @@ fn draw_ventoy_iso_manager_modal(
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("{}  ", m.ventoy_iso_mgr_hint_add),
+                    format!("{}  ", m.multiboot_iso_mgr_hint_add),
                     Style::default().fg(pal.dim),
                 ),
-                Span::styled(m.ventoy_iso_mgr_hint_remove, Style::default().fg(pal.dim)),
+                Span::styled(m.multiboot_iso_mgr_hint_remove, Style::default().fg(pal.dim)),
             ]));
         }
-        VentoyIsoManagerStage::ConfirmRemove { file_name } => {
+        MultibootIsoManagerStage::ConfirmRemove { file_name } => {
             lines.push(Line::from(Span::styled(
-                format!("{}: {file_name}", m.ventoy_iso_mgr_confirm_remove),
+                format!("{}: {file_name}", m.multiboot_iso_mgr_confirm_remove),
                 Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -848,7 +751,7 @@ fn draw_ventoy_iso_manager_modal(
                 Span::styled(m.storage_flash_hint_cancel, Style::default().fg(pal.dim)),
             ]));
         }
-        VentoyIsoManagerStage::Copying {
+        MultibootIsoManagerStage::Copying {
             bytes_written,
             total_bytes,
             file_name,
@@ -860,7 +763,7 @@ fn draw_ventoy_iso_manager_modal(
             };
             lines.push(kv(m.storage_flash_iso_label, file_name, pal));
             lines.push(Line::from(Span::styled(
-                m.ventoy_iso_mgr_copying,
+                m.multiboot_iso_mgr_copying,
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )));
             lines.push(progress_line(pct, pal));
@@ -870,14 +773,14 @@ fn draw_ventoy_iso_manager_modal(
                 human_bytes(*total_bytes)
             )));
         }
-        VentoyIsoManagerStage::Removing { file_name } => {
+        MultibootIsoManagerStage::Removing { file_name } => {
             lines.push(kv(m.storage_flash_iso_label, file_name, pal));
             lines.push(Line::from(Span::styled(
-                m.ventoy_iso_mgr_removing,
+                m.multiboot_iso_mgr_removing,
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )));
         }
-        VentoyIsoManagerStage::Error { message } => {
+        MultibootIsoManagerStage::Error { message } => {
             lines.push(Line::from(Span::styled(
                 message.as_str(),
                 Style::default().fg(pal.err).add_modifier(Modifier::BOLD),

@@ -171,6 +171,25 @@ pub struct DriveInfo {
     pub partitions: Vec<PartitionInfo>,
 }
 
+impl DriveInfo {
+    /// Rótulo amigável do drive para a lista/detalhes da aba Storage: o
+    /// rótulo (`IdLabel`) da partição primária quando presente e não-vazio
+    /// (ex.: `MEUPENDRIVE`), senão `"<vendor> <model>"`, senão o nó de
+    /// dispositivo bruto (`/dev/sdX`) como último recurso.
+    pub fn friendly_label(&self) -> String {
+        if let Some(p) = primary_partition(self) {
+            if !p.label.trim().is_empty() {
+                return p.label.clone();
+            }
+        }
+        let vm = format!("{} {}", self.vendor, self.model).trim().to_string();
+        if !vm.is_empty() {
+            return vm;
+        }
+        self.dev_node.clone()
+    }
+}
+
 /// Snapshot completo da árvore de discos, emitido a cada refresh do backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageSnapshot {
@@ -178,32 +197,24 @@ pub struct StorageSnapshot {
     pub drives: Vec<DriveInfo>,
 }
 
-/// Uma linha "achatada" da árvore drive→partição, usada pela navegação da UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StorageRow {
-    Drive(usize),
-    Partition(usize, usize),
-}
-
 impl StorageSnapshot {
-    /// Achata a árvore em linhas navegáveis (drive, depois suas partições).
-    pub fn rows(&self) -> Vec<StorageRow> {
-        let mut rows = Vec::new();
-        for (di, drive) in self.drives.iter().enumerate() {
-            rows.push(StorageRow::Drive(di));
-            for pi in 0..drive.partitions.len() {
-                rows.push(StorageRow::Partition(di, pi));
-            }
-        }
-        rows
-    }
-
     pub fn drive(&self, idx: usize) -> Option<&DriveInfo> {
         self.drives.get(idx)
     }
 
     pub fn partition(&self, drive_idx: usize, part_idx: usize) -> Option<&PartitionInfo> {
         self.drives.get(drive_idx)?.partitions.get(part_idx)
+    }
+
+    /// Busca uma partição em qualquer drive pelo seu `DeviceId` (caminho de
+    /// objeto D-Bus do bloco) — usado pelo gerenciador de ISOs multi-boot e
+    /// pela preparação de multi-boot, que recebem o `device_id` da partição
+    /// primária já resolvida pela UI, não mais o `device_id` do drive.
+    pub fn partition_by_id(&self, id: &DeviceId) -> Option<&PartitionInfo> {
+        self.drives
+            .iter()
+            .flat_map(|d| &d.partitions)
+            .find(|p| &p.id == id)
     }
 
     /// `true` quando `id` identifica um drive ou partição marcados como
@@ -618,7 +629,7 @@ pub fn parse_dd_bytes_copied(line: &str) -> Option<u64> {
 /// primeira tentativa) e devolve `Some(senha)`/`None` (cache válido) para a
 /// próxima chamada de [`spawn_sudo`], ou `Err` quando o usuário cancela
 /// (`Esc`) — propagada pelos laços de repetição de `format_via_sudo`/
-/// `flash_elevated`/`ventoy_task` como falha definitiva da operação.
+/// `flash_elevated`/`format_via_sudo` como falha definitiva da operação.
 async fn next_sudo_attempt(
     sudo_tx: &SudoPasswordTx,
     label: &str,
@@ -727,8 +738,33 @@ pub fn ventoy_data_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
         .max_by_key(|p| p.size)
 }
 
-/// Decide se `name` tem extensão de imagem que o gerenciador de ISOs do
-/// Ventoy reconhece (`.iso`/`.img`, sem diferenciar maiúsculas/minúsculas).
+/// Partição "primária" de um drive, na visão simplificada (um item por
+/// drive) da aba Storage: a que já está montada, senão a maior partição que
+/// não seja de sistema, senão a partição de dados de um Ventoy/multi-boot
+/// pré-existente (ver [`ventoy_data_partition`]). É esta partição que `[m]`
+/// monta/desmonta, `[f]` formata-alvo (quando aplicável), `[B]` prepara para
+/// multi-boot e `[G]` usa como raiz do gerenciador de ISOs.
+pub fn primary_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
+    if let Some(p) = drive
+        .partitions
+        .iter()
+        .find(|p| p.is_mounted() && !p.is_system)
+    {
+        return Some(p);
+    }
+    if let Some(p) = drive
+        .partitions
+        .iter()
+        .filter(|p| !p.is_system)
+        .max_by_key(|p| p.size)
+    {
+        return Some(p);
+    }
+    ventoy_data_partition(drive)
+}
+
+/// Decide se `name` tem extensão de imagem que o gerenciador de ISOs
+/// multi-boot reconhece (`.iso`/`.img`, sem diferenciar maiúsculas/minúsculas).
 pub fn is_iso_or_img(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".iso") || lower.ends_with(".img")
@@ -1317,92 +1353,29 @@ async fn flash_inner(
 }
 
 // ---------------------------------------------------------------------------
-// Ventoy — instalação via `scripts/ventoy.sh` (Gadget/Script)
+// Multi-boot leve embarcado (substitui o antigo instalador do Ventoy via
+// `scripts/ventoy.sh` — ver `backend::multiboot`).
 // ---------------------------------------------------------------------------
 
-/// Resolve o caminho do `scripts/ventoy.sh`, na ordem: `$HAL9001_VENTOY_SCRIPT`
-/// (override explícito), diretório do binário em execução, e — apenas em
-/// builds de desenvolvimento — o diretório-fonte do crate.
-fn resolve_ventoy_script_path() -> Option<std::path::PathBuf> {
-    if let Ok(p) = std::env::var("HAL9001_VENTOY_SCRIPT") {
-        let p = std::path::PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
+/// Prepara `mount_point` para o multi-boot leve do HAL-9001 (ver
+/// [`crate::backend::multiboot::prepare_multiboot`]), rodando a escrita de
+/// arquivos numa task blocking (I/O de filesystem síncrono) para nunca
+/// travar o executor async.
+async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: EventTx) {
+    let mp = std::path::PathBuf::from(&mount_point);
+    let result = tokio::task::spawn_blocking(move || crate::backend::multiboot::prepare_multiboot(&mp))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
+    let toast = match &result {
+        Ok(()) => {
+            let n = crate::backend::multiboot::count_isos(&mount_point);
+            Toast::info(format!("Multi-boot preparado com sucesso ({n} ISO(s))"))
         }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("scripts/ventoy.sh");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    for prefix in ["/usr/local/share/hal9001", "/usr/share/hal9001"] {
-        let candidate = std::path::Path::new(prefix).join("scripts/ventoy.sh");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    #[cfg(debug_assertions)]
-    {
-        let candidate = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ventoy.sh");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// Executa `sudo -S -k -- bash scripts/ventoy.sh <dev_node>` (ou `sudo -n --`
-/// quando o cache de autenticação já é válido), repassando cada linha de
-/// saída (stdout/stderr) como progresso via `StorageVentoyProgress` e pedindo
-/// a senha ao usuário pelo modal nativo da TUI quando necessário — nunca
-/// suspende o terminal nem herda seu stdio, então nunca corrompe a grade do
-/// Ratatui.
-async fn ventoy_task(device_id: String, dev_node: String, tx: EventTx, sudo_tx: SudoPasswordTx) {
-    let Some(script) = resolve_ventoy_script_path() else {
-        let _ = tx.send(AppEvent::StorageVentoyDone {
-            device_id,
-            result: Err("scripts/ventoy.sh não encontrado".to_string()),
-        });
-        return;
+        Err(e) => Toast::error(format!("Falha ao preparar multi-boot: {e}")),
     };
-    let label = format!("Instalar Ventoy em {dev_node}");
-    let args = vec![script.to_string_lossy().to_string(), dev_node];
-    let mut retry_error: Option<String> = None;
-
-    let result = loop {
-        let password = match next_sudo_attempt(&sudo_tx, &label, &mut retry_error).await {
-            Ok(pw) => pw,
-            Err(msg) => break Err(msg),
-        };
-        let mut run = match spawn_sudo(password, "bash".to_string(), args.clone()) {
-            Ok(r) => r,
-            Err(e) => break Err(format!("falha ao executar ventoy.sh: {e}")),
-        };
-        while let Some(line) = run.lines.recv().await {
-            let _ = tx.send(AppEvent::StorageVentoyProgress {
-                device_id: device_id.clone(),
-                line,
-            });
-        }
-        match run.handle.await {
-            Ok(Ok((status, _stderr_text))) if status.success() => {
-                break Ok("Ventoy instalado com sucesso".to_string())
-            }
-            Ok(Ok((_status, stderr_text))) if is_sudo_auth_failure(&stderr_text) => {
-                retry_error = Some("Senha incorreta".to_string());
-                continue;
-            }
-            Ok(Ok((status, stderr_text))) => {
-                break Err(format!("ventoy.sh terminou com {status}: {stderr_text}"))
-            }
-            Ok(Err(e)) => break Err(format!("falha ao executar ventoy.sh: {e}")),
-            Err(e) => break Err(format!("falha ao executar ventoy.sh: {e}")),
-        }
-    };
-    let _ = tx.send(AppEvent::StorageVentoyDone { device_id, result });
+    tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, ok = result.is_ok(), "preparação de multi-boot concluída");
+    let _ = tx.send(AppEvent::Toast(toast));
 }
 
 /// Roda `bin` (um `mkfs.*` resolvido por [`mkfs_command`]) sobre `dev_node`
@@ -1604,15 +1577,23 @@ async fn flash_task(
 }
 
 // ---------------------------------------------------------------------------
-// Gerenciador de ISOs do Ventoy — listar/adicionar/remover arquivos na
-// partição de dados de um pendrive Ventoy já configurado.
+// Gerenciador de ISOs multi-boot — listar/adicionar/remover arquivos em
+// `<mount>/ISOs/` de uma partição de dados já preparada (ou preparável).
 // ---------------------------------------------------------------------------
 
-/// Lê a raiz de `mount_point`, filtra `.iso`/`.img` e emite a listagem
-/// (ordenada) junto do espaço livre restante na partição.
+/// Caminho de `<mount>/ISOs`, criado sob demanda por [`multiboot_add_iso_task`]
+/// quando ainda não existir (ex.: drive ainda não preparado via `[B]`, mas o
+/// usuário já quer copiar uma ISO para dentro).
+fn isos_subdir(mount_point: &str) -> String {
+    format!("{}/ISOs", mount_point.trim_end_matches('/'))
+}
+
+/// Lê `<mount>/ISOs/`, filtra `.iso`/`.img` e emite a listagem (ordenada)
+/// junto do espaço livre restante na partição inteira.
 async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
+    let isos_dir = isos_subdir(mount_point);
     let mut raw = Vec::new();
-    if let Ok(mut rd) = tokio::fs::read_dir(mount_point).await {
+    if let Ok(mut rd) = tokio::fs::read_dir(&isos_dir).await {
         while let Ok(Some(entry)) = rd.next_entry().await {
             let Ok(meta) = entry.metadata().await else {
                 continue;
@@ -1626,17 +1607,17 @@ async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
     }
     let entries = build_ventoy_entries(raw);
     let free_bytes = free_bytes_for_mount(mount_point);
-    let _ = tx.send(AppEvent::StorageVentoyIsoList {
+    let _ = tx.send(AppEvent::StorageMultibootIsoList {
         device_id,
         entries,
         free_bytes,
     });
 }
 
-/// Garante a montagem da partição de dados do Ventoy e publica a listagem
-/// atual de ISOs. Falha graciosamente (lista vazia + toast) se a montagem
-/// falhar — nunca deixa o gerenciador travado em `Loading`.
-async fn ventoy_list_isos_task(
+/// Garante a montagem da partição de dados e publica a listagem atual de
+/// ISOs sob `ISOs/`. Falha graciosamente (lista vazia + toast) se a
+/// montagem falhar — nunca deixa o gerenciador travado em `Loading`.
+async fn multiboot_list_isos_task(
     conn: Connection,
     device_id: String,
     part_path: String,
@@ -1647,9 +1628,9 @@ async fn ventoy_list_isos_task(
         Ok(mount_point) => list_and_emit(&mount_point, device_id, &tx).await,
         Err(e) => {
             let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                "Falha ao montar partição de dados do Ventoy: {e}"
+                "Falha ao montar partição de dados: {e}"
             ))));
-            let _ = tx.send(AppEvent::StorageVentoyIsoList {
+            let _ = tx.send(AppEvent::StorageMultibootIsoList {
                 device_id,
                 entries: Vec::new(),
                 free_bytes: None,
@@ -1686,7 +1667,7 @@ async fn copy_iso_inner(
         written += n as u64;
 
         if last_emit.elapsed() >= PROGRESS_THROTTLE {
-            let _ = tx.send(AppEvent::StorageVentoyIsoCopyProgress {
+            let _ = tx.send(AppEvent::StorageMultibootIsoCopyProgress {
                 device_id: device_id.to_string(),
                 bytes_written: written,
                 total_bytes,
@@ -1698,7 +1679,7 @@ async fn copy_iso_inner(
     dst.flush().await?;
     dst.sync_all().await?;
 
-    let _ = tx.send(AppEvent::StorageVentoyIsoCopyProgress {
+    let _ = tx.send(AppEvent::StorageMultibootIsoCopyProgress {
         device_id: device_id.to_string(),
         bytes_written: total_bytes,
         total_bytes,
@@ -1706,7 +1687,7 @@ async fn copy_iso_inner(
     Ok(())
 }
 
-async fn ventoy_add_iso_task(
+async fn multiboot_add_iso_task(
     conn: Connection,
     device_id: String,
     part_path: String,
@@ -1717,31 +1698,39 @@ async fn ventoy_add_iso_task(
     let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
         Ok(mp) => mp,
         Err(e) => {
-            let _ = tx.send(AppEvent::StorageVentoyIsoCopyDone {
+            let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
                 device_id,
                 result: Err(format!("falha ao montar partição de dados: {e}")),
             });
             return;
         }
     };
+    let isos_dir = isos_subdir(&mount_point);
+    if let Err(e) = tokio::fs::create_dir_all(&isos_dir).await {
+        let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
+            device_id,
+            result: Err(format!("falha ao criar diretório ISOs/: {e}")),
+        });
+        return;
+    }
     let file_name = std::path::Path::new(&src_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "image.iso".to_string());
-    let dst_path = format!("{}/{}", mount_point.trim_end_matches('/'), file_name);
+    let dst_path = format!("{isos_dir}/{file_name}");
 
     let result = copy_iso_inner(&src_path, &dst_path, &device_id, &tx)
         .await
         .map(|()| file_name.clone())
         .map_err(|e| e.to_string());
-    let _ = tx.send(AppEvent::StorageVentoyIsoCopyDone {
+    let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
         device_id: device_id.clone(),
         result,
     });
     list_and_emit(&mount_point, device_id, &tx).await;
 }
 
-async fn ventoy_remove_iso_task(
+async fn multiboot_remove_iso_task(
     conn: Connection,
     device_id: String,
     part_path: String,
@@ -1752,19 +1741,19 @@ async fn ventoy_remove_iso_task(
     let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
         Ok(mp) => mp,
         Err(e) => {
-            let _ = tx.send(AppEvent::StorageVentoyIsoRemoveDone {
+            let _ = tx.send(AppEvent::StorageMultibootIsoRemoveDone {
                 device_id,
                 result: Err(format!("falha ao montar partição de dados: {e}")),
             });
             return;
         }
     };
-    let target = format!("{}/{}", mount_point.trim_end_matches('/'), file_name);
+    let target = format!("{}/{}", isos_subdir(&mount_point), file_name);
     let result = tokio::fs::remove_file(&target)
         .await
         .map(|()| file_name.clone())
         .map_err(|e| e.to_string());
-    let _ = tx.send(AppEvent::StorageVentoyIsoRemoveDone {
+    let _ = tx.send(AppEvent::StorageMultibootIsoRemoveDone {
         device_id: device_id.clone(),
         result,
     });
@@ -2087,7 +2076,9 @@ async fn handle_action(
                 cancel.store(true, Ordering::Relaxed);
             }
         }
-        Action::StorageVentoyInstall { device_id } => {
+        Action::StorageMultibootPrepare { device_id } => {
+            // Camada 3 (TOCTOU): revalida a trava de segurança contra o
+            // último snapshot conhecido antes de tocar o filesystem.
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
@@ -2096,24 +2087,41 @@ async fn handle_action(
                 return;
             };
             if snap.is_system_target(&id) {
-                tracing::warn!(target: "hal9001::storage", device = %device_id, "instalação do Ventoy em disco de sistema recusada");
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "preparação de multi-boot em disco de sistema recusada");
                 let _ = tx.send(AppEvent::Toast(Toast::error(
                     "operação bloqueada: disco de sistema",
                 )));
                 return;
             }
-            let Some(dev_node) = snap.drive_dev_node(&id) else {
+            let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo alvo não encontrado",
+                    "partição alvo não encontrada",
                 )));
                 return;
             };
-            tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "instalação do Ventoy solicitada");
+            if !matches!(part.fs, FsKind::Vfat) {
+                let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                    "a partição precisa estar formatada como FAT32 para multi-boot (atual: {}) — formate primeiro com [f]",
+                    part.fs.label()
+                ))));
+                return;
+            }
+            let part_path = part.id.0.clone();
+            let existing_mount = part.mount_points.first().cloned();
+            let mount_point = match ensure_mounted(conn, &part_path, existing_mount).await {
+                Ok(mp) => mp,
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                        "falha ao montar partição de dados: {e}"
+                    ))));
+                    return;
+                }
+            };
+            tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, "preparação de multi-boot solicitada");
             let txc = tx.clone();
-            let sudo_txc = sudo_tx.clone();
-            tokio::spawn(ventoy_task(device_id, dev_node, txc, sudo_txc));
+            tokio::spawn(multiboot_prepare_task(device_id, mount_point, txc));
         }
-        Action::StorageVentoyListIsos { device_id } => {
+        Action::StorageMultibootListIsos { device_id } => {
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
@@ -2121,15 +2129,9 @@ async fn handle_action(
                 )));
                 return;
             };
-            let Some(drive) = snap.drive_by_id(&id) else {
+            let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo alvo não encontrado",
-                )));
-                return;
-            };
-            let Some(part) = ventoy_data_partition(drive) else {
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição de dados do Ventoy não encontrada",
+                    "partição alvo não encontrada",
                 )));
                 return;
             };
@@ -2137,7 +2139,7 @@ async fn handle_action(
             let existing_mount = part.mount_points.first().cloned();
             let conn2 = conn.clone();
             let txc = tx.clone();
-            tokio::spawn(ventoy_list_isos_task(
+            tokio::spawn(multiboot_list_isos_task(
                 conn2,
                 device_id,
                 part_path,
@@ -2145,7 +2147,7 @@ async fn handle_action(
                 txc,
             ));
         }
-        Action::StorageVentoyAddIso {
+        Action::StorageMultibootAddIso {
             device_id,
             src_path,
         } => {
@@ -2157,30 +2159,24 @@ async fn handle_action(
                 return;
             };
             if snap.is_system_target(&id) {
-                tracing::warn!(target: "hal9001::storage", device = %device_id, "escrita de ISO em disco de sistema recusada (gerenciador Ventoy)");
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "escrita de ISO em disco de sistema recusada (gerenciador multi-boot)");
                 let _ = tx.send(AppEvent::Toast(Toast::error(
                     "operação bloqueada: disco de sistema",
                 )));
                 return;
             }
-            let Some(drive) = snap.drive_by_id(&id) else {
+            let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo alvo não encontrado",
-                )));
-                return;
-            };
-            let Some(part) = ventoy_data_partition(drive) else {
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição de dados do Ventoy não encontrada",
+                    "partição alvo não encontrada",
                 )));
                 return;
             };
             let part_path = part.id.0.clone();
             let existing_mount = part.mount_points.first().cloned();
-            tracing::warn!(target: "hal9001::storage", device = %device_id, src = %src_path, "cópia de ISO para o Ventoy solicitada");
+            tracing::warn!(target: "hal9001::storage", device = %device_id, src = %src_path, "cópia de ISO para o multi-boot solicitada");
             let conn2 = conn.clone();
             let txc = tx.clone();
-            tokio::spawn(ventoy_add_iso_task(
+            tokio::spawn(multiboot_add_iso_task(
                 conn2,
                 device_id,
                 part_path,
@@ -2189,7 +2185,7 @@ async fn handle_action(
                 txc,
             ));
         }
-        Action::StorageVentoyRemoveIso {
+        Action::StorageMultibootRemoveIso {
             device_id,
             file_name,
         } => {
@@ -2201,30 +2197,24 @@ async fn handle_action(
                 return;
             };
             if snap.is_system_target(&id) {
-                tracing::warn!(target: "hal9001::storage", device = %device_id, "remoção de ISO em disco de sistema recusada (gerenciador Ventoy)");
+                tracing::warn!(target: "hal9001::storage", device = %device_id, "remoção de ISO em disco de sistema recusada (gerenciador multi-boot)");
                 let _ = tx.send(AppEvent::Toast(Toast::error(
                     "operação bloqueada: disco de sistema",
                 )));
                 return;
             }
-            let Some(drive) = snap.drive_by_id(&id) else {
+            let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo alvo não encontrado",
-                )));
-                return;
-            };
-            let Some(part) = ventoy_data_partition(drive) else {
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição de dados do Ventoy não encontrada",
+                    "partição alvo não encontrada",
                 )));
                 return;
             };
             let part_path = part.id.0.clone();
             let existing_mount = part.mount_points.first().cloned();
-            tracing::warn!(target: "hal9001::storage", device = %device_id, file = %file_name, "remoção de ISO do Ventoy solicitada");
+            tracing::warn!(target: "hal9001::storage", device = %device_id, file = %file_name, "remoção de ISO do multi-boot solicitada");
             let conn2 = conn.clone();
             let txc = tx.clone();
-            tokio::spawn(ventoy_remove_iso_task(
+            tokio::spawn(multiboot_remove_iso_task(
                 conn2,
                 device_id,
                 part_path,

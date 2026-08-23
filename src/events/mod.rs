@@ -83,33 +83,26 @@ pub enum AppEvent {
         device_id: String,
         result: Result<String, String>,
     },
-    /// Uma linha de saída (stdout/stderr) do `scripts/ventoy.sh` em execução.
-    StorageVentoyProgress { device_id: String, line: String },
-    /// Conclusão (sucesso ou falha) da instalação do Ventoy.
-    StorageVentoyDone {
-        device_id: String,
-        result: Result<String, String>,
-    },
-    /// Listagem (atualizada) das ISOs presentes na partição de dados de um
-    /// pendrive Ventoy, junto do espaço livre restante nela.
-    StorageVentoyIsoList {
+    /// Listagem (atualizada) das ISOs presentes em `<mount>/ISOs/` da
+    /// partição de dados identificada, junto do espaço livre restante nela.
+    StorageMultibootIsoList {
         device_id: String,
         entries: Vec<VentoyIsoEntry>,
         free_bytes: Option<u64>,
     },
-    /// Progresso de cópia de uma ISO para a partição de dados do Ventoy.
-    StorageVentoyIsoCopyProgress {
+    /// Progresso de cópia de uma ISO para `<mount>/ISOs/`.
+    StorageMultibootIsoCopyProgress {
         device_id: String,
         bytes_written: u64,
         total_bytes: u64,
     },
-    /// Conclusão (sucesso ou falha) da cópia de uma ISO para o Ventoy.
-    StorageVentoyIsoCopyDone {
+    /// Conclusão (sucesso ou falha) da cópia de uma ISO para o multi-boot.
+    StorageMultibootIsoCopyDone {
         device_id: String,
         result: Result<String, String>,
     },
-    /// Conclusão (sucesso ou falha) da remoção de uma ISO do Ventoy.
-    StorageVentoyIsoRemoveDone {
+    /// Conclusão (sucesso ou falha) da remoção de uma ISO do multi-boot.
+    StorageMultibootIsoRemoveDone {
         device_id: String,
         result: Result<String, String>,
     },
@@ -213,48 +206,52 @@ pub enum Action {
     StorageFlashCancel {
         device_id: String,
     },
-    /// Tecla `V`: abre o modal de instalação do Ventoy para o drive selecionado.
-    StorageVentoyOpen,
-    /// Instala o Ventoy no `device_id` informado via `scripts/ventoy.sh`.
-    /// Rejeitada pelo backend (e pelo `App`) quando o alvo é um disco de
-    /// sistema (ver `is_system_disk`).
-    StorageVentoyInstall {
+    /// Tecla `B`: prepara (não-destrutivamente) a partição primária do
+    /// drive selecionado para o multi-boot leve embarcado do HAL-9001 — ver
+    /// `Action::StorageMultibootPrepare` e `backend::multiboot`. Resolve a
+    /// partição primária e dispara a ação abaixo.
+    StorageMultibootPrepareOpen,
+    /// Prepara `device_id` (o `DeviceId` de uma partição, não de um drive)
+    /// para multi-boot: monta se necessário, grava `EFI/BOOT/BOOTX64.EFI` +
+    /// `boot/grub/grub.cfg` e o arquivo-marcador em `ISOs/`. Rejeitada pelo
+    /// backend (e pelo `App`) quando o alvo é um disco de sistema (ver
+    /// `is_system_disk`) ou não está formatado como FAT32.
+    StorageMultibootPrepare {
         device_id: String,
     },
-    /// Tecla `i`/`I`: abre o gerenciador de ISOs de um pendrive Ventoy
-    /// selecionado (sem efeito se o drive selecionado não for Ventoy).
-    StorageVentoyIsoManagerOpen,
-    /// Lista (ou relista) as ISOs presentes na partição de dados do Ventoy
-    /// identificado por `device_id`, montando-a primeiro se necessário.
-    StorageVentoyListIsos {
+    /// Tecla `G`: abre o gerenciador de ISOs multi-boot (`<mount>/ISOs/`) da
+    /// partição primária do drive selecionado.
+    StorageMultibootIsoManagerOpen,
+    /// Lista (ou relista) as ISOs presentes em `ISOs/` na partição
+    /// identificada por `device_id`, montando-a primeiro se necessário.
+    StorageMultibootListIsos {
         device_id: String,
     },
-    /// Copia `src_path` para a partição de dados do pendrive Ventoy
-    /// identificado, com progresso em streaming. Rejeitada quando o alvo é
-    /// um disco de sistema.
-    StorageVentoyAddIso {
+    /// Copia `src_path` para `<mount>/ISOs/` da partição identificada, com
+    /// progresso em streaming. Rejeitada quando o alvo é um disco de sistema.
+    StorageMultibootAddIso {
         device_id: String,
         src_path: String,
     },
-    /// Remove `file_name` da raiz da partição de dados do pendrive Ventoy
-    /// identificado. Rejeitada quando o alvo é um disco de sistema.
-    StorageVentoyRemoveIso {
+    /// Remove `file_name` de `<mount>/ISOs/` da partição identificada.
+    /// Rejeitada quando o alvo é um disco de sistema.
+    StorageMultibootRemoveIso {
         device_id: String,
         file_name: String,
     },
     /// Caractere digitado num campo de texto de um modal de storage (rótulo
     /// do volume, caminho da ISO, confirmação digitada) — ou atalho de
     /// caractere único num modal de navegação (file picker, gerenciador de
-    /// ISOs do Ventoy).
+    /// ISOs multi-boot).
     StorageModalChar(char),
     /// Apaga o último caractere do campo de texto ativo num modal de storage.
     StorageModalBackspace,
     /// Tecla `Delete`: remove o item selecionado num modal de storage que
-    /// suporte remoção (gerenciador de ISOs do Ventoy).
+    /// suporte remoção (gerenciador de ISOs multi-boot).
     StorageModalDelete,
     /// Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a
     /// partir de um modal de storage que aceite selecionar uma imagem (ISO
-    /// Flasher, adicionar ISO ao Ventoy).
+    /// Flasher, adicionar ISO ao multi-boot).
     StorageModalOpenPicker,
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),

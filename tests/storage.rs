@@ -4,13 +4,13 @@
 //! cálculo de velocidade/ETA e a invariante de segurança contra discos de
 //! sistema.
 
-use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab, VentoyStage};
+use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust, is_iso_or_img,
     is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
-    mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps,
+    mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
     resolve_block_object_path, sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind,
-    PartitionInfo, StorageRow, StorageSnapshot,
+    PartitionInfo, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};
@@ -166,18 +166,20 @@ fn mock_snapshot() -> StorageSnapshot {
 }
 
 #[test]
-fn rows_flatten_drives_and_partitions_in_order() {
+fn drive_only_list_has_one_row_per_drive() {
+    // A visão simplificada da aba Storage lista um item por drive físico/
+    // removível — sem navegação por partição individual (ver mock com 2
+    // drives, cada um com 1 partição: a lista deve expor só os 2 drives).
     let snap = mock_snapshot();
-    let rows = snap.rows();
-    assert_eq!(
-        rows,
-        vec![
-            StorageRow::Drive(0),
-            StorageRow::Partition(0, 0),
-            StorageRow::Drive(1),
-            StorageRow::Partition(1, 0),
-        ]
-    );
+    assert_eq!(snap.drives.len(), 2);
+}
+
+#[test]
+fn primary_partition_prefers_mounted_non_system() {
+    let snap = mock_snapshot();
+    let usb = &snap.drives[1];
+    let p = primary_partition(usb).expect("deveria resolver a partição primária");
+    assert_eq!(p.mount_points, vec!["/run/media/user/USB".to_string()]);
 }
 
 #[test]
@@ -208,7 +210,7 @@ fn non_system_drive_ejects_through_dispatch() {
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.active = Tab::Storage;
-    app.storage_selected = 2; // linha do drive USB (não-sistema).
+    app.storage_selected = 1; // drive USB (não-sistema).
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageEjectSelected, &tx);
@@ -226,7 +228,7 @@ fn mount_toggle_sends_unmount_when_already_mounted() {
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.active = Tab::Storage;
-    app.storage_selected = 3; // partição do drive USB, montada.
+    app.storage_selected = 1; // drive USB — partição primária já montada.
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageMountToggleSelected, &tx);
@@ -238,13 +240,13 @@ fn mount_toggle_sends_unmount_when_already_mounted() {
 }
 
 #[test]
-fn storage_selection_clamps_to_row_count_after_shrink() {
+fn storage_selection_clamps_to_drive_count_after_shrink() {
     let mut cfg = Config::default();
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.storage_selected = 999; // fora dos limites.
-    assert_eq!(app.storage_row(), Some(StorageRow::Partition(1, 0)));
+    assert_eq!(app.storage_drive_index(), Some(1)); // clampeado ao último drive.
 }
 
 // ---------------------------------------------------------------------------
@@ -617,7 +619,7 @@ fn sudo_prompt_esc_cancels_with_none_and_closes_modal() {
     let mut app = App::new(cfg);
     let (respond, mut rx) = tokio::sync::oneshot::channel();
     app.open_sudo_prompt(SudoPasswordRequest {
-        label: "Instalar Ventoy em /dev/sdb".to_string(),
+        label: "Preparar multi-boot em /dev/sdb".to_string(),
         retry_error: None,
         respond,
     });
@@ -1056,11 +1058,45 @@ fn render_format_and_flasher_modals_without_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// Gadget/Script Ventoy — modal e ação integrada.
+// Multi-boot leve embarcado — `[B]` prepara não-destrutivamente a partição
+// primária do drive selecionado (substitui o antigo instalador do Ventoy via
+// `scripts/ventoy.sh`). A trava de segurança é revalidada tanto aqui (camada
+// 1, no `App`) quanto no backend (camada 3, TOCTOU — ver
+// `backend::storage::handle_action`).
 // ---------------------------------------------------------------------------
 
+fn usb_target_snapshot_with_partition(dev_node: &str, size: u64) -> StorageSnapshot {
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/drives/usb-target".into());
+    d.dev_node = dev_node.to_string();
+    d.size = size;
+    d.is_system = false;
+    let mut p = partition(vec![], false);
+    p.id = DeviceId("/block_devices/usb-target1".into());
+    p.dev_node = format!("{dev_node}1");
+    p.fs = FsKind::Vfat;
+    p.label = "MULTIBOOT".to_string();
+    d.partitions = vec![p];
+    StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    }
+}
+
+fn app_with_usb_target_partitioned(dev_node: &str, size: u64) -> App {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(usb_target_snapshot_with_partition(
+        dev_node, size,
+    ))));
+    app.storage_selected = 0; // única linha: o drive USB.
+    app
+}
+
 #[test]
-fn ventoy_open_is_refused_for_system_disk_and_no_modal_opens() {
+fn multiboot_prepare_open_is_refused_for_system_disk() {
     let mut cfg = Config::default();
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
@@ -1069,137 +1105,45 @@ fn ventoy_open_is_refused_for_system_disk_and_no_modal_opens() {
     app.storage_selected = 0; // drive de sistema.
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageVentoyOpen, &tx);
+    app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
 
-    assert!(matches!(app.storage_modal, StorageModal::None));
     assert!(app.toast.is_some());
     assert!(rx.try_recv().is_err());
 }
 
 #[test]
-fn ventoy_open_starts_at_confirm1_for_non_system_drive() {
-    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
-    let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageVentoyOpen, &tx);
-
-    match &app.storage_modal {
-        StorageModal::Ventoy(s) => {
-            assert_eq!(s.target_dev_node, "/dev/sdz");
-            assert!(matches!(s.stage, VentoyStage::Confirm1));
-        }
-        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
-    }
-}
-
-#[test]
-fn ventoy_wizard_requires_matching_device_confirmation_before_install() {
-    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+fn multiboot_prepare_open_sends_action_with_primary_partition_id() {
+    let mut app = app_with_usb_target_partitioned("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageVentoyOpen, &tx);
-
-    app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
-
-    // Confirmação digitada incorreta: não deve instalar.
-    for c in "/dev/wrong".chars() {
-        app.dispatch(Action::StorageModalChar(c), &tx);
-    }
-    app.dispatch(Action::Enter, &tx);
-    assert!(
-        rx.try_recv().is_err(),
-        "instalação não deveria ter iniciado"
-    );
-    match &app.storage_modal {
-        StorageModal::Ventoy(s) => assert!(matches!(s.stage, VentoyStage::Confirm2 { .. })),
-        other => panic!("esperava permanecer em Confirm2, obteve {other:?}"),
-    }
-
-    // Limpa e digita o nó correto.
-    for _ in 0.."/dev/wrong".len() {
-        app.dispatch(Action::StorageModalBackspace, &tx);
-    }
-    for c in "/dev/sdz".chars() {
-        app.dispatch(Action::StorageModalChar(c), &tx);
-    }
-    app.dispatch(Action::Enter, &tx);
+    app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
 
     match rx.try_recv() {
-        Ok(Action::StorageVentoyInstall { device_id }) => {
-            assert_eq!(device_id, "/drives/usb-target");
+        Ok(Action::StorageMultibootPrepare { device_id }) => {
+            assert_eq!(device_id, "/block_devices/usb-target1");
         }
-        other => panic!("esperava StorageVentoyInstall, obteve {other:?}"),
-    }
-    match &app.storage_modal {
-        StorageModal::Ventoy(s) => assert!(matches!(s.stage, VentoyStage::Installing { .. })),
-        other => panic!("esperava Installing, obteve {other:?}"),
+        other => panic!("esperava StorageMultibootPrepare, obteve {other:?}"),
     }
 }
 
 #[test]
-fn ventoy_progress_and_done_events_update_modal_state() {
+fn multiboot_prepare_open_toasts_when_no_partition_available() {
+    // Drive sem nenhuma partição reconhecida — não há alvo resolvível.
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
-    let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageVentoyOpen, &tx);
-    app.dispatch(Action::Enter, &tx);
-    for c in "/dev/sdz".chars() {
-        app.dispatch(Action::StorageModalChar(c), &tx);
-    }
-    app.dispatch(Action::Enter, &tx);
-
-    app.handle_event(AppEvent::StorageVentoyProgress {
-        device_id: "/drives/usb-target".to_string(),
-        line: "[ventoy] baixando ventoy-1.0.99-linux.tar.gz...".to_string(),
-    });
-    match &app.storage_modal {
-        StorageModal::Ventoy(s) => match &s.stage {
-            VentoyStage::Installing { log } => assert_eq!(log.len(), 1),
-            other => panic!("esperava Installing, obteve {other:?}"),
-        },
-        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
-    }
-
-    app.handle_event(AppEvent::StorageVentoyDone {
-        device_id: "/drives/usb-target".to_string(),
-        result: Ok("Ventoy instalado com sucesso".to_string()),
-    });
-    match &app.storage_modal {
-        StorageModal::Ventoy(s) => match &s.stage {
-            VentoyStage::Done { ok, .. } => assert!(*ok),
-            other => panic!("esperava Done, obteve {other:?}"),
-        },
-        other => panic!("esperava modal do Ventoy, obteve {other:?}"),
-    }
-}
-
-#[test]
-fn system_disk_never_reachable_for_ventoy_via_app_dispatch() {
-    let mut cfg = Config::default();
-    cfg.splash.enabled = false;
-    let mut app = App::new(cfg);
-    app.active = Tab::Storage;
-    app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 0; // linha do drive de sistema.
-
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(Action::StorageVentoyOpen, &tx);
+    app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
 
-    assert!(matches!(app.storage_modal, StorageModal::None));
+    assert!(app.toast.is_some());
     assert!(rx.try_recv().is_err());
 }
 
 #[test]
-fn render_ventoy_modal_without_panic() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
-    let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-
-    app.dispatch(Action::StorageVentoyOpen, &tx);
-    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
-
-    app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
-    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+fn multiboot_prepare_action_is_blocked_by_is_system_target() {
+    // Camada 3 (TOCTOU) do backend: `is_system_target` continua sendo a
+    // única fonte da verdade — nenhum caminho novo (preparação de
+    // multi-boot) pode contornar essa checagem.
+    let snap = mock_snapshot();
+    let system_partition_id = snap.drives[0].partitions[0].id.clone();
+    assert!(snap.is_system_target(&system_partition_id));
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,8 +1237,8 @@ fn build_ventoy_entries_filters_and_sorts_case_insensitively() {
 }
 
 // ---------------------------------------------------------------------------
-// Render dos novos modais (seletor de arquivos / gerenciador de ISOs do
-// Ventoy) sem pânico.
+// Render dos novos modais (seletor de arquivos / gerenciador de ISOs
+// multi-boot) sem pânico.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1319,8 +1263,8 @@ fn render_file_picker_modal_without_panic() {
 }
 
 #[test]
-fn render_ventoy_iso_manager_modal_in_every_stage_without_panic() {
-    use hal9001::app::{StorageModal, VentoyIsoManagerStage, VentoyIsoManagerState};
+fn render_multiboot_iso_manager_modal_in_every_stage_without_panic() {
+    use hal9001::app::{MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal};
     use hal9001::backend::storage::VentoyIsoEntry;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -1328,17 +1272,17 @@ fn render_ventoy_iso_manager_modal_in_every_stage_without_panic() {
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
-    let base = |stage: VentoyIsoManagerStage| {
-        StorageModal::VentoyIsoManager(VentoyIsoManagerState {
+    let base = |stage: MultibootIsoManagerStage| {
+        StorageModal::MultibootIsoManager(MultibootIsoManagerState {
             device_id: "/drives/usb-target".to_string(),
-            target_label: "Ventoy USB".to_string(),
+            target_label: "Multi-boot USB".to_string(),
             stage,
         })
     };
 
     let stages = vec![
-        VentoyIsoManagerStage::Loading,
-        VentoyIsoManagerStage::Listing {
+        MultibootIsoManagerStage::Loading,
+        MultibootIsoManagerStage::Listing {
             entries: vec![VentoyIsoEntry {
                 name: "archlinux.iso".to_string(),
                 size: 900 * 1024 * 1024,
@@ -1347,18 +1291,18 @@ fn render_ventoy_iso_manager_modal_in_every_stage_without_panic() {
             selected: 0,
             free_bytes: Some(4 * 1024 * 1024 * 1024),
         },
-        VentoyIsoManagerStage::ConfirmRemove {
+        MultibootIsoManagerStage::ConfirmRemove {
             file_name: "archlinux.iso".to_string(),
         },
-        VentoyIsoManagerStage::Copying {
+        MultibootIsoManagerStage::Copying {
             bytes_written: 512,
             total_bytes: 1024,
             file_name: "new.iso".to_string(),
         },
-        VentoyIsoManagerStage::Removing {
+        MultibootIsoManagerStage::Removing {
             file_name: "archlinux.iso".to_string(),
         },
-        VentoyIsoManagerStage::Error {
+        MultibootIsoManagerStage::Error {
             message: "falha simulada".to_string(),
         },
     ];

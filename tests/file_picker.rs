@@ -198,7 +198,7 @@ fn open_falls_back_to_temp_dir_when_start_dir_is_not_a_directory() {
 fn ventoy_add_iso_purpose_round_trips_through_purpose_field() {
     let root = unique_temp_dir("purpose");
     std::fs::write(root.join("image.iso"), b"x").unwrap();
-    let purpose = FilePickerPurpose::VentoyAddIso {
+    let purpose = FilePickerPurpose::MultibootAddIso {
         device_id: "/drives/ventoy".to_string(),
         target_label: "Ventoy USB".to_string(),
     };
