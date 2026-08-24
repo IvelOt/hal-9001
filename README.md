@@ -20,6 +20,10 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 |:---:|:---:|
 | ![Bluetooth Management](assets/screenshots/tab3_bluetooth.png) | ![Storage Management](assets/screenshots/storage.png) |
 
+| Audio Mixer & Per-App Streams (Tab 5) |
+|:---:|
+| ![Audio Mixer](assets/screenshots/tab5_audio.png) |
+
 ---
 
 ## ✨ Features & Architecture
@@ -52,6 +56,16 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 - **Bootable ISO Flasher:** Raw image flasher with SHA-256 integrity verification, speed/ETA calculator, and Yazi-style file picker.
 - **Multi-Boot / Ventoy Manager:** Prepare USB drives and manage ISO collections in `/ISOs/` directly from the TUI.
 - **Native Masked Sudo Elevation:** Secure in-TUI password modal (`•`) for privileged storage actions.
+
+### 🎛️ 5. Audio Mixer & Hardware Hub (Tab 5 — Pure Rust)
+- **PipeWire & PulseAudio Engine:** Native asynchronous integration with WirePlumber / PipeWire (`wpctl`) and PulseAudio fallback.
+- **Zero New Dependencies:** 100% Rust using the existing project stack without extra dependency bloat.
+- **3 Specialized Sub-Panels:**
+  - **`[1] Saídas de Som (Sinks)`**: Internal Speakers, Headphones (P2/Bluetooth A2DP), HDMI/DisplayPort audio.
+  - **`[2] Aplicativos (Streams)`**: Individual volume sliders and mute toggles per running app (**Spotify**, **Firefox/Chrome**, **Discord**, **Steam**, **VLC**, games).
+  - **`[3] Microfones (Sources)`**: Input gain and mute control for internal mics, headsets, and USB microphones.
+- **Volume Overdrive (0..=150%):** Visual color progression (accent -> green -> yellow/red overdrive).
+- **One-Key Shortcuts:** Volume (`[+/-]` or `[h/l]`), Mute (`[m]`), Set Default Device (`[Enter]`), Switch Category (`[Tab]` or `[1/2/3]`).
 
 ---
 

@@ -31,17 +31,17 @@ fn tab_titles_in_all_languages() {
     // pt-BR
     assert_eq!(Tab::Overview.title_in(Language::PtBr), "Overview");
     assert_eq!(Tab::Network.title_in(Language::PtBr), "Rede");
-    assert_eq!(Tab::Power.title_in(Language::PtBr), "Energia");
+    assert_eq!(Tab::Audio.title_in(Language::PtBr), "Áudio");
 
     // en-US
     assert_eq!(Tab::Overview.title_in(Language::EnUs), "Overview");
     assert_eq!(Tab::Network.title_in(Language::EnUs), "Network");
-    assert_eq!(Tab::Power.title_in(Language::EnUs), "Power");
+    assert_eq!(Tab::Audio.title_in(Language::EnUs), "Audio");
 
     // es-ES
     assert_eq!(Tab::Overview.title_in(Language::EsEs), "Visión General");
     assert_eq!(Tab::Network.title_in(Language::EsEs), "Red");
-    assert_eq!(Tab::Power.title_in(Language::EsEs), "Energía");
+    assert_eq!(Tab::Audio.title_in(Language::EsEs), "Audio");
 }
 
 #[test]

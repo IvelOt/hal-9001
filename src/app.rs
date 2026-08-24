@@ -297,7 +297,7 @@ pub enum Tab {
     Network,
     Bluetooth,
     Storage,
-    Power,
+    Audio,
     Updates,
     Files,
     Terminal,
@@ -311,7 +311,7 @@ impl Tab {
         Tab::Network,
         Tab::Bluetooth,
         Tab::Storage,
-        Tab::Power,
+        Tab::Audio,
         Tab::Updates,
         Tab::Files,
         Tab::Terminal,
@@ -333,7 +333,7 @@ impl Tab {
             Tab::Network => m.tab_network,
             Tab::Bluetooth => m.tab_bluetooth,
             Tab::Storage => m.tab_storage,
-            Tab::Power => m.tab_power,
+            Tab::Audio => m.tab_audio,
             Tab::Updates => m.tab_updates,
             Tab::Files => m.tab_files,
             Tab::Terminal => m.tab_terminal,
@@ -419,6 +419,11 @@ pub struct App {
     pub bluetooth_selected: usize,
     pub bluetooth_scanning: bool,
 
+    /// Estado do Mixer de Áudio e dispositivos (Módulo 5).
+    pub audio: Option<Box<crate::backend::audio::AudioSnapshot>>,
+    pub audio_selected: usize,
+    pub audio_category: usize,
+
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
@@ -460,6 +465,9 @@ impl App {
             bluetooth: None,
             bluetooth_selected: 0,
             bluetooth_scanning: false,
+            audio: None,
+            audio_selected: 0,
+            audio_category: 0,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -510,6 +518,18 @@ impl App {
                 }
             }
             AppEvent::BluetoothScanning(flag) => self.bluetooth_scanning = flag,
+            AppEvent::Audio(snap) => {
+                let cat = match self.audio_category {
+                    0 => crate::backend::audio::AudioCategory::Sink,
+                    1 => crate::backend::audio::AudioCategory::AppStream,
+                    _ => crate::backend::audio::AudioCategory::Source,
+                };
+                let node_count = snap.nodes_for_category(cat).len();
+                self.audio = Some(snap);
+                if node_count > 0 && self.audio_selected >= node_count {
+                    self.audio_selected = node_count - 1;
+                }
+            }
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
             AppEvent::ServiceDegraded { name, reason } => {
                 self.services.insert(
@@ -1542,6 +1562,8 @@ impl App {
                     self.network_selected = self.network_selected.saturating_sub(1);
                 } else if self.active == Tab::Bluetooth {
                     self.bluetooth_selected = self.bluetooth_selected.saturating_sub(1);
+                } else if self.active == Tab::Audio {
+                    self.audio_selected = self.audio_selected.saturating_sub(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_sub(1);
@@ -1554,6 +1576,8 @@ impl App {
                     self.network_selected = self.network_selected.saturating_add(1);
                 } else if self.active == Tab::Bluetooth {
                     self.bluetooth_selected = self.bluetooth_selected.saturating_add(1);
+                } else if self.active == Tab::Audio {
+                    self.audio_selected = self.audio_selected.saturating_add(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_add(1);
@@ -1601,6 +1625,21 @@ impl App {
                                 let _ = action_tx.send(Action::BluetoothDisconnect(dev.id.clone()));
                             } else {
                                 let _ = action_tx.send(Action::BluetoothConnect(dev.id.clone()));
+                            }
+                        }
+                    }
+                } else if self.active == Tab::Audio {
+                    if let Some(audio) = &self.audio {
+                        let cat = match self.audio_category {
+                            0 => crate::backend::audio::AudioCategory::Sink,
+                            1 => crate::backend::audio::AudioCategory::AppStream,
+                            _ => crate::backend::audio::AudioCategory::Source,
+                        };
+                        if let Some(node) = audio.nodes_for_category(cat).get(self.audio_selected) {
+                            if cat == crate::backend::audio::AudioCategory::AppStream {
+                                let _ = action_tx.send(Action::AudioToggleMute(node.id));
+                            } else {
+                                let _ = action_tx.send(Action::AudioSetDefault(node.id));
                             }
                         }
                     }
@@ -1655,12 +1694,73 @@ impl App {
                     }
                 }
             }
+            Action::AudioSelectCategory(cat_idx) => {
+                if cat_idx == 99 {
+                    // Ciclo circular 0 -> 1 -> 2 -> 0
+                    self.audio_category = (self.audio_category + 1) % 3;
+                } else {
+                    self.audio_category = cat_idx.min(2);
+                }
+                self.audio_selected = 0;
+            }
+            Action::AudioSetVolume { .. }
+            | Action::AudioVolumeUp(_, _)
+            | Action::AudioVolumeDown(_, _)
+            | Action::AudioToggleMute(_)
+            | Action::AudioSetDefault(_) => {
+                let _ = action_tx.send(action);
+            }
+            Action::VolumeUp => {
+                if self.active == Tab::Audio {
+                    if let Some(audio) = &self.audio {
+                        let cat = match self.audio_category {
+                            0 => crate::backend::audio::AudioCategory::Sink,
+                            1 => crate::backend::audio::AudioCategory::AppStream,
+                            _ => crate::backend::audio::AudioCategory::Source,
+                        };
+                        if let Some(node) = audio.nodes_for_category(cat).get(self.audio_selected) {
+                            let _ = action_tx.send(Action::AudioVolumeUp(node.id, 0.05));
+                        }
+                    }
+                } else {
+                    let _ = action_tx.send(action);
+                }
+            }
+            Action::VolumeDown => {
+                if self.active == Tab::Audio {
+                    if let Some(audio) = &self.audio {
+                        let cat = match self.audio_category {
+                            0 => crate::backend::audio::AudioCategory::Sink,
+                            1 => crate::backend::audio::AudioCategory::AppStream,
+                            _ => crate::backend::audio::AudioCategory::Source,
+                        };
+                        if let Some(node) = audio.nodes_for_category(cat).get(self.audio_selected) {
+                            let _ = action_tx.send(Action::AudioVolumeDown(node.id, 0.05));
+                        }
+                    }
+                } else {
+                    let _ = action_tx.send(action);
+                }
+            }
+            Action::ToggleMute => {
+                if self.active == Tab::Audio {
+                    if let Some(audio) = &self.audio {
+                        let cat = match self.audio_category {
+                            0 => crate::backend::audio::AudioCategory::Sink,
+                            1 => crate::backend::audio::AudioCategory::AppStream,
+                            _ => crate::backend::audio::AudioCategory::Source,
+                        };
+                        if let Some(node) = audio.nodes_for_category(cat).get(self.audio_selected) {
+                            let _ = action_tx.send(Action::AudioToggleMute(node.id));
+                        }
+                    }
+                } else {
+                    let _ = action_tx.send(action);
+                }
+            }
             Action::Refresh
             | Action::BrightnessUp
             | Action::BrightnessDown
-            | Action::VolumeUp
-            | Action::VolumeDown
-            | Action::ToggleMute
             | Action::CyclePowerProfile => {
                 let _ = action_tx.send(action);
             }

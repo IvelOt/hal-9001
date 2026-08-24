@@ -148,6 +148,24 @@ fn map_key(
         }
     }
 
+    // Aba Audio (Mixer):
+    if active == Tab::Audio {
+        match key.code {
+            KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right | KeyCode::Char('l') => {
+                return Some(Action::VolumeUp);
+            }
+            KeyCode::Char('-') | KeyCode::Left | KeyCode::Char('h') => {
+                return Some(Action::VolumeDown);
+            }
+            KeyCode::Char('m') => return Some(Action::ToggleMute),
+            KeyCode::Tab => return Some(Action::AudioSelectCategory(99)),
+            KeyCode::Char('1') => return Some(Action::AudioSelectCategory(0)),
+            KeyCode::Char('2') => return Some(Action::AudioSelectCategory(1)),
+            KeyCode::Char('3') => return Some(Action::AudioSelectCategory(2)),
+            _ => {}
+        }
+    }
+
     // Aba Storage:
     if active == Tab::Storage {
         match key.code {

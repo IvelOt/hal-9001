@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 
+use crate::backend::audio::AudioSnapshot;
 use crate::backend::bluetooth::BluetoothSnapshot;
 use crate::backend::network::NetworkSnapshot;
 use crate::backend::storage::{StorageSnapshot, VentoyIsoEntry};
@@ -72,6 +73,8 @@ pub enum AppEvent {
     Bluetooth(Box<BluetoothSnapshot>),
     /// Flag de estado de escaneamento de dispositivos Bluetooth.
     BluetoothScanning(bool),
+    /// Novo snapshot de áudio e mixer (PipeWire/PulseAudio). Boxed pelo mesmo motivo.
+    Audio(Box<AudioSnapshot>),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
@@ -266,6 +269,13 @@ pub enum Action {
     BluetoothPair(DeviceId),
     BluetoothForget(DeviceId),
     BluetoothToggleBlock(DeviceId),
+    /// Ações do Mixer de Áudio (Módulo 5)
+    AudioSetVolume { node_id: u32, volume: f32 },
+    AudioVolumeUp(u32, f32),
+    AudioVolumeDown(u32, f32),
+    AudioToggleMute(u32),
+    AudioSetDefault(u32),
+    AudioSelectCategory(usize),
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }

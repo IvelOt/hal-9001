@@ -5,6 +5,7 @@
 //! registram-se como *degradados/pendentes* para exercitar o fluxo de eventos
 //! e a degradação graciosa da UI. Os módulos 2..8 preenchem esses stubs.
 
+pub mod audio;
 pub mod bluetooth;
 pub mod multiboot;
 pub mod network;
@@ -55,8 +56,14 @@ pub fn spawn_all(
         action_tx.subscribe(),
     ));
 
-    // Stubs — sobem e registram estado "pendente" (Módulo 5).
-    tokio::spawn(power::run(tx.clone(), action_tx.subscribe()));
+    // Serviço com dados reais (Módulo 5 — Mixer de Áudio).
+    tokio::spawn(audio::run(
+        config.polling.audio_ms,
+        tx.clone(),
+        action_tx.subscribe(),
+    ));
+
+    // Stubs — sobem e registram estado "pendente" (Módulos 6..8).
     tokio::spawn(updates::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(pty::run(tx, action_tx.subscribe()));
 }
