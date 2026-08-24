@@ -86,7 +86,7 @@ pub struct Messages {
     pub tab_bluetooth: &'static str,
     pub tab_storage: &'static str,
     pub tab_audio: &'static str,
-    pub tab_updates: &'static str,
+    pub tab_displays: &'static str,
     pub tab_files: &'static str,
     pub tab_terminal: &'static str,
 
@@ -278,7 +278,7 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     tab_bluetooth: "Bluetooth",
     tab_storage: "Discos",
     tab_audio: "Áudio",
-    tab_updates: "Atualizações",
+    tab_displays: "Telas",
     tab_files: "Arquivos",
     tab_terminal: "Terminal",
 
@@ -449,7 +449,7 @@ pub static MESSAGES_EN_US: Messages = Messages {
     tab_bluetooth: "Bluetooth",
     tab_storage: "Storage",
     tab_audio: "Audio",
-    tab_updates: "Updates",
+    tab_displays: "Displays",
     tab_files: "Files",
     tab_terminal: "Terminal",
 
@@ -621,7 +621,7 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     tab_bluetooth: "Bluetooth",
     tab_storage: "Discos",
     tab_audio: "Audio",
-    tab_updates: "Actualizaciones",
+    tab_displays: "Pantallas",
     tab_files: "Archivos",
     tab_terminal: "Terminal",
 

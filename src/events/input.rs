@@ -166,6 +166,31 @@ fn map_key(
         }
     }
 
+    // Aba Displays (Telas & Monitores):
+    if active == Tab::Displays {
+        match key.code {
+            KeyCode::Char('1') => {
+                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendRight));
+            }
+            KeyCode::Char('2') => {
+                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendLeft));
+            }
+            KeyCode::Char('3') => {
+                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::Mirror));
+            }
+            KeyCode::Char('4') => {
+                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExternalOnly));
+            }
+            KeyCode::Char('5') => {
+                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::InternalOnly));
+            }
+            KeyCode::Char('p') => {
+                return Some(Action::DisplaySetPrimary(String::new()));
+            }
+            _ => {}
+        }
+    }
+
     // Aba Storage:
     if active == Tab::Storage {
         match key.code {

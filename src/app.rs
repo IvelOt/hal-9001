@@ -298,7 +298,7 @@ pub enum Tab {
     Bluetooth,
     Storage,
     Audio,
-    Updates,
+    Displays,
     Files,
     Terminal,
 }
@@ -312,7 +312,7 @@ impl Tab {
         Tab::Bluetooth,
         Tab::Storage,
         Tab::Audio,
-        Tab::Updates,
+        Tab::Displays,
         Tab::Files,
         Tab::Terminal,
     ];
@@ -334,7 +334,7 @@ impl Tab {
             Tab::Bluetooth => m.tab_bluetooth,
             Tab::Storage => m.tab_storage,
             Tab::Audio => m.tab_audio,
-            Tab::Updates => m.tab_updates,
+            Tab::Displays => m.tab_displays,
             Tab::Files => m.tab_files,
             Tab::Terminal => m.tab_terminal,
         }
@@ -424,6 +424,10 @@ pub struct App {
     pub audio_selected: usize,
     pub audio_category: usize,
 
+    /// Estado das Telas e Monitores (Módulo 6).
+    pub displays: Option<Box<crate::backend::display::DisplaySnapshot>>,
+    pub display_selected: usize,
+
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
@@ -468,6 +472,8 @@ impl App {
             audio: None,
             audio_selected: 0,
             audio_category: 0,
+            displays: None,
+            display_selected: 0,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -528,6 +534,13 @@ impl App {
                 self.audio = Some(snap);
                 if node_count > 0 && self.audio_selected >= node_count {
                     self.audio_selected = node_count - 1;
+                }
+            }
+            AppEvent::Display(snap) => {
+                let count = snap.displays.len();
+                self.displays = Some(snap);
+                if count > 0 && self.display_selected >= count {
+                    self.display_selected = count - 1;
                 }
             }
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
@@ -1564,6 +1577,8 @@ impl App {
                     self.bluetooth_selected = self.bluetooth_selected.saturating_sub(1);
                 } else if self.active == Tab::Audio {
                     self.audio_selected = self.audio_selected.saturating_sub(1);
+                } else if self.active == Tab::Displays {
+                    self.display_selected = self.display_selected.saturating_sub(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_sub(1);
@@ -1578,6 +1593,8 @@ impl App {
                     self.bluetooth_selected = self.bluetooth_selected.saturating_add(1);
                 } else if self.active == Tab::Audio {
                     self.audio_selected = self.audio_selected.saturating_add(1);
+                } else if self.active == Tab::Displays {
+                    self.display_selected = self.display_selected.saturating_add(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_add(1);
@@ -1641,6 +1658,12 @@ impl App {
                             } else {
                                 let _ = action_tx.send(Action::AudioSetDefault(node.id));
                             }
+                        }
+                    }
+                } else if self.active == Tab::Displays {
+                    if let Some(snap) = &self.displays {
+                        if let Some(d) = snap.displays.get(self.display_selected) {
+                            let _ = action_tx.send(Action::DisplaySetPrimary(d.name.clone()));
                         }
                     }
                 } else {
@@ -1757,6 +1780,11 @@ impl App {
                 } else {
                     let _ = action_tx.send(action);
                 }
+            }
+            Action::DisplaySetLayout(_)
+            | Action::DisplaySetResolution { .. }
+            | Action::DisplaySetPrimary(_) => {
+                let _ = action_tx.send(action);
             }
             Action::Refresh
             | Action::BrightnessUp

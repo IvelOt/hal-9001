@@ -7,6 +7,7 @@
 
 pub mod audio;
 pub mod bluetooth;
+pub mod display;
 pub mod multiboot;
 pub mod network;
 pub mod power;
@@ -63,8 +64,14 @@ pub fn spawn_all(
         action_tx.subscribe(),
     ));
 
-    // Stubs — sobem e registram estado "pendente" (Módulos 6..8).
-    tokio::spawn(updates::run(tx.clone(), action_tx.subscribe()));
+    // Serviço com dados reais (Módulo 6 — Telas & Monitores).
+    tokio::spawn(display::run(
+        config.polling.display_ms,
+        tx.clone(),
+        action_tx.subscribe(),
+    ));
+
+    // Stubs — sobem e registram estado "pendente" (Módulos 7..8).
     tokio::spawn(pty::run(tx, action_tx.subscribe()));
 }
 

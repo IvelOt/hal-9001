@@ -6,6 +6,7 @@ pub mod widgets;
 pub mod audio;
 pub mod bluetooth;
 pub mod config_modal;
+pub mod display;
 pub mod file_picker;
 pub mod files;
 pub mod network;
@@ -118,7 +119,7 @@ fn draw_content(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         Tab::Bluetooth => bluetooth::draw(app, pal, f, area),
         Tab::Storage => storage::draw(app, pal, f, area),
         Tab::Audio => audio::draw(app, pal, f, area),
-        Tab::Updates => updates::draw(app, pal, f, area),
+        Tab::Displays => display::draw(app, pal, f, area),
         Tab::Files => files::draw(app, pal, f, area),
         Tab::Terminal => terminal::draw(app, pal, f, area),
     }

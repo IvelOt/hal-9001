@@ -20,9 +20,9 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 |:---:|:---:|
 | ![Bluetooth Management](assets/screenshots/tab3_bluetooth.png) | ![Storage Management](assets/screenshots/storage.png) |
 
-| Audio Mixer & Per-App Streams (Tab 5) |
-|:---:|
-| ![Audio Mixer](assets/screenshots/tab5_audio.png) |
+| Audio Mixer & Per-App Streams (Tab 5) | Displays & Monitors / Auto-Expand (Tab 6) |
+|:---:|:---:|
+| ![Audio Mixer](assets/screenshots/tab5_audio.png) | ![Displays Management](assets/screenshots/tab6_display.png) |
 
 ---
 
@@ -66,6 +66,18 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
   - **`[3] Microfones (Sources)`**: Input gain and mute control for internal mics, headsets, and USB microphones.
 - **Volume Overdrive (0..=150%):** Visual color progression (accent -> green -> yellow/red overdrive).
 - **One-Key Shortcuts:** Volume (`[+/-]` or `[h/l]`), Mute (`[m]`), Set Default Device (`[Enter]`), Switch Category (`[Tab]` or `[1/2/3]`).
+
+### 🖥️ 6. Displays, Monitors & Auto-Expand Hub (Tab 6 — Pure Rust & X11)
+- **Automatic Hotplug Auto-Expand:** Instantly detects when an external monitor (HDMI/DisplayPort/USB-C) is connected and automatically activates **Extend-Right Mode** with instant TUI toast notifications.
+- **Interactive 2D Canvas Diagram:** Spatial ASCII representation of connected screens with real-time resolution, position, primary badge, and refresh rates.
+- **Display Modes:**
+  - `[1] Expandir à Direita (Extend Right)`
+  - `[2] Expandir à Esquerda (Extend Left)`
+  - `[3] Espelhar Telas (Mirror)`
+  - `[4] Apenas Monitor Externo`
+  - `[5] Apenas Tela do Notebook`
+- **Output Management:** Set Primary Display (`[p]`), change resolutions/Hz, and toggle displays.
+- **Unified Hardware Toast System:** Statusline notifications for Monitor connect/disconnect, USB insertions/ejections, Bluetooth pairing, and network transitions.
 
 ---
 

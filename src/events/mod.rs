@@ -11,6 +11,7 @@ use crossterm::event::KeyEvent;
 
 use crate::backend::audio::AudioSnapshot;
 use crate::backend::bluetooth::BluetoothSnapshot;
+use crate::backend::display::DisplaySnapshot;
 use crate::backend::network::NetworkSnapshot;
 use crate::backend::storage::{StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
@@ -48,6 +49,18 @@ impl Toast {
             text: text.into(),
         }
     }
+    pub fn success(text: impl Into<String>) -> Self {
+        Self {
+            level: ToastLevel::Success,
+            text: text.into(),
+        }
+    }
+    pub fn warn(text: impl Into<String>) -> Self {
+        Self {
+            level: ToastLevel::Warning,
+            text: text.into(),
+        }
+    }
     pub fn error(text: impl Into<String>) -> Self {
         Self {
             level: ToastLevel::Error,
@@ -75,6 +88,8 @@ pub enum AppEvent {
     BluetoothScanning(bool),
     /// Novo snapshot de áudio e mixer (PipeWire/PulseAudio). Boxed pelo mesmo motivo.
     Audio(Box<AudioSnapshot>),
+    /// Novo snapshot de telas e monitores (X11 / xrandr). Boxed pelo mesmo motivo.
+    Display(Box<DisplaySnapshot>),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
@@ -276,6 +291,10 @@ pub enum Action {
     AudioToggleMute(u32),
     AudioSetDefault(u32),
     AudioSelectCategory(usize),
+    /// Ações de Telas & Monitores (Módulo 6)
+    DisplaySetLayout(crate::backend::display::DisplayLayoutMode),
+    DisplaySetResolution { display: String, mode: String, rate: Option<f32> },
+    DisplaySetPrimary(String),
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }
