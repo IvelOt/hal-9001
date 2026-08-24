@@ -136,6 +136,18 @@ fn map_key(
         }
     }
 
+    // Aba Bluetooth:
+    if active == Tab::Bluetooth {
+        match key.code {
+            KeyCode::Char('r') => return Some(Action::BluetoothRescan),
+            KeyCode::Char('t') => return Some(Action::BluetoothToggleRadio),
+            KeyCode::Char('p') => return Some(Action::BluetoothPair(crate::events::DeviceId(String::new()))),
+            KeyCode::Char('f') => return Some(Action::BluetoothForget(crate::events::DeviceId(String::new()))),
+            KeyCode::Char('b') => return Some(Action::BluetoothToggleBlock(crate::events::DeviceId(String::new()))),
+            _ => {}
+        }
+    }
+
     // Aba Storage:
     if active == Tab::Storage {
         match key.code {

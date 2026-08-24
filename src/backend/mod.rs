@@ -48,8 +48,14 @@ pub fn spawn_all(
         action_tx.subscribe(),
     ));
 
-    // Stubs — sobem e registram estado "pendente" (Módulos 3, 5).
-    tokio::spawn(bluetooth::run(tx.clone(), action_tx.subscribe()));
+    // Serviço com dados reais (Módulo 3).
+    tokio::spawn(bluetooth::run(
+        config.polling.bluetooth_ms,
+        tx.clone(),
+        action_tx.subscribe(),
+    ));
+
+    // Stubs — sobem e registram estado "pendente" (Módulo 5).
     tokio::spawn(power::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(updates::run(tx.clone(), action_tx.subscribe()));
     tokio::spawn(pty::run(tx, action_tx.subscribe()));

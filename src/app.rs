@@ -414,6 +414,11 @@ pub struct App {
     pub network_scanning: bool,
     pub wifi_prompt: Option<WifiPasswordPromptState>,
 
+    /// Estado do Bluetooth e dispositivos (Módulo 3).
+    pub bluetooth: Option<Box<crate::backend::bluetooth::BluetoothSnapshot>>,
+    pub bluetooth_selected: usize,
+    pub bluetooth_scanning: bool,
+
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
@@ -452,6 +457,9 @@ impl App {
             network_selected: 0,
             network_scanning: false,
             wifi_prompt: None,
+            bluetooth: None,
+            bluetooth_selected: 0,
+            bluetooth_scanning: false,
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -494,6 +502,14 @@ impl App {
                 }
             }
             AppEvent::NetworkScanning(flag) => self.network_scanning = flag,
+            AppEvent::Bluetooth(snap) => {
+                let dev_count = snap.devices.len();
+                self.bluetooth = Some(snap);
+                if dev_count > 0 && self.bluetooth_selected >= dev_count {
+                    self.bluetooth_selected = dev_count - 1;
+                }
+            }
+            AppEvent::BluetoothScanning(flag) => self.bluetooth_scanning = flag,
             AppEvent::Toast(toast) => self.toast = Some((toast, Instant::now())),
             AppEvent::ServiceDegraded { name, reason } => {
                 self.services.insert(
@@ -1524,6 +1540,8 @@ impl App {
                     self.storage_selected = self.storage_selected.saturating_sub(1);
                 } else if self.active == Tab::Network {
                     self.network_selected = self.network_selected.saturating_sub(1);
+                } else if self.active == Tab::Bluetooth {
+                    self.bluetooth_selected = self.bluetooth_selected.saturating_sub(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_sub(1);
@@ -1534,6 +1552,8 @@ impl App {
                     self.storage_selected = self.storage_selected.saturating_add(1);
                 } else if self.active == Tab::Network {
                     self.network_selected = self.network_selected.saturating_add(1);
+                } else if self.active == Tab::Bluetooth {
+                    self.bluetooth_selected = self.bluetooth_selected.saturating_add(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_add(1);
@@ -1574,6 +1594,16 @@ impl App {
                             }
                         }
                     }
+                } else if self.active == Tab::Bluetooth {
+                    if let Some(bt) = &self.bluetooth {
+                        if let Some(dev) = bt.devices.get(self.bluetooth_selected) {
+                            if dev.connected {
+                                let _ = action_tx.send(Action::BluetoothDisconnect(dev.id.clone()));
+                            } else {
+                                let _ = action_tx.send(Action::BluetoothConnect(dev.id.clone()));
+                            }
+                        }
+                    }
                 } else {
                     let _ = action_tx.send(action);
                 }
@@ -1598,6 +1628,33 @@ impl App {
                 }
             }
             Action::NetworkModalChar(_) | Action::NetworkModalBackspace => {}
+            Action::BluetoothRescan
+            | Action::BluetoothToggleRadio
+            | Action::BluetoothConnect(_)
+            | Action::BluetoothDisconnect(_) => {
+                let _ = action_tx.send(action);
+            }
+            Action::BluetoothPair(_) => {
+                if let Some(bt) = &self.bluetooth {
+                    if let Some(dev) = bt.devices.get(self.bluetooth_selected) {
+                        let _ = action_tx.send(Action::BluetoothPair(dev.id.clone()));
+                    }
+                }
+            }
+            Action::BluetoothForget(_) => {
+                if let Some(bt) = &self.bluetooth {
+                    if let Some(dev) = bt.devices.get(self.bluetooth_selected) {
+                        let _ = action_tx.send(Action::BluetoothForget(dev.id.clone()));
+                    }
+                }
+            }
+            Action::BluetoothToggleBlock(_) => {
+                if let Some(bt) = &self.bluetooth {
+                    if let Some(dev) = bt.devices.get(self.bluetooth_selected) {
+                        let _ = action_tx.send(Action::BluetoothToggleBlock(dev.id.clone()));
+                    }
+                }
+            }
             Action::Refresh
             | Action::BrightnessUp
             | Action::BrightnessDown

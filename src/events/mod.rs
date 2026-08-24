@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crossterm::event::KeyEvent;
 
+use crate::backend::bluetooth::BluetoothSnapshot;
 use crate::backend::network::NetworkSnapshot;
 use crate::backend::storage::{StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
@@ -20,7 +21,7 @@ pub type EventTx = tokio::sync::mpsc::UnboundedSender<AppEvent>;
 /// D-Bus (ex.: `/org/freedesktop/UDisks2/block_devices/sdb1`). Usado em vez do
 /// nó `/dev/sdX` (que pode trocar entre replugs) para referenciar drives e
 /// partições através dos canais de evento.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct DeviceId(pub String);
 
 /// Nível de severidade de um toast/notificação.
@@ -67,6 +68,10 @@ pub enum AppEvent {
     Network(Box<NetworkSnapshot>),
     /// Flag de estado de escaneamento de redes sem fio.
     NetworkScanning(bool),
+    /// Novo snapshot de dispositivos Bluetooth (BlueZ). Boxed pelo mesmo motivo.
+    Bluetooth(Box<BluetoothSnapshot>),
+    /// Flag de estado de escaneamento de dispositivos Bluetooth.
+    BluetoothScanning(bool),
     /// Notificação para a statusline.
     Toast(Toast),
     /// Um serviço de sistema está indisponível/pendente.
@@ -140,7 +145,7 @@ pub type SudoPasswordTx = tokio::sync::mpsc::UnboundedSender<SudoPasswordRequest
 
 /// Comandos difundidos para os backends. Precisa ser `Clone` para o
 /// canal `broadcast`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Quit,
     NextTab,
@@ -253,6 +258,14 @@ pub enum Action {
     NetworkForget(String),
     NetworkModalChar(char),
     NetworkModalBackspace,
+    /// Ações de Bluetooth (Módulo 3)
+    BluetoothRescan,
+    BluetoothToggleRadio,
+    BluetoothConnect(DeviceId),
+    BluetoothDisconnect(DeviceId),
+    BluetoothPair(DeviceId),
+    BluetoothForget(DeviceId),
+    BluetoothToggleBlock(DeviceId),
     /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
     Raw(KeyEvent),
 }

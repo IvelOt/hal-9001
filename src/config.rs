@@ -70,6 +70,7 @@ impl Default for ThemeConfig {
 pub struct PollingConfig {
     pub system_ms: u64,
     pub network_ms: u64,
+    pub bluetooth_ms: u64,
     pub power_ms: u64,
     pub storage_ms: u64,
 }
@@ -79,6 +80,7 @@ impl Default for PollingConfig {
         Self {
             system_ms: 1500,
             network_ms: 5000,
+            bluetooth_ms: 3000,
             power_ms: 5000,
             storage_ms: 8000,
         }
