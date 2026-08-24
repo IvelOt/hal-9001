@@ -244,6 +244,34 @@ pub(crate) fn draw_pending(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Cols x rows disponíveis para a grade VT100 dentro da `area` de conteúdo
+/// de uma aba PTY (Arquivos/Terminal), depois de descontar o chrome fixo que
+/// `ui::terminal`/`ui::files` usam para o próprio layout: uma linha de
+/// cabeçalho, uma linha de rodapé, e as bordas do bloco que envolve a grade.
+/// Única fonte de verdade dessa conta — usada tanto pelo render quanto por
+/// `App::sync_pty_size` (via [`pty_grid_size_for_terminal`]), para que o
+/// tamanho da grade renderizada nunca fique fora de sincronia com o
+/// `PtySize` real da sessão.
+pub(crate) fn pty_grid_size(area: Rect) -> (u16, u16) {
+    let cols = area.width.saturating_sub(2); // bordas esquerda/direita do bloco
+    let rows = area.height.saturating_sub(4); // header(1) + footer(1) + bordas topo/baixo(2)
+    (cols.max(1), rows.max(1))
+}
+
+/// Mesma conta de [`pty_grid_size`], mas a partir do tamanho bruto do
+/// terminal (`term_w`x`term_h`), replicando o layout vertical de `ui::draw`
+/// (tabbar `Length(3)` + statusline `Length(1)`) para chegar à mesma `area`
+/// de conteúdo que `draw_content` passa às abas Arquivos/Terminal.
+pub(crate) fn pty_grid_size_for_terminal(term_w: u16, term_h: u16) -> (u16, u16) {
+    let content_area = Rect {
+        x: 0,
+        y: 0,
+        width: term_w,
+        height: term_h.saturating_sub(4), // tabbar(3) + statusline(1)
+    };
+    pty_grid_size(content_area)
+}
+
 /// Bloco padrão de conteúdo com título de aba.
 pub(crate) fn content_block(title: &str, pal: &Palette) -> Block<'static> {
     Block::default()

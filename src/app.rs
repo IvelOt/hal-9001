@@ -346,6 +346,20 @@ impl Tab {
     }
 }
 
+/// Estado de uma sessão PTY (Terminal Deck ou Yazi) do ponto de vista da UI.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum PtyState {
+    /// Sessão solicitada, aguardando o primeiro evento do backend.
+    #[default]
+    Starting,
+    /// A sessão não pôde ser iniciada (ex.: `yazi` ausente do `$PATH`).
+    Unavailable(String),
+    /// Sessão ativa, com o último frame renderizado.
+    Running(Box<crate::events::PtyScreenSnapshot>),
+    /// O processo filho encerrou.
+    Exited,
+}
+
 /// Fase de apresentação: splash animada antes do dashboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -428,6 +442,17 @@ pub struct App {
     pub displays: Option<Box<crate::backend::display::DisplaySnapshot>>,
     pub display_selected: usize,
 
+    /// Estado da sessão PTY da aba Arquivos (Módulo 7 — Yazi).
+    pub files_pty: PtyState,
+    /// Estado da sessão PTY da aba Terminal Deck (Módulo 8).
+    pub terminal_pty: PtyState,
+    /// `true` quando o teclado está capturado pela sessão PTY da aba ativa
+    /// (Arquivos ou Terminal) em vez do chrome/atalhos globais da TUI.
+    pub pty_focused: bool,
+    /// Último tamanho de grade (cols, rows) informado às sessões PTY, usado
+    /// para só emitir `Action::PtyResize` quando o tamanho realmente muda.
+    pub last_pty_size: (u16, u16),
+
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
@@ -474,6 +499,10 @@ impl App {
             audio_category: 0,
             displays: None,
             display_selected: 0,
+            files_pty: PtyState::Starting,
+            terminal_pty: PtyState::Starting,
+            pty_focused: false,
+            last_pty_size: (0, 0),
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -673,6 +702,29 @@ impl App {
                             }
                         }
                     }
+                }
+            }
+            AppEvent::PtyScreenUpdate { target, screen } => match target {
+                crate::events::PtyTarget::Files => self.files_pty = PtyState::Running(screen),
+                crate::events::PtyTarget::Terminal => self.terminal_pty = PtyState::Running(screen),
+            },
+            AppEvent::PtyUnavailable { target, reason } => match target {
+                crate::events::PtyTarget::Files => self.files_pty = PtyState::Unavailable(reason),
+                crate::events::PtyTarget::Terminal => {
+                    self.terminal_pty = PtyState::Unavailable(reason)
+                }
+            },
+            AppEvent::PtyExited { target } => {
+                let is_active_target = (target == crate::events::PtyTarget::Files
+                    && self.active == Tab::Files)
+                    || (target == crate::events::PtyTarget::Terminal
+                        && self.active == Tab::Terminal);
+                if is_active_target {
+                    self.pty_focused = false;
+                }
+                match target {
+                    crate::events::PtyTarget::Files => self.files_pty = PtyState::Exited,
+                    crate::events::PtyTarget::Terminal => self.terminal_pty = PtyState::Exited,
                 }
             }
         }
@@ -908,6 +960,40 @@ impl App {
 
     pub fn wifi_prompt_open(&self) -> bool {
         self.wifi_prompt.is_some()
+    }
+
+    /// `true` quando o teclado está capturado pela sessão PTY da aba ativa
+    /// (Arquivos/Terminal) — usado por `InputStream::next` para desviar toda
+    /// a digitação, com prioridade análoga a `storage_modal_open`.
+    pub fn pty_focused(&self) -> bool {
+        self.pty_focused
+    }
+
+    /// Recalcula o tamanho de grade (cols, rows) disponível para as sessões
+    /// PTY a partir do tamanho `term_w`x`term_h` do terminal e, se mudou
+    /// desde a última chamada, devolve as `Action::PtyResize` a difundir para
+    /// o backend (uma por sessão). Chamado uma vez por tick em `lib.rs`, não
+    /// a partir de `draw()` — a camada `ui` permanece uma função pura de
+    /// `&App`.
+    pub fn sync_pty_size(&mut self, term_w: u16, term_h: u16) -> Vec<Action> {
+        let size = crate::ui::pty_grid_size_for_terminal(term_w, term_h);
+        if size == self.last_pty_size {
+            return Vec::new();
+        }
+        self.last_pty_size = size;
+        let (cols, rows) = size;
+        vec![
+            Action::PtyResize {
+                target: crate::events::PtyTarget::Files,
+                cols,
+                rows,
+            },
+            Action::PtyResize {
+                target: crate::events::PtyTarget::Terminal,
+                cols,
+                rows,
+            },
+        ]
     }
 
     fn dispatch_wifi_prompt(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
@@ -1562,12 +1648,17 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::NextTab => {
                 self.active = Tab::from_index((self.active.index() + 1) % Tab::ALL.len());
+                self.pty_focused = false;
             }
             Action::PrevTab => {
                 let n = Tab::ALL.len();
                 self.active = Tab::from_index((self.active.index() + n - 1) % n);
+                self.pty_focused = false;
             }
-            Action::SelectTab(i) => self.active = Tab::from_index(i),
+            Action::SelectTab(i) => {
+                self.active = Tab::from_index(i);
+                self.pty_focused = false;
+            }
             Action::Up => {
                 if self.active == Tab::Storage {
                     self.storage_selected = self.storage_selected.saturating_sub(1);
@@ -1824,8 +1915,22 @@ impl App {
             | Action::StorageModalDelete
             | Action::StorageModalOpenPicker => {}
             Action::Raw(_key) => {
-                // Reservado para foco de terminal (aba 8) — repasse ao PTY.
+                // Tecla sem mapeamento global e fora do foco de PTY; ignorada.
             }
+            Action::PtyInput { .. } | Action::PtyResize { .. } => {
+                let _ = action_tx.send(action);
+            }
+            Action::PtyFocus => {
+                let running = match self.active {
+                    Tab::Files => matches!(self.files_pty, PtyState::Running(_)),
+                    Tab::Terminal => matches!(self.terminal_pty, PtyState::Running(_)),
+                    _ => false,
+                };
+                if running {
+                    self.pty_focused = true;
+                }
+            }
+            Action::PtyUnfocus => self.pty_focused = false,
         }
     }
 }

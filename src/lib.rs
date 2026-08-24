@@ -51,7 +51,13 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                     let _ = action_tx.send(follow_up);
                 }
             }
-            Some(action) = input.next(app.active, app.storage_modal_open(), app.text_input_active(), app.sudo_prompt_open()) => app.dispatch(action, &action_tx),
+            Some(action) = input.next(
+                app.active,
+                app.storage_modal_open(),
+                app.text_input_active(),
+                app.sudo_prompt_open(),
+                app.pty_focused(),
+            ) => app.dispatch(action, &action_tx),
             Some(req) = sudo_rx.recv() => {
                 // Abre o modal nativo de senha de sudo (mascarado) — a TUI
                 // permanece ativa, sem suspender o raw mode/alt-screen: a
@@ -61,6 +67,10 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
             }
             _ = render_tick.tick() => {
                 app.on_tick();
+                let term_size = terminal.size().unwrap_or_default();
+                for resize in app.sync_pty_size(term_size.width, term_size.height) {
+                    let _ = action_tx.send(resize);
+                }
                 terminal.draw(|f| ui::draw(&app, f))?;
             }
         }

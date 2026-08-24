@@ -165,6 +165,42 @@ pub fn metric_line<'a>(
     Line::from(spans)
 }
 
+/// Converte uma `PtyColor` (forma neutra usada em `events`) para
+/// `ratatui::style::Color`. `None` para `PtyColor::Default`, deixando o
+/// chamador decidir a cor de fallback (fg/bg da paleta do HAL-9001).
+fn pty_color(c: crate::events::PtyColor) -> Option<ratatui::style::Color> {
+    use crate::events::PtyColor;
+    use ratatui::style::Color;
+    match c {
+        PtyColor::Default => None,
+        PtyColor::Indexed(i) => Some(Color::Indexed(i)),
+        PtyColor::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
+    }
+}
+
+/// Estilo `ratatui` completo (cores + negrito/sublinhado/itálico/inverso) de
+/// uma célula VT100, usado pelas abas Arquivos/Terminal (Módulos 7/8) para
+/// renderizar a grade da sessão PTY.
+pub fn pty_cell_style(cell: &crate::events::PtyCell, pal: &Palette) -> Style {
+    let mut style = Style::default().fg(pty_color(cell.fg).unwrap_or(pal.fg));
+    if let Some(bg) = pty_color(cell.bg) {
+        style = style.bg(bg);
+    }
+    if cell.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if cell.underline {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if cell.italic {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if cell.inverse {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    style
+}
+
 /// Faixa de 16 blocos representando a paleta de cores do terminal.
 pub fn palette_line<'a>() -> Line<'a> {
     use ratatui::style::Color;

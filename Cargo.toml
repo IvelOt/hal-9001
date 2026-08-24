@@ -44,6 +44,7 @@ flate2 = { version = "1.0", default-features = false, features = ["rust_backend"
 
 # --- embedded PTY (Terminal Deck / Yazi) ---
 portable-pty = "0.8"
+vt100 = "0.15"
 
 # --- config / serde ---
 serde = { version = "1", features = ["derive"] }

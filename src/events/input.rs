@@ -5,7 +5,7 @@ use futures::StreamExt;
 
 use crate::app::Tab;
 
-use super::Action;
+use super::{Action, PtyTarget};
 
 /// Stream de input que traduz eventos de terminal em [`Action`]s.
 pub struct InputStream {
@@ -32,19 +32,32 @@ impl InputStream {
     /// `sudo_prompt_open` tem prioridade máxima sobre tudo isso: enquanto o
     /// modal nativo de senha de sudo estiver aberto, todo o teclado (mesmo
     /// fora da aba Storage) vira digitação mascarada nesse campo.
+    ///
+    /// `pty_focused` tem a mesma prioridade máxima quando ativo: com o
+    /// teclado capturado pela sessão PTY da aba Arquivos/Terminal, toda
+    /// tecla vira `Action::PtyInput` (bytes VT100/xterm), exceto o leader de
+    /// escape (`Ctrl-a`/`Esc`) e as teclas de função `F1..F8`, que devolvem o
+    /// foco ao chrome da TUI.
+    #[allow(clippy::too_many_arguments)]
     pub async fn next(
         &mut self,
         active: Tab,
         storage_modal_open: bool,
         text_mode: bool,
         sudo_prompt_open: bool,
+        pty_focused: bool,
     ) -> Option<Action> {
         loop {
             match self.inner.next().await {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    if let Some(action) =
-                        map_key(key, active, storage_modal_open, text_mode, sudo_prompt_open)
-                    {
+                    if let Some(action) = map_key(
+                        key,
+                        active,
+                        storage_modal_open,
+                        text_mode,
+                        sudo_prompt_open,
+                        pty_focused,
+                    ) {
                         return Some(action);
                     }
                     // Tecla ignorada; continua aguardando.
@@ -72,12 +85,34 @@ fn map_key(
     storage_modal_open: bool,
     text_mode: bool,
     sudo_prompt_open: bool,
+    pty_focused: bool,
 ) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     // Ctrl+C sempre encerra, mesmo dentro de um campo de texto de modal.
     if ctrl && key.code == KeyCode::Char('c') {
         return Some(Action::Quit);
+    }
+
+    // PTY em foco (abas Arquivos/Terminal, Módulos 7/8): prioridade máxima
+    // (mesmo nível do modal de sudo). `Ctrl-a`/`Esc` e `F1..F8` devolvem o
+    // foco ao chrome; qualquer outra tecla vira input bruto para o PTY.
+    if pty_focused {
+        return match key.code {
+            KeyCode::F(n @ 1..=8) => Some(Action::SelectTab((n - 1) as usize)),
+            KeyCode::Esc => Some(Action::PtyUnfocus),
+            KeyCode::Char('a') if ctrl => Some(Action::PtyUnfocus),
+            _ => Some(Action::PtyInput {
+                target: pty_target_for(active),
+                bytes: key_to_pty_bytes(key),
+            }),
+        };
+    }
+
+    // Tecla `Enter` nas abas Arquivos/Terminal (sem foco de PTY ainda): pede
+    // para o `App` dar foco ao PTY, se a sessão já estiver rodando.
+    if (active == Tab::Files || active == Tab::Terminal) && key.code == KeyCode::Enter {
+        return Some(Action::PtyFocus);
     }
 
     // Modal nativo de senha de sudo: prioridade máxima, funciona em qualquer
@@ -246,5 +281,54 @@ fn map_key(
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Esc => Some(Action::ToggleConfig),
         _ => Some(Action::Raw(key)),
+    }
+}
+
+/// Sessão PTY endereçada pela aba ativa (só chamado quando `active` é
+/// `Files` ou `Terminal`, os únicos casos em que `pty_focused` pode ser
+/// `true`; qualquer outra aba cai no `_ => PtyTarget::Terminal` neutro, que
+/// nunca é de fato despachado por não haver como focar o PTY fora dessas
+/// duas abas).
+fn pty_target_for(active: Tab) -> PtyTarget {
+    match active {
+        Tab::Files => PtyTarget::Files,
+        _ => PtyTarget::Terminal,
+    }
+}
+
+/// Codifica uma tecla em bytes VT100/xterm para escrever na sessão PTY em
+/// foco — mesma convenção usada por emuladores de terminal reais (setas,
+/// Home/End/PageUp/PageDown/Delete como sequências CSI; `Ctrl+letra` como o
+/// byte de controle `0x01..=0x1A`; `Enter`/`Backspace`/`Tab` nos bytes
+/// clássicos). `Esc` e o leader `Ctrl-a` nunca chegam aqui — já são
+/// interceptados antes, em `map_key`.
+pub fn key_to_pty_bytes(key: KeyEvent) -> Vec<u8> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char(c) => {
+            if ctrl {
+                let upper = c.to_ascii_uppercase();
+                if upper.is_ascii_uppercase() {
+                    return vec![(upper as u8) - b'A' + 1];
+                }
+            }
+            let mut buf = [0u8; 4];
+            c.encode_utf8(&mut buf).as_bytes().to_vec()
+        }
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::BackTab => b"\x1b[Z".to_vec(),
+        KeyCode::Up => b"\x1b[A".to_vec(),
+        KeyCode::Down => b"\x1b[B".to_vec(),
+        KeyCode::Right => b"\x1b[C".to_vec(),
+        KeyCode::Left => b"\x1b[D".to_vec(),
+        KeyCode::Home => b"\x1b[H".to_vec(),
+        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        _ => Vec::new(),
     }
 }
