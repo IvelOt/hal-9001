@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, FilePickerState};
+use crate::app::{App, FilePickerPurpose, FilePickerState};
 
 use super::storage::modal_block;
 use super::theme::Palette;
@@ -28,11 +28,50 @@ pub struct FileEntry {
     pub modified: Option<SystemTime>,
 }
 
-/// Extensões de imagem que o seletor reconhece como "escolhíveis"
-/// (`.iso`/`.img`/`.vhd`, sem diferenciar maiúsculas/minúsculas).
+/// Extensões de imagem bruta que o seletor reconhece como "escolhíveis"
+/// (`.iso`/`.img`/`.vhd`/`.raw`, sem diferenciar maiúsculas/minúsculas) —
+/// usado pelo gerenciador de ISOs multi-boot/Ventoy, que só lê imagens não
+/// comprimidas diretamente da partição de dados.
 pub fn is_pickable_image(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.ends_with(".iso") || lower.ends_with(".img") || lower.ends_with(".vhd")
+    lower.ends_with(".iso")
+        || lower.ends_with(".img")
+        || lower.ends_with(".vhd")
+        || lower.ends_with(".raw")
+}
+
+/// Extensões de imagem comprimida reconhecidas pelo ISO Flasher — apenas
+/// gzip (`.gz`/`.img.gz`/`.iso.gz`/`.raw.gz`) tem descompressão em streaming
+/// ativa (via `flate2`, ver `backend::storage::flash_sync`); `.zip`/`.xz`/
+/// `.zst` são reconhecidos para navegação, mas ainda não têm um decodificador
+/// puro Rust integrado.
+fn is_compressed_image(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".img.gz")
+        || lower.ends_with(".iso.gz")
+        || lower.ends_with(".raw.gz")
+        || lower.ends_with(".gz")
+        || lower.ends_with(".zip")
+        || lower.ends_with(".xz")
+        || lower.ends_with(".zst")
+}
+
+/// Imagem gravável pelo ISO Flasher: bruta (ver [`is_pickable_image`]) ou
+/// comprimida (ver [`is_compressed_image`]).
+pub fn is_flashable_image(name: &str) -> bool {
+    is_pickable_image(name) || is_compressed_image(name)
+}
+
+/// Decide se `name` pode ser selecionado no contexto atual do seletor: o
+/// ISO Flasher aceita imagens comprimidas com descompressão em streaming
+/// (ver [`is_flashable_image`]); adicionar ao multi-boot/Ventoy só aceita
+/// imagens brutas, já que o Ventoy sempre lê o arquivo diretamente da
+/// partição de dados, sem descomprimir nada em tempo de boot.
+pub fn is_pickable_for(purpose: &FilePickerPurpose, name: &str) -> bool {
+    match purpose {
+        FilePickerPurpose::FlasherIso { .. } => is_flashable_image(name),
+        FilePickerPurpose::MultibootAddIso { .. } => is_pickable_image(name),
+    }
 }
 
 /// Ordena entradas com diretórios primeiro, depois arquivos, alfabeticamente
@@ -220,7 +259,7 @@ fn draw_list(app: &App, pal: &Palette, f: &mut Frame, area: Rect, s: &FilePicker
                 .add_modifier(Modifier::BOLD)
         } else if entry.is_dir {
             Style::default().fg(pal.ok)
-        } else if is_pickable_image(&entry.name) {
+        } else if is_pickable_for(&s.purpose, &entry.name) {
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(pal.fg)

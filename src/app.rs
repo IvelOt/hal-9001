@@ -238,7 +238,7 @@ impl FilePickerState {
             self.selected = 0;
             self.reload();
             FilePickerOutcome::None
-        } else if file_picker::is_pickable_image(&entry.name) {
+        } else if file_picker::is_pickable_for(&self.purpose, &entry.name) {
             FilePickerOutcome::Picked(entry.path)
         } else {
             FilePickerOutcome::Unsupported

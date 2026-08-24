@@ -69,11 +69,21 @@ fn icon(app: &App, nerd: &str, ascii: &str) -> String {
     }
 }
 
-/// Ícone do drive — Nerd Font `\u{f287}` (USB) / `\u{f0a0}` (Disco/SSD/HDD)
-/// quando `icons = true`, fallback ASCII limpo caso contrário (Zero Emojis
-/// Policy: nenhum emoji é usado em toda a base de código).
+/// `true` quando `drive` é um cartão SD/MicroSD/MMC — pelo barramento
+/// reportado pelo UDisks2 (`BusType::Mmc`) ou, na ausência dessa informação,
+/// pelo nó de dispositivo (`/dev/mmcblk*`).
+fn is_sd_card(drive: &DriveInfo) -> bool {
+    drive.bus == BusType::Mmc || drive.dev_node.starts_with("/dev/mmcblk")
+}
+
+/// Ícone do drive — Nerd Font `\u{f7c0}` (cartão SD) / `\u{f287}` (USB) /
+/// `\u{f0a0}` (Disco/SSD/HDD) quando `icons = true`, fallback ASCII limpo
+/// caso contrário (Zero Emojis Policy: nenhum emoji é usado em toda a base
+/// de código).
 fn drive_icon(app: &App, drive: &DriveInfo) -> String {
-    if drive.bus == BusType::Usb || drive.removable {
+    if is_sd_card(drive) {
+        icon(app, "\u{f7c0}", "[SD]")
+    } else if drive.bus == BusType::Usb || drive.removable {
         icon(app, "\u{f287}", "[USB]")
     } else if drive.rotational {
         icon(app, "\u{f0a0}", "[HDD]")
@@ -174,6 +184,11 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
         spans.push(Span::styled(
             format!("  {}", system_tag(app)),
             Style::default().fg(pal.err),
+        ));
+    } else if is_sd_card(drive) {
+        spans.push(Span::styled(
+            format!("  [{}]", m.storage_tag_sd),
+            Style::default().fg(pal.accent),
         ));
     } else if drive.bus == BusType::Usb || drive.removable {
         spans.push(Span::styled(

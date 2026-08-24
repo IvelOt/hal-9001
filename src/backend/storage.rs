@@ -6,11 +6,13 @@
 //! que impede que discos de sistema virem alvo de operações destrutivas.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use sysinfo::Disks;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -185,6 +187,13 @@ impl DriveInfo {
         }
         let vm = format!("{} {}", self.vendor, self.model).trim().to_string();
         if !vm.is_empty() {
+            // Cartões SD/MicroSD/MMC costumam reportar apenas um modelo
+            // genérico (ex.: `SD16G`), sem rótulo de partição formatado —
+            // anexa o nó de dispositivo para dar contexto imediato de qual
+            // slot/leitor é esse (ex.: `SD16G (/dev/mmcblk0)`).
+            if self.bus == BusType::Mmc {
+                return format!("{vm} ({})", self.dev_node);
+            }
             return vm;
         }
         self.dev_node.clone()
@@ -1281,38 +1290,100 @@ async fn checksum_task(iso_path: String, tx: EventTx) {
     });
 }
 
-/// Grava `iso_path` no dispositivo de bloco `dev_node` em blocos de 4 MiB,
-/// emitindo progresso (%, MB/s, ETA) a cada ~200ms. Ao final, garante
-/// `fsync` + `sync()` de kernel antes de reportar sucesso — 100% escrito
-/// **não** é sucesso até o sync retornar (evita a armadilha clássica do
-/// cache de página).
-async fn flash_inner(
-    iso_path: &str,
+/// Assinatura gzip (`RFC 1952 §2.3.1`, primeiros 2 bytes do arquivo) — usada
+/// para decidir se a fonte precisa de descompressão em streaming antes da
+/// gravação, independente da extensão do nome do arquivo.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+/// `true` quando os dois primeiros bytes de `path` são a assinatura gzip.
+pub fn is_gzip_file(path: &std::path::Path) -> std::io::Result<bool> {
+    let mut f = std::fs::File::open(path)?;
+    let mut magic = [0u8; 2];
+    match f.read_exact(&mut magic) {
+        Ok(()) => Ok(magic == GZIP_MAGIC),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Tamanho descomprimido estimado a partir do rodapé gzip (`ISIZE`, RFC 1952
+/// §2.3.1: últimos 4 bytes little-endian, módulo 2^32) — usado apenas como
+/// estimativa de progresso/ETA. Imagens descomprimidas maiores que 4 GiB
+/// fazem a estimativa "dar a volta", mas isso nunca afeta a gravação em si
+/// (o laço de cópia só para quando o descompressor devolve EOF de fato).
+pub fn gzip_uncompressed_size_hint(path: &std::path::Path) -> Option<u64> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len < 4 {
+        return None;
+    }
+    f.seek(SeekFrom::End(-4)).ok()?;
+    let mut buf = [0u8; 4];
+    f.read_exact(&mut buf).ok()?;
+    Some(u32::from_le_bytes(buf) as u64)
+}
+
+/// Detecta se `path` é gzip e estima o total de bytes a gravar: o tamanho
+/// descomprimido (via rodapé, ver [`gzip_uncompressed_size_hint`]) quando
+/// gzip, senão o tamanho bruto do arquivo.
+fn probe_image_sync(path: &std::path::Path) -> (bool, u64) {
+    let compressed = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let is_gzip = is_gzip_file(path).unwrap_or(false);
+    let total = if is_gzip {
+        gzip_uncompressed_size_hint(path).unwrap_or(compressed)
+    } else {
+        compressed
+    };
+    (is_gzip, total)
+}
+
+/// Versão assíncrona de [`probe_image_sync`] — roda numa task blocking já
+/// que inspeciona o arquivo via `std::fs` (leitura de poucos bytes, mas
+/// ainda I/O síncrono).
+async fn probe_image(iso_path: &str) -> (bool, u64) {
+    let path = std::path::PathBuf::from(iso_path);
+    tokio::task::spawn_blocking(move || probe_image_sync(&path))
+        .await
+        .unwrap_or((false, 0))
+}
+
+/// Núcleo síncrono de gravação (Épico H + streaming decompressor): lê
+/// `iso_path` — bruto, ou gzip via [`GzDecoder`] quando a assinatura for
+/// detectada (ver [`is_gzip_file`]) — em blocos de [`IO_BUFFER_SIZE`],
+/// gravando os bytes já descomprimidos diretamente no nó de bloco `dev_node`.
+/// Roda inteiramente síncrono numa task blocking dedicada (ver
+/// [`flash_inner`]), já que tanto `flate2` quanto a escrita direta no
+/// dispositivo são operações bloqueantes.
+fn flash_sync(
+    iso_path: &std::path::Path,
     dev_node: &str,
     cancel: &Arc<AtomicBool>,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
-    let mut src = tokio::fs::File::open(iso_path).await?;
-    let total_bytes = src.metadata().await?.len();
-    let mut dst = tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(dev_node)
-        .await?;
+    let (is_gzip, total_bytes) = probe_image_sync(iso_path);
+    let raw_file = std::fs::File::open(iso_path)?;
+    let mut reader: Box<dyn Read> = if is_gzip {
+        Box::new(GzDecoder::new(raw_file))
+    } else {
+        Box::new(raw_file)
+    };
+    let mut dst = std::fs::OpenOptions::new().write(true).open(dev_node)?;
 
     let mut buf = vec![0u8; IO_BUFFER_SIZE];
     let mut written: u64 = 0;
-    let mut window_started = tokio::time::Instant::now();
+    let mut window_started = std::time::Instant::now();
     let mut window_bytes: u64 = 0;
 
     loop {
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("gravação cancelada pelo usuário");
         }
-        let n = src.read(&mut buf).await?;
+        let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
-        dst.write_all(&buf[..n]).await?;
+        dst.write_all(&buf[..n])?;
         written += n as u64;
         window_bytes += n as u64;
 
@@ -1329,28 +1400,48 @@ async fn flash_inner(
                 speed_mbps,
                 eta_secs,
             });
-            window_started = tokio::time::Instant::now();
+            window_started = std::time::Instant::now();
             window_bytes = 0;
         }
     }
 
     // Syncing: fsync do FD + sync() global de kernel — só então o "100%" vira
     // sucesso de fato (H4).
-    dst.flush().await?;
-    dst.sync_all().await?;
+    dst.flush()?;
+    dst.sync_all()?;
     // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
     // insegura; apenas força o flush de todos os buffers do kernel.
     unsafe {
         libc::sync();
     }
 
+    // `written` (bytes reais decodificados) substitui a estimativa de
+    // `total_bytes` no evento final — a estimativa do rodapé gzip pode
+    // divergir ligeiramente do total real (ver [`gzip_uncompressed_size_hint`]).
     let _ = tx.send(AppEvent::StorageFlashProgress {
-        bytes_written: total_bytes,
-        total_bytes,
+        bytes_written: written,
+        total_bytes: written,
         speed_mbps: 0.0,
         eta_secs: 0,
     });
     Ok(())
+}
+
+/// Grava `iso_path` no dispositivo de bloco `dev_node`, delegando o trabalho
+/// síncrono (leitura/descompressão/escrita) a [`flash_sync`] numa task
+/// blocking — nunca trava a thread async enquanto grava blocos de 4 MiB ou
+/// descomprime gzip em streaming.
+async fn flash_inner(
+    iso_path: &str,
+    dev_node: &str,
+    cancel: &Arc<AtomicBool>,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    let path_buf = std::path::PathBuf::from(iso_path);
+    let dev_owned = dev_node.to_string();
+    let cancel = Arc::clone(cancel);
+    let tx = tx.clone();
+    tokio::task::spawn_blocking(move || flash_sync(&path_buf, &dev_owned, &cancel, &tx)).await?
 }
 
 // ---------------------------------------------------------------------------
@@ -1630,6 +1721,182 @@ async fn flash_elevated(
     Ok(())
 }
 
+/// Núcleo síncrono do fallback elevado para fontes gzip: descomprime
+/// `iso_path` via [`GzDecoder`] em blocos de [`IO_BUFFER_SIZE`] e escreve os
+/// bytes descomprimidos diretamente no `stdin` de um `dd of=<dev_node>`
+/// rodado sob `sudo`. `dd` nunca vê os bytes comprimidos — só recebe a
+/// imagem já decodificada — o que evita gravar um `.img.gz` cru no
+/// dispositivo. A senha (quando necessária) é escrita primeiro, como uma
+/// linha própria, antes do primeiro byte da imagem: `sudo -S` consome só a
+/// linha da senha do `stdin`, repassando o restante do fluxo para o `dd`
+/// filho.
+fn flash_elevated_gzip_sync(
+    iso_path: &str,
+    dev_node: &str,
+    password: Option<String>,
+    cancel: &Arc<AtomicBool>,
+    tx: &EventTx,
+    total_bytes: u64,
+) -> anyhow::Result<(std::process::ExitStatus, String)> {
+    let mut cmd = std::process::Command::new("sudo");
+    if password.is_some() {
+        cmd.arg("-S").arg("-k").arg("--");
+    } else {
+        cmd.arg("-n").arg("--");
+    }
+    cmd.arg("dd")
+        .arg(format!("of={dev_node}"))
+        .arg("bs=4M")
+        .arg("status=progress")
+        .arg("conv=fsync");
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    if let Some(pw) = &password {
+        stdin.write_all(pw.as_bytes())?;
+        stdin.write_all(b"\n")?;
+    }
+    drop(child.stdout.take());
+
+    // Lê o `stderr` do `dd` (onde `status=progress` escreve) numa thread à
+    // parte, para nunca travar o laço de escrita da imagem no pipe.
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let tx_err = tx.clone();
+    let stderr_thread = std::thread::spawn(move || -> String {
+        let mut buf = [0u8; 4096];
+        let mut partial: Vec<u8> = Vec::new();
+        let mut full = String::new();
+        loop {
+            let n = match stderr.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            for &b in &buf[..n] {
+                if b == b'\n' || b == b'\r' {
+                    if !partial.is_empty() {
+                        let line = String::from_utf8_lossy(&partial).to_string();
+                        full.push_str(&line);
+                        full.push('\n');
+                        let _ = tx_err.send(AppEvent::Toast(Toast::info(line)));
+                        partial.clear();
+                    }
+                } else {
+                    partial.push(b);
+                }
+            }
+        }
+        full
+    });
+
+    let write_result: anyhow::Result<()> = (|| {
+        let raw_file = std::fs::File::open(iso_path)?;
+        let mut decoder = GzDecoder::new(raw_file);
+        let mut buf = vec![0u8; IO_BUFFER_SIZE];
+        let mut written: u64 = 0;
+        let mut window_started = std::time::Instant::now();
+        let mut window_bytes: u64 = 0;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("gravação cancelada pelo usuário");
+            }
+            let n = decoder.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            stdin.write_all(&buf[..n])?;
+            written += n as u64;
+            window_bytes += n as u64;
+
+            if window_started.elapsed() >= PROGRESS_THROTTLE {
+                let (speed_mbps, eta_secs) = compute_speed_eta(
+                    window_bytes,
+                    window_started.elapsed().as_secs_f64(),
+                    written,
+                    total_bytes,
+                );
+                let _ = tx.send(AppEvent::StorageFlashProgress {
+                    bytes_written: written,
+                    total_bytes,
+                    speed_mbps,
+                    eta_secs,
+                });
+                window_started = std::time::Instant::now();
+                window_bytes = 0;
+            }
+        }
+        Ok(())
+    })();
+    // Fecha o `stdin` do `dd` (EOF) para que ele finalize a gravação, mesmo
+    // quando `write_result` for `Err` (ex.: cancelamento) — sem isso o `dd`
+    // ficaria bloqueado esperando mais bytes.
+    drop(stdin);
+
+    if let Err(e) = write_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stderr_thread.join();
+        return Err(e);
+    }
+
+    let status = child.wait()?;
+    let stderr_text = stderr_thread.join().unwrap_or_default();
+    Ok((status, stderr_text))
+}
+
+/// Fallback elevado para fontes gzip (ver [`flash_elevated_gzip_sync`]):
+/// pede a senha pelo modal nativo da TUI quando necessário, repetindo em
+/// caso de senha incorreta — mesma disciplina de retry de [`flash_elevated`].
+async fn flash_elevated_gzip(
+    iso_path: &str,
+    dev_node: &str,
+    total_bytes: u64,
+    cancel: &Arc<AtomicBool>,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    let label = format!("Gravar ISO comprimida em {dev_node}");
+    let mut retry_error: Option<String> = None;
+
+    loop {
+        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+            Ok(pw) => pw,
+            Err(msg) => anyhow::bail!(msg),
+        };
+        let iso_owned = iso_path.to_string();
+        let dev_owned = dev_node.to_string();
+        let cancel_owned = Arc::clone(cancel);
+        let tx_owned = tx.clone();
+        let (status, stderr_text) = tokio::task::spawn_blocking(move || {
+            flash_elevated_gzip_sync(&iso_owned, &dev_owned, password, &cancel_owned, &tx_owned, total_bytes)
+        })
+        .await??;
+        if status.success() {
+            break;
+        }
+        if is_sudo_auth_failure(&stderr_text) {
+            retry_error = Some("Senha incorreta".to_string());
+            continue;
+        }
+        anyhow::bail!("dd elevado (streaming) terminou com {status}: {stderr_text}");
+    }
+
+    let _ = tx.send(AppEvent::StorageFlashProgress {
+        bytes_written: total_bytes,
+        total_bytes,
+        speed_mbps: 0.0,
+        eta_secs: 0,
+    });
+    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
+    // insegura; apenas força o flush de todos os buffers do kernel.
+    unsafe {
+        libc::sync();
+    }
+    Ok(())
+}
+
 async fn flash_task(
     device_id: String,
     iso_path: String,
@@ -1638,10 +1905,7 @@ async fn flash_task(
     tx: EventTx,
     sudo_tx: SudoPasswordTx,
 ) {
-    let total_bytes = tokio::fs::metadata(&iso_path)
-        .await
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let (is_gzip, total_bytes) = probe_image(&iso_path).await;
     let result = match flash_inner(&iso_path, &dev_node, &cancel, &tx).await {
         Ok(()) => Ok("gravação concluída com sucesso".to_string()),
         Err(e) if is_permission_denied_error(&e) => {
@@ -1649,10 +1913,17 @@ async fn flash_task(
             let _ = tx.send(AppEvent::Toast(Toast::info(
                 "permissão negada — solicitando elevação (sudo) para gravar o dispositivo",
             )));
-            flash_elevated(&iso_path, &dev_node, total_bytes, &sudo_tx, &tx)
-                .await
-                .map(|()| "gravação concluída com sucesso (elevado)".to_string())
-                .map_err(|e| e.to_string())
+            if is_gzip {
+                flash_elevated_gzip(&iso_path, &dev_node, total_bytes, &cancel, &sudo_tx, &tx)
+                    .await
+                    .map(|()| "gravação concluída com sucesso (elevado, streaming)".to_string())
+                    .map_err(|e| e.to_string())
+            } else {
+                flash_elevated(&iso_path, &dev_node, total_bytes, &sudo_tx, &tx)
+                    .await
+                    .map(|()| "gravação concluída com sucesso (elevado)".to_string())
+                    .map_err(|e| e.to_string())
+            }
         }
         Err(e) => Err(e.to_string()),
     };

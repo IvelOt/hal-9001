@@ -39,6 +39,9 @@ libc = "0.2"
 # --- Formatação FAT32 100% Rust puro (zero dependências externas de host) ---
 fatfs = "0.3.6"
 
+# --- Descompressão em streaming do ISO Flasher (backend `miniz_oxide`, 100% Rust puro, zero bindings C/libz) ---
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+
 # --- embedded PTY (Terminal Deck / Yazi) ---
 portable-pty = "0.8"
 

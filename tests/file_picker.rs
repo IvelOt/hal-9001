@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use hal9001::app::{FilePickerOutcome, FilePickerPurpose, FilePickerState};
-use hal9001::ui::file_picker::{is_pickable_image, sort_entries, FileEntry};
+use hal9001::ui::file_picker::{
+    is_flashable_image, is_pickable_for, is_pickable_image, sort_entries, FileEntry,
+};
 
 fn entry(name: &str, is_dir: bool) -> FileEntry {
     FileEntry {
@@ -50,20 +52,62 @@ fn sort_entries_is_case_insensitive_within_groups() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn is_pickable_image_recognizes_iso_img_vhd_case_insensitively() {
+fn is_pickable_image_recognizes_iso_img_vhd_raw_case_insensitively() {
     assert!(is_pickable_image("archlinux.iso"));
     assert!(is_pickable_image("Windows.ISO"));
     assert!(is_pickable_image("disk.img"));
     assert!(is_pickable_image("disk.IMG"));
     assert!(is_pickable_image("machine.vhd"));
     assert!(is_pickable_image("machine.VHD"));
+    assert!(is_pickable_image("card.raw"));
+    assert!(is_pickable_image("card.RAW"));
 }
 
 #[test]
-fn is_pickable_image_rejects_other_extensions() {
+fn is_pickable_image_rejects_compressed_and_other_extensions() {
     assert!(!is_pickable_image("readme.txt"));
-    assert!(!is_pickable_image("archive.iso.zip"));
     assert!(!is_pickable_image("noextension"));
+    assert!(!is_pickable_image("archlinux.img.gz"));
+    assert!(!is_pickable_image("archive.zip"));
+}
+
+#[test]
+fn is_flashable_image_recognizes_compressed_extensions_case_insensitively() {
+    assert!(is_flashable_image("archlinux.img.gz"));
+    assert!(is_flashable_image("Fedora.ISO.GZ"));
+    assert!(is_flashable_image("sdcard.raw.gz"));
+    assert!(is_flashable_image("generic.gz"));
+    assert!(is_flashable_image("archive.zip"));
+    assert!(is_flashable_image("archive.xz"));
+    assert!(is_flashable_image("archive.zst"));
+    // Continua reconhecendo as imagens brutas também.
+    assert!(is_flashable_image("archlinux.iso"));
+    assert!(is_flashable_image("card.raw"));
+}
+
+#[test]
+fn is_flashable_image_rejects_unrelated_extensions() {
+    assert!(!is_flashable_image("readme.txt"));
+    assert!(!is_flashable_image("noextension"));
+}
+
+#[test]
+fn is_pickable_for_restricts_compressed_images_to_the_flasher_purpose() {
+    let flasher = FilePickerPurpose::FlasherIso {
+        device_id: "dev".to_string(),
+        target_label: "pendrive".to_string(),
+        target_dev_node: "/dev/sdz".to_string(),
+        target_size: 0,
+    };
+    let multiboot = FilePickerPurpose::MultibootAddIso {
+        device_id: "dev".to_string(),
+        target_label: "pendrive".to_string(),
+    };
+
+    assert!(is_pickable_for(&flasher, "archlinux.img.gz"));
+    assert!(is_pickable_for(&flasher, "archlinux.iso"));
+    assert!(!is_pickable_for(&multiboot, "archlinux.img.gz"));
+    assert!(is_pickable_for(&multiboot, "archlinux.iso"));
 }
 
 // ---------------------------------------------------------------------------

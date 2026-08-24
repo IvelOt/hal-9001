@@ -6,9 +6,10 @@
 
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
-    build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust, is_iso_or_img,
-    is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
-    mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
+    build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
+    gzip_uncompressed_size_hint, is_gzip_file, is_iso_or_img, is_not_authorized_error,
+    is_permission_denied_error, is_sudo_auth_failure, is_system_disk, mkfs_command,
+    parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
     resolve_block_object_path, sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind,
     PartitionInfo, StorageSnapshot,
 };
@@ -1215,12 +1216,83 @@ fn ventoy_data_partition_falls_back_to_largest_non_efi_when_unlabeled() {
 }
 
 #[test]
+fn friendly_label_appends_dev_node_for_mmc_drives_without_a_partition_label() {
+    let mut d = drive(true, BusType::Mmc);
+    d.model = "SD16G".into();
+    d.vendor = "".into();
+    d.dev_node = "/dev/mmcblk0".into();
+    d.partitions = vec![labeled_partition("", "/dev/mmcblk0p1", 16 * 1024 * 1024 * 1024)];
+    assert_eq!(d.friendly_label(), "SD16G (/dev/mmcblk0)");
+}
+
+#[test]
+fn friendly_label_prefers_the_partition_label_even_for_mmc_drives() {
+    let mut d = drive(true, BusType::Mmc);
+    d.model = "SD16G".into();
+    d.dev_node = "/dev/mmcblk0".into();
+    d.partitions = vec![labeled_partition(
+        "MEUCARTAO",
+        "/dev/mmcblk0p1",
+        16 * 1024 * 1024 * 1024,
+    )];
+    assert_eq!(d.friendly_label(), "MEUCARTAO");
+}
+
+#[test]
 fn is_iso_or_img_is_case_insensitive_and_rejects_other_extensions() {
     assert!(is_iso_or_img("archlinux.iso"));
     assert!(is_iso_or_img("Windows.ISO"));
     assert!(is_iso_or_img("disk.img"));
     assert!(!is_iso_or_img("readme.txt"));
     assert!(!is_iso_or_img("archive.iso.zip"));
+}
+
+// ---------------------------------------------------------------------------
+// Descompressão em streaming (gzip): detecção por magic bytes e estimativa
+// de tamanho descomprimido a partir do rodapé `ISIZE`.
+// ---------------------------------------------------------------------------
+
+fn write_gzip_fixture(dir: &std::path::Path, name: &str, payload: &[u8]) -> std::path::PathBuf {
+    use std::io::Write;
+    let path = dir.join(name);
+    let mut encoder =
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(payload).expect("write payload");
+    let compressed = encoder.finish().expect("finish gzip stream");
+    std::fs::write(&path, compressed).expect("write gzip fixture");
+    path
+}
+
+#[test]
+fn is_gzip_file_detects_the_gzip_magic_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gz_path = write_gzip_fixture(dir.path(), "image.img.gz", b"conteudo de teste gzip");
+    assert!(is_gzip_file(&gz_path).expect("read magic"));
+
+    let raw_path = dir.path().join("image.img");
+    std::fs::write(&raw_path, b"nao e gzip").expect("write raw fixture");
+    assert!(!is_gzip_file(&raw_path).expect("read magic"));
+}
+
+#[test]
+fn is_gzip_file_handles_files_shorter_than_the_magic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tiny_path = dir.path().join("tiny");
+    std::fs::write(&tiny_path, [0x1f]).expect("write tiny fixture");
+    assert!(!is_gzip_file(&tiny_path).expect("read magic"));
+
+    let empty_path = dir.path().join("empty");
+    std::fs::write(&empty_path, []).expect("write empty fixture");
+    assert!(!is_gzip_file(&empty_path).expect("read magic"));
+}
+
+#[test]
+fn gzip_uncompressed_size_hint_matches_the_original_payload_length() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let payload = vec![0x42u8; 5 * 1024 * 1024];
+    let gz_path = write_gzip_fixture(dir.path(), "image.raw.gz", &payload);
+    let hint = gzip_uncompressed_size_hint(&gz_path).expect("footer ISIZE");
+    assert_eq!(hint, payload.len() as u64);
 }
 
 #[test]
