@@ -161,6 +161,10 @@ pub struct DriveInfo {
     pub size: u64,
     pub removable: bool,
     pub ejectable: bool,
+    /// `Drive.CanPowerOff` do UDisks2 — `false` em cartões SD/MMC (geridos
+    /// pelo `sdhci`/`mmc_core` do kernel, sem controlador USB para desligar),
+    /// gatilho para pular `Drive.PowerOff` no fluxo de ejeção segura.
+    pub can_power_off: bool,
     pub bus: BusType,
     /// `true` para HDD (mídia rotacional); `false` para SSD/NVMe.
     pub rotational: bool,
@@ -986,6 +990,7 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
             size: prop_u64(drive_props, "Size").unwrap_or(0),
             removable: prop_bool(drive_props, "Removable").unwrap_or(false),
             ejectable: prop_bool(drive_props, "Ejectable").unwrap_or(false),
+            can_power_off: prop_bool(drive_props, "CanPowerOff").unwrap_or(false),
             bus: BusType::parse(&prop_string(drive_props, "ConnectionBus").unwrap_or_default()),
             rotational: rotation_rate > 0,
             is_system: false,
@@ -1166,14 +1171,64 @@ async fn unmount(conn: &Connection, path: &str) -> anyhow::Result<()> {
     udisks_call(conn, path, "org.freedesktop.UDisks2.Filesystem", "Unmount").await
 }
 
-async fn eject(conn: &Connection, path: &str) -> anyhow::Result<()> {
-    // Tenta `Eject`; alguns drivers só suportam `PowerOff` (corta a energia do
-    // controlador USB) — tenta como sequência de segurança do "safe to remove".
-    let r = udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "Eject").await;
-    if r.is_ok() {
+/// `true` quando o erro cru do `Drive.PowerOff` (D-Bus) indica que o
+/// UDisks2 recusou o corte de energia por o dispositivo não estar de fato
+/// atrás de um controlador USB (típico de leitores de cartão SD/MMC
+/// embutidos, geridos pelo `sdhci`/`mmc_core` do kernel) — o gatilho para
+/// tratar a falha como sucesso gracioso pós-desmontagem, já que as
+/// partições já foram desmontadas e os buffers já foram sincronizados.
+pub fn is_no_usb_device_error(err: &anyhow::Error) -> bool {
+    let lower = err.to_string().to_ascii_lowercase();
+    lower.contains("no usb device")
+}
+
+/// `true` quando `drive` NUNCA deve receber `Drive.PowerOff` no fluxo de
+/// ejeção segura: cartões SD/MicroSD/MMC (`BusType::Mmc`, geridos pelo
+/// `sdhci`/`mmc_core` do kernel, sem controlador USB para desligar) e
+/// qualquer outro drive que o UDisks2 reporte sem suporte a corte de
+/// energia (`!can_power_off`). Função pura, testável isoladamente (ver
+/// [`eject`]).
+pub fn skips_power_off(drive: &DriveInfo) -> bool {
+    drive.bus == BusType::Mmc || !drive.can_power_off
+}
+
+/// Ejeta com segurança um `drive` cujas partições já foram desmontadas.
+///
+/// Cartões SD/MicroSD/MMC (`BusType::Mmc`) e qualquer drive sem suporte a
+/// `Drive.PowerOff` (`!can_power_off`) nunca chamam `PowerOff` — apenas
+/// `Drive.Eject` (quando `ejectable`), seguido de `libc::sync()` para
+/// garantir o flush físico de todos os buffers do kernel antes de reportar
+/// sucesso. Drives USB normais (`can_power_off == true`) tentam `Eject` e
+/// depois `PowerOff`; se `PowerOff` falhar por o dispositivo não estar
+/// atrás de um controlador USB (ver [`is_no_usb_device_error`]), a falha é
+/// tratada como sucesso gracioso — as partições já desmontadas garantem que
+/// a remoção física é segura mesmo sem o corte de energia.
+async fn eject(conn: &Connection, drive: &DriveInfo) -> anyhow::Result<()> {
+    let path = drive.id.0.as_str();
+
+    if skips_power_off(drive) {
+        if drive.ejectable {
+            let _ = udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "Eject").await;
+        }
+        unsafe {
+            libc::sync();
+        }
         return Ok(());
     }
-    udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "PowerOff").await
+
+    if drive.ejectable {
+        let _ = udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "Eject").await;
+    }
+    match udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "PowerOff").await {
+        Ok(()) => Ok(()),
+        Err(e) if is_no_usb_device_error(&e) => {
+            unsafe {
+                libc::sync();
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Formata o bloco em `path` (drive ou partição) com `fs_type` (`vfat`,
@@ -2268,24 +2323,47 @@ async fn handle_action(
         Action::StorageEject(id) => {
             // Guarda no backend (camada 3, TOCTOU): revalida contra o último
             // snapshot conhecido antes de tocar o D-Bus.
-            if let Some(snap) = snapshot {
-                if let Some(drive) = snap.drives.iter().find(|d| d.id == id) {
-                    if drive.is_system {
-                        let _ = tx.send(AppEvent::Toast(Toast::error(
-                            "operação bloqueada: disco de sistema",
-                        )));
-                        tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de disco de sistema recusada");
-                        return;
-                    }
-                    // Desmonta todas as partições montadas antes de ejetar.
-                    for part in &drive.partitions {
-                        if part.is_mounted() {
-                            let _ = unmount(conn, &part.id.0).await;
-                        }
+            let Some(drive) = snapshot
+                .as_ref()
+                .and_then(|snap| snap.drives.iter().find(|d| d.id == id))
+                .cloned()
+            else {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "dispositivo não encontrado para ejeção",
+                )));
+                return;
+            };
+            if drive.is_system {
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    "operação bloqueada: disco de sistema",
+                )));
+                tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de disco de sistema recusada");
+                return;
+            }
+
+            // Desmonta todas as partições montadas antes de ejetar. Uma
+            // falha aqui (ex.: dispositivo ocupado) aborta a operação sem
+            // tocar `Eject`/`PowerOff` — reportar sucesso com uma partição
+            // ainda montada seria inseguro.
+            let mut unmount_err: Option<anyhow::Error> = None;
+            for part in &drive.partitions {
+                if part.is_mounted() {
+                    if let Err(e) = unmount(conn, &part.id.0).await {
+                        unmount_err = Some(e);
                     }
                 }
             }
-            let toast = match eject(conn, &id.0).await {
+            if let Some(e) = unmount_err {
+                let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                    "Falha ao desmontar (dispositivo em uso?): {e}"
+                ))));
+                return;
+            }
+
+            let toast = match eject(conn, &drive).await {
+                Ok(()) if drive.bus == BusType::Mmc => {
+                    Toast::info("Seguro remover o cartão SD")
+                }
                 Ok(()) => Toast::info("Seguro remover o dispositivo"),
                 Err(e) => Toast::error(format!("Falha ao ejetar: {e}")),
             };

@@ -7,11 +7,11 @@
 use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
-    gzip_uncompressed_size_hint, is_gzip_file, is_iso_or_img, is_not_authorized_error,
-    is_permission_denied_error, is_sudo_auth_failure, is_system_disk, mkfs_command,
-    parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
-    resolve_block_object_path, sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind,
-    PartitionInfo, StorageSnapshot,
+    gzip_uncompressed_size_hint, is_gzip_file, is_iso_or_img, is_no_usb_device_error,
+    is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
+    mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
+    resolve_block_object_path, skips_power_off, sudo_invocation, ventoy_data_partition, BusType,
+    DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};
@@ -26,6 +26,7 @@ fn drive(removable: bool, bus: BusType) -> DriveInfo {
         size: 512 * 1024 * 1024 * 1024,
         removable,
         ejectable: removable,
+        can_power_off: bus != BusType::Mmc,
         bus,
         rotational: false,
         is_system: false,
@@ -1236,6 +1237,50 @@ fn friendly_label_prefers_the_partition_label_even_for_mmc_drives() {
         16 * 1024 * 1024 * 1024,
     )];
     assert_eq!(d.friendly_label(), "MEUCARTAO");
+}
+
+// ---------------------------------------------------------------------------
+// Ejeção segura de SD/MMC e dispositivos sem `Drive.CanPowerOff` — a decisão
+// de pular `PowerOff` é pura e testável sem D-Bus (ver `skips_power_off`,
+// consumida por `eject` em `src/backend/storage.rs`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mmc_drives_always_skip_power_off_even_when_can_power_off_is_true() {
+    let mut d = drive(true, BusType::Mmc);
+    // Mesmo que o UDisks2 reportasse `CanPowerOff = true` por engano, um
+    // cartão MMC nunca deve receber `PowerOff` — o barramento MMC não tem
+    // um controlador USB para desligar.
+    d.can_power_off = true;
+    assert!(skips_power_off(&d));
+}
+
+#[test]
+fn usb_drives_without_can_power_off_skip_power_off() {
+    let mut d = drive(true, BusType::Usb);
+    d.can_power_off = false;
+    assert!(skips_power_off(&d));
+}
+
+#[test]
+fn usb_drives_with_can_power_off_do_not_skip_power_off() {
+    let mut d = drive(true, BusType::Usb);
+    d.can_power_off = true;
+    assert!(!skips_power_off(&d));
+}
+
+#[test]
+fn no_usb_device_error_is_recognized_case_insensitively() {
+    let err = anyhow::anyhow!("org.freedesktop.UDisks2.Error.Failed: No usb device");
+    assert!(is_no_usb_device_error(&err));
+    let err_lower = anyhow::anyhow!("no usb device");
+    assert!(is_no_usb_device_error(&err_lower));
+}
+
+#[test]
+fn unrelated_power_off_errors_are_not_treated_as_no_usb_device() {
+    let err = anyhow::anyhow!("org.freedesktop.UDisks2.Error.Failed: Device is busy");
+    assert!(!is_no_usb_device_error(&err));
 }
 
 #[test]
