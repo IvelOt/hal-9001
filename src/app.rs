@@ -1810,8 +1810,11 @@ impl App {
             }
             Action::AudioSelectCategory(cat_idx) => {
                 if cat_idx == 99 {
-                    // Ciclo circular 0 -> 1 -> 2 -> 0
+                    // `Tab`: ciclo circular de foco 0 -> 1 -> 2 -> 0
                     self.audio_category = (self.audio_category + 1) % 3;
+                } else if cat_idx == 98 {
+                    // `Shift+Tab`: ciclo circular reverso 0 -> 2 -> 1 -> 0
+                    self.audio_category = (self.audio_category + 2) % 3;
                 } else {
                     self.audio_category = cat_idx.min(2);
                 }

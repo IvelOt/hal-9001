@@ -194,9 +194,7 @@ fn map_key(
             }
             KeyCode::Char('m') => return Some(Action::ToggleMute),
             KeyCode::Tab => return Some(Action::AudioSelectCategory(99)),
-            KeyCode::Char('1') => return Some(Action::AudioSelectCategory(0)),
-            KeyCode::Char('2') => return Some(Action::AudioSelectCategory(1)),
-            KeyCode::Char('3') => return Some(Action::AudioSelectCategory(2)),
+            KeyCode::BackTab => return Some(Action::AudioSelectCategory(98)),
             _ => {}
         }
     }
