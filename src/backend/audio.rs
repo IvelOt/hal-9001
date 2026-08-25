@@ -179,7 +179,29 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(snap) = parse_wpctl_status(&stdout) {
+            if let Ok(mut snap) = parse_wpctl_status(&stdout) {
+                // Atualiza volume e mudo real dos streams de aplicativos via `wpctl get-volume`
+                for app in &mut snap.apps {
+                    if let Ok(out) = tokio::process::Command::new("wpctl")
+                        .args(["get-volume", &app.id.to_string()])
+                        .output()
+                        .await
+                    {
+                        if out.status.success() {
+                            let s = String::from_utf8_lossy(&out.stdout);
+                            if s.contains("[MUTED]") {
+                                app.is_muted = true;
+                            }
+                            if let Some((_, v_str)) = s.split_once("Volume:") {
+                                if let Some(tok) = v_str.split_whitespace().next() {
+                                    if let Ok(v) = tok.parse::<f32>() {
+                                        app.volume = v;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 return Ok(snap);
             }
         }
@@ -289,6 +311,15 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
     let clean = line.replace(['│', '└', '─', '├'], " ");
     let trimmed = clean.trim();
     if trimmed.is_empty() {
+        return None;
+    }
+
+    // Ignora links e portas de roteamento de canais (ex: "79. output_FL > thinkplus-LP75:playback_FL [active]")
+    if trimmed.contains('>')
+        || trimmed.contains("playback_")
+        || trimmed.starts_with("output_")
+        || trimmed.starts_with("input_")
+    {
         return None;
     }
 

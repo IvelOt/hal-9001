@@ -140,7 +140,7 @@ fn scroll_window(len: usize, visible: usize, selected: usize, focused: bool) -> 
         return (0, len.min(visible));
     }
     let sel = selected.min(len - 1);
-    let mut start = sel.saturating_sub(visible - 1).max(0);
+    let mut start = sel.saturating_sub(visible - 1);
     if start + visible > len {
         start = len - visible;
     }

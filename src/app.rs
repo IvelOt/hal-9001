@@ -441,6 +441,7 @@ pub struct App {
     /// Estado das Telas e Monitores (Módulo 6).
     pub displays: Option<Box<crate::backend::display::DisplaySnapshot>>,
     pub display_selected: usize,
+    pub display_res_selected: usize,
 
     /// Estado da sessão PTY da aba Arquivos (Módulo 7 — Yazi).
     pub files_pty: PtyState,
@@ -499,6 +500,7 @@ impl App {
             audio_category: 0,
             displays: None,
             display_selected: 0,
+            display_res_selected: 0,
             files_pty: PtyState::Starting,
             terminal_pty: PtyState::Starting,
             pty_focused: false,
@@ -1669,7 +1671,7 @@ impl App {
                 } else if self.active == Tab::Audio {
                     self.audio_selected = self.audio_selected.saturating_sub(1);
                 } else if self.active == Tab::Displays {
-                    self.display_selected = self.display_selected.saturating_sub(1);
+                    self.display_res_selected = self.display_res_selected.saturating_sub(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_sub(1);
@@ -1685,13 +1687,24 @@ impl App {
                 } else if self.active == Tab::Audio {
                     self.audio_selected = self.audio_selected.saturating_add(1);
                 } else if self.active == Tab::Displays {
-                    self.display_selected = self.display_selected.saturating_add(1);
+                    self.display_res_selected = self.display_res_selected.saturating_add(1);
                 } else {
                     let i = self.active.index();
                     self.selection[i] = self.selection[i].saturating_add(1);
                 }
             }
-            Action::Left | Action::Right => {}
+            Action::Left => {
+                if self.active == Tab::Displays {
+                    self.display_selected = self.display_selected.saturating_sub(1);
+                    self.display_res_selected = 0;
+                }
+            }
+            Action::Right => {
+                if self.active == Tab::Displays {
+                    self.display_selected = self.display_selected.saturating_add(1);
+                    self.display_res_selected = 0;
+                }
+            }
             Action::ToggleHelp => {
                 self.show_help = !self.show_help;
                 if self.show_help {
@@ -1754,7 +1767,15 @@ impl App {
                 } else if self.active == Tab::Displays {
                     if let Some(snap) = &self.displays {
                         if let Some(d) = snap.displays.get(self.display_selected) {
-                            let _ = action_tx.send(Action::DisplaySetPrimary(d.name.clone()));
+                            if let Some(mode) = d.supported_modes.get(self.display_res_selected) {
+                                let _ = action_tx.send(Action::DisplaySetResolution {
+                                    display: d.name.clone(),
+                                    mode: format!("{}x{}", mode.width, mode.height),
+                                    rate: Some(mode.rate),
+                                });
+                            } else {
+                                let _ = action_tx.send(Action::DisplaySetPrimary(d.name.clone()));
+                            }
                         }
                     }
                 } else {

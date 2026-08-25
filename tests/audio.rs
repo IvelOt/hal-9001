@@ -71,6 +71,27 @@ fn test_parse_wpctl_status_sinks_sources_and_streams() {
     assert_eq!((src1.volume * 100.0).round() as u32, 38);
 }
 
+const WPCTL_STATUS_WITH_PORT_LINKS: &str = r#"
+PipeWire 'pipewire-0' [1.6.8, ivelot@IvelPC, cookie:349836155]
+Audio
+ ├─ Sinks:
+ │  *   67. 联想thinkplus-LP75                [vol: 0.50]
+ ├─ Sources:
+ │  *   58. Áudio interno Estéreo analógico  [vol: 0.38 MUTED]
+ └─ Streams:
+        90. Firefox                                                     
+             79. output_FL       > 联想thinkplus-LP75:playback_FL	[active]
+             81. output_FR       > 联想thinkplus-LP75:playback_FR	[active]
+"#;
+
+#[test]
+fn test_parse_wpctl_filters_channel_links() {
+    let snap = parse_wpctl_status(WPCTL_STATUS_WITH_PORT_LINKS).unwrap();
+    assert_eq!(snap.apps.len(), 1);
+    assert_eq!(snap.apps[0].id, 90);
+    assert_eq!(snap.apps[0].name, "Firefox");
+}
+
 #[test]
 fn test_parse_pactl_output_fallback() {
     let sinks_raw = r#"

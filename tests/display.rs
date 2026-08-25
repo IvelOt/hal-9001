@@ -78,18 +78,11 @@ fn test_display_app_navigation_and_actions() {
     assert!(follow_ups.is_empty());
     assert!(app.displays.is_some());
 
-    // 1. Seleciona segundo monitor
-    app.dispatch(Action::Down, &action_tx);
+    // 1. Seleciona segundo monitor com Right
+    app.dispatch(Action::Right, &action_tx);
     assert_eq!(app.display_selected, 1);
 
-    // 2. Enter no HDMI-1 -> define como primário
-    app.dispatch(Action::Enter, &action_tx);
-    assert_eq!(
-        action_rx.try_recv().unwrap(),
-        Action::DisplaySetPrimary("HDMI-1".to_string())
-    );
-
-    // 3. Aplica modo de Espelhar
+    // 2. Aplica modo de Espelhar
     app.dispatch(Action::DisplaySetLayout(DisplayLayoutMode::Mirror), &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),

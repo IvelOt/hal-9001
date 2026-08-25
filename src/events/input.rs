@@ -202,22 +202,22 @@ fn map_key(
     // Aba Displays (Telas & Monitores):
     if active == Tab::Displays {
         match key.code {
-            KeyCode::Char('1') => {
+            KeyCode::Char('e') => {
                 return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendRight));
             }
-            KeyCode::Char('2') => {
+            KeyCode::Char('E') => {
                 return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendLeft));
             }
-            KeyCode::Char('3') => {
+            KeyCode::Char('m') => {
                 return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::Mirror));
             }
-            KeyCode::Char('4') => {
+            KeyCode::Char('x') => {
                 return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExternalOnly));
             }
-            KeyCode::Char('5') => {
+            KeyCode::Char('i') => {
                 return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::InternalOnly));
             }
-            KeyCode::Char('p') => {
+            KeyCode::Char('p') | KeyCode::Char('P') => {
                 return Some(Action::DisplaySetPrimary(String::new()));
             }
             _ => {}
