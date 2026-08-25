@@ -2361,10 +2361,7 @@ async fn handle_action(
             }
 
             let toast = match eject(conn, &drive).await {
-                Ok(()) if drive.bus == BusType::Mmc => {
-                    Toast::info("Seguro remover o cartão SD")
-                }
-                Ok(()) => Toast::info("Seguro remover o dispositivo"),
+                Ok(()) => Toast::success("[DISCO] Ejeção segura concluída".to_string()),
                 Err(e) => Toast::error(format!("Falha ao ejetar: {e}")),
             };
             tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de dispositivo executada");

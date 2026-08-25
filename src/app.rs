@@ -537,9 +537,47 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) -> Vec<Action> {
         let mut follow_up: Vec<Action> = Vec::new();
         match event {
-            AppEvent::System(snap) => self.system = Some(*snap),
-            AppEvent::Storage(snap) => self.storage = Some(*snap),
+            AppEvent::System(snap) => {
+                if let (Some(old), Some(new)) = (self.system.as_ref().and_then(|s| s.battery.as_ref()), snap.battery.as_ref()) {
+                    use crate::backend::system::BatteryStatus;
+                    if old.status != BatteryStatus::Charging && new.status == BatteryStatus::Charging {
+                        self.toast = Some((Toast::info("[ENERGIA] Carregador conectado".to_string()), Instant::now()));
+                    } else if old.status == BatteryStatus::Charging && new.status != BatteryStatus::Charging {
+                        self.toast = Some((Toast::info("[ENERGIA] Em bateria".to_string()), Instant::now()));
+                    }
+                    if new.status == BatteryStatus::Discharging && new.percent < 15.0 && (old.percent >= 15.0 || old.status != BatteryStatus::Discharging) {
+                        self.toast = Some((Toast::warn(format!("[BATERIA] Nível crítico: {:.0}% restante", new.percent)), Instant::now()));
+                    }
+                }
+                self.system = Some(*snap);
+            }
+            AppEvent::Storage(snap) => {
+                if let Some(old_snap) = self.storage.as_ref() {
+                    for new_drv in &snap.drives {
+                        if new_drv.removable {
+                            let was_present = old_snap.drives.iter().any(|d| d.id == new_drv.id);
+                            if !was_present {
+                                self.toast = Some((Toast::success(format!("[DISCO] Dispositivo conectado: {}", new_drv.dev_node)), Instant::now()));
+                            }
+                        }
+                    }
+                }
+                self.storage = Some(*snap);
+            }
             AppEvent::Network(snap) => {
+                if let Some(old_snap) = self.network.as_ref() {
+                    // Check if we gained an active connection with IP
+                    let old_has_ip = old_snap.active.is_some() && old_snap.telemetry.ipv4.is_some();
+                    let new_has_ip = snap.active.is_some() && snap.telemetry.ipv4.is_some();
+                    
+                    if !old_has_ip && new_has_ip {
+                        if let (Some(active), Some(ip)) = (&snap.active, &snap.telemetry.ipv4) {
+                            self.toast = Some((Toast::success(format!("[REDE] Conectado em '{}' (IP: {})", active.ssid, ip)), Instant::now()));
+                        }
+                    } else if old_has_ip && !new_has_ip {
+                        self.toast = Some((Toast::warn("[REDE] Desconectado".to_string()), Instant::now()));
+                    }
+                }
                 let ap_count = snap.access_points.len();
                 self.network = Some(snap);
                 if ap_count > 0 && self.network_selected >= ap_count {
@@ -548,6 +586,21 @@ impl App {
             }
             AppEvent::NetworkScanning(flag) => self.network_scanning = flag,
             AppEvent::Bluetooth(snap) => {
+                if let Some(old_snap) = self.bluetooth.as_ref() {
+                    for new_dev in &snap.devices {
+                        if let Some(old_dev) = old_snap.devices.iter().find(|d| d.id == new_dev.id) {
+                            if !old_dev.connected && new_dev.connected {
+                                let bat_str = match new_dev.battery_percentage {
+                                    Some(b) => format!(" (Bateria: {}%)", b),
+                                    None => "".to_string(),
+                                };
+                                self.toast = Some((Toast::success(format!("[BLUETOOTH] Conectado: {}{}", new_dev.name, bat_str)), Instant::now()));
+                            } else if old_dev.connected && !new_dev.connected {
+                                self.toast = Some((Toast::info(format!("[BLUETOOTH] Desconectado: {}", new_dev.name)), Instant::now()));
+                            }
+                        }
+                    }
+                }
                 let dev_count = snap.devices.len();
                 self.bluetooth = Some(snap);
                 if dev_count > 0 && self.bluetooth_selected >= dev_count {
@@ -626,13 +679,19 @@ impl App {
                 if let StorageModal::Flasher(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
                         s.stage = match result {
-                            Ok(msg) => FlasherStage::Done {
-                                ok: true,
-                                message: msg,
+                            Ok(_msg) => {
+                                self.toast = Some((Toast::success("[GRAVADOR] Gravação de ISO concluída com sucesso".to_string()), Instant::now()));
+                                FlasherStage::Done {
+                                    ok: true,
+                                    message: "[GRAVADOR] Gravação de ISO concluída com sucesso".to_string(),
+                                }
                             },
-                            Err(err) => FlasherStage::Done {
-                                ok: false,
-                                message: err,
+                            Err(err) => {
+                                self.toast = Some((Toast::error("[GRAVADOR] Erro na gravação de ISO".to_string()), Instant::now()));
+                                FlasherStage::Done {
+                                    ok: false,
+                                    message: err,
+                                }
                             },
                         };
                     }
