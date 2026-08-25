@@ -138,6 +138,7 @@ fn test_display_headless_ui_render() {
         displays: vec![d1, d2],
         primary_name: Some("eDP-1".to_string()),
         connected_count: 2,
+        server_type: String::new(),
         current_layout: Some(DisplayLayoutMode::ExtendRight),
     };
 
@@ -158,4 +159,99 @@ fn test_display_headless_ui_render() {
         ansi_out.push('\n');
     }
     let _ = std::fs::write("/tmp/hall9001_tab6_display.ansi", ansi_out);
+}
+
+const WLR_RANDR_SAMPLE: &str = r#"
+eDP-1 "Unknown (0x0000)"
+  Physical size: 310x170 mm
+  Enabled: yes
+  Modes:
+    1920x1080 px, 60.000000 Hz (preferred, current)
+    1280x720 px, 60.000000 Hz
+  Position: 0,0
+  Transform: normal
+  Scale: 1.000000
+HDMI-A-1 "Unknown (0x0000)"
+  Physical size: 600x340 mm
+  Enabled: yes
+  Modes:
+    1920x1080 px, 60.000000 Hz (preferred, current)
+  Position: 1920,0
+  Transform: normal
+  Scale: 1.000000
+"#;
+
+#[test]
+fn test_parse_wlr_randr_impl() {
+    let snap = hal9001::backend::display::parse_wlr_randr(WLR_RANDR_SAMPLE).unwrap();
+    assert_eq!(snap.displays.len(), 2);
+    assert_eq!(snap.connected_count, 2);
+    
+    let internal = snap.internal_display().unwrap();
+    assert_eq!(internal.name, "eDP-1");
+    assert!(internal.is_active);
+    assert_eq!(internal.pos_x, 0);
+    assert_eq!(internal.current_mode.as_ref().unwrap().width, 1920);
+
+    let external = snap.external_display().unwrap();
+    assert_eq!(external.name, "HDMI-A-1");
+    assert!(external.is_active);
+    assert_eq!(external.pos_x, 1920);
+
+    assert_eq!(snap.current_layout, Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight));
+}
+
+const HYPRCTL_SAMPLE: &str = r#"
+Monitor eDP-1 (ID 0):
+	1920x1080@60.00000 at 0x0
+	description: Unknown
+	make: Unknown
+	model: Unknown
+	serial: Unknown
+	active workspace: 1 (1)
+	special workspace: 0 ()
+	reserved: 0 0 0 0
+	scale: 1.00
+	transform: 0
+	focused: yes
+	dpmsStatus: 1
+	vrr: 0
+	solitary: 
+	availableModes: 1920x1080@60.00000 1280x720@60.00000
+
+Monitor HDMI-A-1 (ID 1):
+	1920x1080@60.00000 at 1920x0
+	description: Unknown
+	make: Unknown
+	model: Unknown
+	serial: Unknown
+	active workspace: 2 (2)
+	special workspace: 0 ()
+	reserved: 0 0 0 0
+	scale: 1.00
+	transform: 0
+	focused: no
+	dpmsStatus: 1
+	vrr: 0
+	solitary: 
+	availableModes: 1920x1080@60.00000
+"#;
+
+#[test]
+fn test_parse_hyprctl_impl() {
+    let snap = hal9001::backend::display::parse_hyprctl_monitors(HYPRCTL_SAMPLE).unwrap();
+    assert_eq!(snap.displays.len(), 2);
+    
+    let internal = snap.internal_display().unwrap();
+    assert_eq!(internal.name, "eDP-1");
+    assert!(internal.is_active);
+    assert_eq!(internal.pos_x, 0);
+    assert_eq!(internal.current_mode.as_ref().unwrap().width, 1920);
+
+    let external = snap.external_display().unwrap();
+    assert_eq!(external.name, "HDMI-A-1");
+    assert!(external.is_active);
+    assert_eq!(external.pos_x, 1920);
+
+    assert_eq!(snap.current_layout, Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight));
 }

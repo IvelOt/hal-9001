@@ -63,7 +63,10 @@ fn draw_header(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect)
         Span::styled("   Monitor Primário: ", Style::default().fg(pal.dim)),
         Span::styled(snap.primary_name.as_deref().unwrap_or("Nenhum"), Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
         Span::styled("   Servidor: ", Style::default().fg(pal.dim)),
-        Span::styled("X11 (RandR)", Style::default().fg(pal.accent)),
+        Span::styled(
+            if snap.server_type.is_empty() { "X11 (RandR)" } else { &snap.server_type },
+            Style::default().fg(pal.accent),
+        ),
     ];
 
     let block = Block::default()
