@@ -11,7 +11,7 @@ repository = "https://github.com/IvelOt/hall-9001"
 homepage = "https://github.com/IvelOt/hall-9001"
 documentation = "https://docs.rs/hal-9001"
 keywords = ["tui", "system-monitor", "btop", "ratatui", "hardware-control"]
-categories = ["command-line-utilities", "system::hardware", "system::monitoring"]
+categories = ["command-line-utilities", "hardware-support"]
 exclude = [
     "assets/screenshots/*",
     "docs/*",
