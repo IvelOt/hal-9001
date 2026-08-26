@@ -335,7 +335,7 @@ fn config_modal_navigation_and_theme_cycling() {
         }
         ansi_out.push('\n');
     }
-    let _ = std::fs::write("/tmp/hall9001_config_modal.ansi", ansi_out);
+    let _ = std::fs::write("/tmp/hal9001_config_modal.ansi", ansi_out);
 
     app.dispatch(Action::ToggleConfig, &tx);
     assert!(!app.show_config);

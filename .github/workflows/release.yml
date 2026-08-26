@@ -143,10 +143,12 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate SHA256 checksums
+      - name: Flatten artifacts and generate SHA256SUMS
         run: |
-          cd artifacts
-          find . -type f -not -name 'SHA256SUMS' -exec sha256sum {} + > SHA256SUMS
+          mkdir -p release-files
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.deb" \) -exec cp {} release-files/ \;
+          cd release-files
+          sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create GitHub Release
@@ -154,6 +156,75 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.deb
-            artifacts/**/SHA256SUMS
+            release-files/*.tar.gz
+            release-files/*.deb
+            release-files/SHA256SUMS
+
+  publish-cargo:
+    name: Publish to Crates.io
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to Crates.io
+        run: cargo publish --token "${{ secrets.CRATES_TOKEN }}"
+
+  publish-aur:
+    name: Publish to Arch User Repository (AUR)
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+
+      - name: Publish hal-9001 (Source) to AUR
+        env:
+          GIT_SSH_COMMAND: "ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=accept-new"
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          mkdir -p /tmp/aur-src
+          git clone ssh://aur@aur.archlinux.org/hal-9001.git /tmp/aur-src
+          cp packaging/arch/PKGBUILD /tmp/aur-src/PKGBUILD
+          cd /tmp/aur-src
+          docker run --rm -v "$PWD":/pkg -w /pkg archlinux:latest bash -c "pacman -Syu --noconfirm base-devel sudo && useradd -m builduser && chown -R builduser /pkg && sudo -u builduser makepkg --printsrcinfo > .SRCINFO"
+          git config user.name "IvelOt"
+          git config user.email "contact@ivelot.dev"
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "Release v${VERSION}"
+            git push origin master
+          fi
+
+      - name: Publish hal-9001-bin (Precompiled) to AUR
+        env:
+          GIT_SSH_COMMAND: "ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=accept-new"
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          mkdir -p /tmp/aur-bin
+          git clone ssh://aur@aur.archlinux.org/hal-9001-bin.git /tmp/aur-bin
+          cp packaging/arch/PKGBUILD.bin /tmp/aur-bin/PKGBUILD
+          cd /tmp/aur-bin
+          docker run --rm -v "$PWD":/pkg -w /pkg archlinux:latest bash -c "pacman -Syu --noconfirm base-devel sudo && useradd -m builduser && chown -R builduser /pkg && sudo -u builduser makepkg --printsrcinfo > .SRCINFO"
+          git config user.name "IvelOt"
+          git config user.email "contact@ivelot.dev"
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "Release v${VERSION}"
+            git push origin master
+          fi

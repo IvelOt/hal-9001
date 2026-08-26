@@ -2,7 +2,7 @@
 pkgname=hal-9001
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui)"
+pkgdesc="Pure Rust TUI system control hub for Arch users (BTW) tired of 14 separate tools (No AI!)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/IvelOt/hal-9001"
 license=('MIT')

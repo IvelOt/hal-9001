@@ -1,12 +1,14 @@
-# HALL-9001
+# HAL-9001
 
-**HALL-9001** is an advanced, high-performance Rust terminal system monitor and hardware control hub featuring a modern, btop-inspired TUI. It provides comprehensive system telemetry alongside active hardware, network, bluetooth, and storage management from a single responsive dashboard.
+One day, while configuring my Arch Linux system (I use Arch, by the way), I found myself furiously installing and juggling fourteen entirely separate little utilities just to perform remarkably mundane tasks: mounting and formatting a USB stick, managing Wi-Fi, pairing a Bluetooth headset, and tweaking audio. So I decided to build a single, unified control hub to handle all of it from one clean dashboard. Naturally, it had to be a TUI—because when you use Arch Linux (BTW), GUI utilities feel like an unnecessary compromise.
 
-![HALL-9001 Overview Dashboard](assets/screenshots/tab1_overview.png)
+**Note:** No, there is absolutely **NO AI** inside this software. None whatsoever. Just fast, deterministic, pure Rust and direct D-Bus wizardry doing exactly what you tell them to do.
+
+![HAL-9001 Overview Dashboard](assets/screenshots/tab1_overview.png)
 
 ## Overview
 
-Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HALL-9001 goes far beyond passive monitoring. Built with **100% Pure Rust** and direct asynchronous **System D-Bus (`zbus`)** integration, it requires **zero external C libraries** and zero CLI wrappers for core subsystems.
+Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, **HAL-9001** goes far beyond passive monitoring. Built with **100% Pure Rust** and direct asynchronous **System D-Bus (`zbus`)** integration, it requires **zero external C libraries** and zero CLI wrappers for core subsystems.
 
 ---
 
@@ -32,7 +34,7 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 
 ## Built-in Themes & Color Palettes
 
-HALL-9001 includes 8 built-in themes out of the box, switchable in real-time via the settings modal (`[c]` / `[F2]`) or in `config.toml`:
+HAL-9001 includes 8 built-in themes out of the box, switchable in real-time via the settings modal (`[c]` / `[F2]`) or in `config.toml`:
 
 | HAL Classic (Default) | Catppuccin Mocha |
 |:---:|:---:|
@@ -123,7 +125,7 @@ HALL-9001 includes 8 built-in themes out of the box, switchable in real-time via
 | `v` / `V` | Decrease / Increase audio volume (`m` for mute) |
 | `p` / `P` | Cycle system power profiles |
 | `?` | Toggle in-app help modal |
-| `q` / `Ctrl-C` | Exit HALL-9001 |
+| `q` / `Ctrl-C` | Exit HAL-9001 |
 
 ---
 
@@ -144,7 +146,7 @@ cargo test
 # 3. Compile the optimized release binary
 cargo build --release
 
-# 4. Run HALL-9001
+# 4. Run HAL-9001
 ./target/release/hal9001
 ```
 
@@ -180,7 +182,7 @@ Packaging configurations and specifications are currently prepared in `packaging
 
 ## Configuration & Themes
 
-HALL-9001 searches for configuration in order:
+HAL-9001 searches for configuration in order:
 1. `$HAL9001_CONFIG`
 2. `~/.config/hal-9001/config.toml`
 3. `./config.toml`

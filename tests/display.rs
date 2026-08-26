@@ -153,7 +153,7 @@ fn test_display_headless_ui_render() {
         }
         ansi_out.push('\n');
     }
-    let _ = std::fs::write("/tmp/hall9001_tab6_display.ansi", ansi_out);
+    let _ = std::fs::write("/tmp/hal9001_tab6_display.ansi", ansi_out);
 }
 
 const WLR_RANDR_SAMPLE: &str = r#"

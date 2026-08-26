@@ -220,5 +220,5 @@ fn test_audio_headless_ui_render() {
         }
         ansi_out.push('\n');
     }
-    let _ = std::fs::write("/tmp/hall9001_tab5_audio.ansi", ansi_out);
+    let _ = std::fs::write("/tmp/hal9001_tab5_audio.ansi", ansi_out);
 }

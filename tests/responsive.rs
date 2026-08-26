@@ -197,7 +197,7 @@ fn portrait_mobile_terminal_renders_centered_logo_and_vertical_stack() {
         }
         ansi_out.push('\n');
     }
-    let _ = std::fs::write("/tmp/hall9001_mobile_portrait.ansi", ansi_out);
+    let _ = std::fs::write("/tmp/hal9001_mobile_portrait.ansi", ansi_out);
 }
 
 fn logo_gears(buf: &Buffer) -> usize {
@@ -266,7 +266,7 @@ fn detailed_mode_shows_extra_fields_when_space_allows() {
         }
         ansi_out.push('\n');
     }
-    let _ = std::fs::write("/tmp/hall9001_tab1_overview_detailed.ansi", ansi_out);
+    let _ = std::fs::write("/tmp/hal9001_tab1_overview_detailed.ansi", ansi_out);
 }
 
 #[test]
