@@ -32,6 +32,7 @@ fn sample_snapshot() -> SystemSnapshot {
         packages: Some(Packages {
             total: 1560,
             by_manager: vec![("pacman", 1500), ("flatpak", 60)],
+            pending_updates: None,
         }),
         brightness: Some(0.6),
         volume: Some(Volume {
@@ -48,6 +49,7 @@ fn sample_snapshot() -> SystemSnapshot {
         }),
         disk_used: Some(220 * 1024 * 1024 * 1024),
         disk_total: Some(512 * 1024 * 1024 * 1024),
+        kbd_backlight: Some(0.5),
         power_profile: Some(PowerProfile::Performance),
         detail: DetailInfo {
             board_vendor: Some("LENOVO".into()),
@@ -64,6 +66,7 @@ fn sample_snapshot() -> SystemSnapshot {
             swap_total: 8 * 1024 * 1024 * 1024,
             desktop: Some("sway".into()),
             session_type: Some("wayland".into()),
+            top_processes: Vec::new(),
         },
     }
 }

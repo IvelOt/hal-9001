@@ -171,6 +171,16 @@ fn map_key(
         }
     }
 
+    // Aba Overview:
+    if active == Tab::Overview {
+        if key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K') {
+            return Some(Action::KillTopProcess);
+        }
+        if key.code == KeyCode::Char('A') {
+            return Some(Action::ToggleAirplaneMode);
+        }
+    }
+
     // Aba Bluetooth:
     if active == Tab::Bluetooth {
         match key.code {
@@ -263,6 +273,7 @@ fn map_key(
         KeyCode::Right | KeyCode::Char('l') => Some(Action::Right),
         KeyCode::Enter => Some(Action::Enter),
         KeyCode::Char('r') => Some(Action::Refresh),
+        KeyCode::Char('U') => Some(Action::CheckUpdates),
         KeyCode::Char('.') => Some(Action::ToggleDetail),
         // Configurações interativas: `c`/`C` ou F2.
         KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::F(2) => Some(Action::ToggleConfig),

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=HAL-9001
+GenericName=System Control TUI & Monitor
+Comment=Central TUI de Controle do Sistema & Assistente de Hardware
+Exec=hal9001
+Terminal=true
+Type=Application
+Icon=utilities-system-monitor
+Categories=System;Monitor;HardwareSettings;ConsoleOnly;
+Keywords=system;monitor;btop;hardware;wifi;bluetooth;audio;display;disks;iso;
+StartupNotify=false

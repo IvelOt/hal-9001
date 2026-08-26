@@ -218,6 +218,7 @@ fn packages_summary_formats() {
     let p = Packages {
         total: 1234,
         by_manager: vec![("pacman", 1200), ("flatpak", 34)],
+        pending_updates: None,
     };
     assert_eq!(p.summary(), "1234 (pacman+flatpak)");
     assert_eq!(Packages::default().summary(), "N/A");

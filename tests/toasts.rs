@@ -25,7 +25,7 @@ fn test_battery_toasts() {
         mem_total: 0,
         host_model: None,
         packages: None,
-        brightness: None,
+        brightness: None, kbd_backlight: None,
         volume: None,
         battery: Some(Battery {
             percent: 20.0,

@@ -36,3 +36,9 @@ test: ## Roda a suíte de testes
 
 clean: ## Remove artefatos de build
 	$(CARGO) clean
+
+deb: ## Gera o pacote Debian (.deb)
+	@bash packaging/debian/build-deb.sh
+
+publish-check: ## Valida o empacotamento para Crates.io
+	$(CARGO) package --allow-dirty

@@ -1,0 +1,15 @@
+Package: hall-9001
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: IvelOt <contact@ivelot.dev>
+Depends: libc6 (>= 2.34), libdbus-1-3, systemd
+Recommends: pipewire-bin | pulseaudio-utils, network-manager, bluez, udisks2, upower, x11-xserver-utils | wlr-randr
+Suggests: yazi, sudo
+Homepage: https://github.com/IvelOt/hall-9001
+Description: Central TUI de Controle do Sistema & Assistente de Sistema
+ HAL-9001 e um painel de controle e monitor de telemetria de sistema TUI moderno
+ e de alta performance escrito em 100% Rust puro com Ratatui e D-Bus assincrono.
+ Permite monitorar CPU/RAM/Discos e controlar Wi-Fi, Bluetooth, Audio
+ (PipeWire/PulseAudio), Displays com auto-expansao e gravacao de ISOs.

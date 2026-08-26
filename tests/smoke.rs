@@ -82,6 +82,7 @@ fn render_all_tabs_and_splash_without_panic() {
             packages: Some(hal9001::backend::system::Packages {
                 total: 1234,
                 by_manager: vec![("pacman", 1200), ("flatpak", 34)],
+                pending_updates: None,
             }),
             brightness: Some(0.7),
             volume: Some(hal9001::backend::system::Volume {
@@ -98,6 +99,7 @@ fn render_all_tabs_and_splash_without_panic() {
             }),
             disk_used: Some(120 * 1024 * 1024 * 1024),
             disk_total: Some(512 * 1024 * 1024 * 1024),
+            kbd_backlight: Some(0.7),
             power_profile: Some(hal9001::backend::system::PowerProfile::Balanced),
             detail: hal9001::backend::system::DetailInfo {
                 board_vendor: Some("ACME".into()),
@@ -114,6 +116,7 @@ fn render_all_tabs_and_splash_without_panic() {
                 swap_total: 2 * 1024 * 1024 * 1024,
                 desktop: Some("sway".into()),
                 session_type: Some("wayland".into()),
+                top_processes: Vec::new(),
             },
         },
     )));
@@ -166,6 +169,7 @@ fn render_overview_desktop_degraded_without_panic() {
             battery: None,
             disk_used: None,
             disk_total: None,
+            kbd_backlight: None,
             power_profile: None,
             detail: hal9001::backend::system::DetailInfo::default(),
         },

@@ -379,12 +379,48 @@ fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) 
     let mut out: Vec<Line> = Vec::new();
 
     section_hardware(s, pal, cols, detailed, m, &mut out);
+    if detailed {
+        section_top_processes(s, pal, cols, &mut out);
+    }
     section_platform(s, pal, cols, detailed, m, &mut out);
     section_power(s, pal, cols, detailed, m, &mut out);
     out.push(section_title(m.sec_palette, pal));
     out.push(palette_line());
 
     out
+}
+
+/// Seção **TOP PROCESSES** (modo detalhado apenas).
+fn section_top_processes<'a>(
+    s: &SystemSnapshot,
+    pal: &Palette,
+    cols: Cols,
+    out: &mut Vec<Line<'a>>,
+) {
+    out.push(section_title("TOP PROCESSES", pal));
+    
+    let pid_w = 6;
+    let cpu_w = 6;
+    let ram_w = 8;
+    let reserved = pid_w + cpu_w + ram_w + 3;
+    let proc_w = if cols.width > reserved {
+        cols.width - reserved
+    } else {
+        5
+    };
+    
+    let header = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", "PID", "PROCESSO", "CPU%", "RAM", pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
+    out.push(Line::from(vec![Span::styled(header, ratatui::style::Style::default().fg(pal.dim).add_modifier(ratatui::style::Modifier::BOLD))]));
+    
+    for p in &s.detail.top_processes {
+        let pid_str = p.pid.to_string();
+        let cpu_str = format!("{:.1}", p.cpu_usage); // format!("{:.1}%", p.cpu_usage) but % is already in header
+        let ram_str = human_bytes(p.mem_bytes);
+        
+        let name_trunc = truncate_str(&p.name, proc_w);
+        let row = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", pid_str, name_trunc, cpu_str, ram_str, pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
+        out.push(Line::from(vec![Span::styled(row, ratatui::style::Style::default().fg(pal.fg))]));
+    }
 }
 
 /// Seção **Available Compute / Hardware** — linhas densas (métrica + barra).

@@ -250,6 +250,7 @@ pub enum Action {
     Right,
     Enter,
     Refresh,
+    CheckUpdates,
     ToggleHelp,
     /// Abre/fecha o modal interativo de configurações (tecla `c`/`C`).
     ToggleConfig,
@@ -257,10 +258,18 @@ pub enum Action {
     SaveConfig,
     /// Alterna o Overview entre exibição Padrão e Detalhada (tecla `.`).
     ToggleDetail,
+    /// Envia SIGTERM para o processo no topo da lista.
+    KillTopProcess,
     /// Aumenta o brilho da tela em um passo (tecla `B`/`+`/`=`).
     BrightnessUp,
     /// Diminui o brilho da tela em um passo (tecla `b`/`-`).
     BrightnessDown,
+    /// Aumenta o brilho do teclado em um passo.
+    KbdBrightnessUp,
+    /// Diminui o brilho do teclado em um passo.
+    KbdBrightnessDown,
+    /// Alterna o Modo Avião (rádios Wi-Fi e Bluetooth).
+    ToggleAirplaneMode,
     /// Aumenta o volume do áudio em um passo (tecla `V`/`]`).
     VolumeUp,
     /// Diminui o volume do áudio em um passo (tecla `v`/`[`).

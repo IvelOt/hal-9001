@@ -20,6 +20,8 @@ pub struct Packages {
     pub total: u64,
     /// Detalhamento `("pacman", 1234)`, na ordem de detecção.
     pub by_manager: Vec<(&'static str, u64)>,
+    /// Quantidade de atualizações pendentes (se já checado).
+    pub pending_updates: Option<usize>,
 }
 
 impl Packages {
@@ -245,11 +247,21 @@ pub struct SystemSnapshot {
     pub disk_used: Option<u64>,
     /// Espaço total do disco raiz `/` (bytes).
     pub disk_total: Option<u64>,
+    /// Iluminação do teclado em 0.0..=1.0.
+    pub kbd_backlight: Option<f32>,
     /// Perfil de energia ativo (`None` em máquinas sem daemon/governor legível).
     pub power_profile: Option<PowerProfile>,
 
     /// Campos extras exibidos apenas no modo detalhado (tecla `.`).
     pub detail: DetailInfo,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub cpu_usage: f32,
+    pub mem_bytes: u64,
 }
 
 /// Informações extras exibidas apenas no **modo detalhado** do Overview.
@@ -281,6 +293,9 @@ pub struct DetailInfo {
     // Ambiente gráfico.
     pub desktop: Option<String>,
     pub session_type: Option<String>,
+
+    // Top 5 processos
+    pub top_processes: Vec<ProcessInfo>,
 }
 
 impl DetailInfo {
@@ -316,6 +331,18 @@ impl SystemSnapshot {
 
         // Modo detalhado: parte estática (DMI/GPU/arch) + parte dinâmica.
         let cpu_freq_mhz = sys.cpus().first().map(|c| c.frequency()).unwrap_or(0);
+        let mut procs: Vec<_> = sys.processes().values().collect();
+        procs.sort_unstable_by(|a, b| {
+            b.cpu_usage().partial_cmp(&a.cpu_usage()).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.memory().cmp(&a.memory()))
+        });
+        let top_processes = procs.into_iter().take(5).map(|p| ProcessInfo {
+            pid: p.pid().as_u32(),
+            name: p.name().to_string_lossy().into_owned(),
+            cpu_usage: p.cpu_usage(),
+            mem_bytes: p.memory(),
+        }).collect();
+
         let detail = DetailInfo {
             cpu_cores_logical: sys.cpus().len(),
             cpu_cores_physical: sys.physical_core_count(),
@@ -327,6 +354,7 @@ impl SystemSnapshot {
             cpu_temp_c,
             swap_used: sys.used_swap(),
             swap_total: sys.total_swap(),
+            top_processes,
             ..stat.detail.clone()
         };
 
@@ -354,6 +382,7 @@ impl SystemSnapshot {
             battery: read_battery(Path::new("/sys/class/power_supply")),
             disk_used,
             disk_total,
+            kbd_backlight: read_kbd_backlight(Path::new("/sys/class/leds")),
             power_profile: read_power_profile(),
             detail,
         }
@@ -635,6 +664,26 @@ pub fn read_brightness(dir: &Path) -> Option<f64> {
         if let (Some(c), Some(m)) = (cur, max) {
             if let Some(r) = brightness_ratio(&c, &m) {
                 return Some(r);
+            }
+        }
+    }
+    None
+}
+
+/// Lê o brilho do teclado em `/sys/class/leds`.
+pub fn read_kbd_backlight(dir: &Path) -> Option<f32> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.ends_with("::kbd_backlight") || name_str.contains("kbd") {
+            let base = entry.path();
+            let cur = std::fs::read_to_string(base.join("brightness")).ok();
+            let max = std::fs::read_to_string(base.join("max_brightness")).ok();
+            if let (Some(c), Some(m)) = (cur, max) {
+                if let Some(r) = brightness_ratio(&c, &m) {
+                    return Some(r as f32);
+                }
             }
         }
     }
@@ -923,6 +972,41 @@ pub async fn adjust_brightness(delta: i32) -> Result<u8, String> {
         .ok_or_else(|| "brilho indisponível".to_string())
 }
 
+/// Ajusta o brilho do teclado em `delta` %.
+pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
+    let applied = run_ok("brightnessctl", &["--device", "*kbd*", "set", &delta_arg(delta)]).await.is_ok()
+        || run_ok("brightnessctl", &["--device", "*::kbd_backlight", "set", &delta_arg(delta)]).await.is_ok();
+    
+    // Fallback sysfs puro
+    if !applied {
+        if let Ok(entries) = std::fs::read_dir("/sys/class/leds") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.ends_with("::kbd_backlight") || name_str.contains("kbd") {
+                    let base = entry.path();
+                    if let (Ok(cur), Ok(max)) = (
+                        std::fs::read_to_string(base.join("brightness")),
+                        std::fs::read_to_string(base.join("max_brightness")),
+                    ) {
+                        if let (Ok(c), Ok(m)) = (cur.trim().parse::<f32>(), max.trim().parse::<f32>()) {
+                            let mut step = m * (delta as f32 / 100.0);
+                            if step.abs() < 1.0 { step = step.signum(); }
+                            let new = (c + step).clamp(0.0, m);
+                            let _ = std::fs::write(base.join("brightness"), (new as i32).to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    read_kbd_backlight(Path::new("/sys/class/leds"))
+        .map(|r| (r * 100.0).round() as u8)
+        .ok_or_else(|| "teclado indisponível".to_string())
+}
+
+
 /// Ajusta o volume do sink padrão em `delta` % (relativo), tentando `wpctl`
 /// (PipeWire), depois `amixer` (ALSA) e por fim `pactl` (PulseAudio). Devolve o
 /// novo percentual lido de volta.
@@ -1048,6 +1132,36 @@ fn write_scaling_governor(governor: &str) -> bool {
     applied
 }
 
+/// Alterna o Modo Avião (desliga Wi-Fi e Bluetooth se um deles estiver ligado,
+/// liga caso contrário). Retorna `true` se o modo avião ficou ATIVO (rádios OFF).
+pub async fn toggle_airplane_mode() -> Result<bool, String> {
+    let mut wifi_on = false;
+    if let Ok(out) = std::process::Command::new("nmcli").args(["radio", "wifi"]).output() {
+        if String::from_utf8_lossy(&out.stdout).contains("enabled") {
+            wifi_on = true;
+        }
+    }
+    
+    let mut bt_on = false;
+    if let Ok(out) = std::process::Command::new("rfkill").args(["list", "bluetooth"]).output() {
+        if !String::from_utf8_lossy(&out.stdout).contains("Soft blocked: yes") {
+            bt_on = true;
+        }
+    }
+    
+    let turn_off = wifi_on || bt_on;
+    
+    if turn_off {
+        let _ = run_ok("nmcli", &["radio", "wifi", "off"]).await;
+        let _ = run_ok("rfkill", &["block", "bluetooth"]).await;
+    } else {
+        let _ = run_ok("nmcli", &["radio", "wifi", "on"]).await;
+        let _ = run_ok("rfkill", &["unblock", "bluetooth"]).await;
+    }
+    
+    Ok(turn_off)
+}
+
 /// Lê o perfil de energia atual, avança para o [`PowerProfile::next`] e o
 /// aplica. Devolve o novo perfil ou uma mensagem de erro.
 pub async fn cycle_power_profile() -> Result<PowerProfile, String> {
@@ -1086,6 +1200,19 @@ async fn apply_control(action: &Action, tx: &EventTx) -> bool {
             Ok(p) => Toast::info(format!("Perfil de Energia: {}", p.label())),
             Err(e) => Toast::error(format!("Perfil de Energia: {e}")),
         },
+        Action::KbdBrightnessUp => match adjust_kbd_brightness(CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("[TECLADO] Brilho: {p}%")),
+            Err(e) => Toast::error(format!("[TECLADO] Brilho: {e}")),
+        },
+        Action::KbdBrightnessDown => match adjust_kbd_brightness(-CONTROL_STEP).await {
+            Ok(p) => Toast::info(format!("[TECLADO] Brilho: {p}%")),
+            Err(e) => Toast::error(format!("[TECLADO] Brilho: {e}")),
+        },
+        Action::ToggleAirplaneMode => match toggle_airplane_mode().await {
+            Ok(true) => Toast::info("[MODO AVIÃO] Rádios desativados (Wi-Fi & Bluetooth OFF)"),
+            Ok(false) => Toast::info("[MODO AVIÃO] Rádios reativados (Wi-Fi & Bluetooth ON)"),
+            Err(e) => Toast::error(format!("[MODO AVIÃO] Erro: {e}")),
+        },
         _ => return false,
     };
     let _ = tx.send(AppEvent::Toast(toast));
@@ -1106,30 +1233,50 @@ pub async fn run(
     let mut disks = Disks::new_with_refreshed_list();
 
     // Dados estáticos: coletados uma única vez (contagem de pacotes é cara).
-    let stat = StaticInfo {
+    let mut stat = StaticInfo {
         host_model: read_host_model(),
         packages: count_packages(),
         detail: read_static_detail(),
     };
 
+    let (updates_tx, mut updates_rx) = tokio::sync::mpsc::channel::<usize>(1);
+    let (trigger_tx, mut trigger_rx) = tokio::sync::mpsc::channel::<()>(1);
+    tokio::spawn(async move {
+        loop {
+            let n = check_updates().await;
+            let _ = updates_tx.send(n).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+                _ = trigger_rx.recv() => {}
+            }
+        }
+    });
+
     let mut ticker = tokio::time::interval(Duration::from_millis(poll_ms.max(250)));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Coleta um snapshot fresco e o publica; devolve `false` se o app encerrou.
-    let refresh = |sys: &mut System, disks: &mut Disks| -> Box<SystemSnapshot> {
+    let refresh = |sys: &mut System, disks: &mut Disks, stat: &StaticInfo| -> Box<SystemSnapshot> {
         sys.refresh_cpu_usage();
         sys.refresh_memory();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         disks.refresh();
         let cpu_temp = read_cpu_temp(Path::new("/sys/class/thermal"));
-        Box::new(SystemSnapshot::collect(sys, disks, &stat, cpu_temp))
+        Box::new(SystemSnapshot::collect(sys, disks, stat, cpu_temp))
     };
 
     // Primeiro refresh estabelece a baseline de CPU; o valor de uso só é
     // significativo a partir do segundo tick.
     loop {
         tokio::select! {
+            Some(n) = updates_rx.recv() => {
+                if let Some(p) = &mut stat.packages {
+                    p.pending_updates = Some(n);
+                }
+                let snap = refresh(&mut sys, &mut disks, &stat);
+                let _ = tx.send(AppEvent::System(snap));
+            }
             _ = ticker.tick() => {
-                let snap = refresh(&mut sys, &mut disks);
+                let snap = refresh(&mut sys, &mut disks, &stat);
                 if tx.send(AppEvent::System(snap)).is_err() {
                     // App encerrou: nada a fazer.
                     break;
@@ -1137,10 +1284,20 @@ pub async fn run(
             }
             res = actions.recv() => match res {
                 Ok(action) => {
+                    if action == Action::CheckUpdates {
+                        let _ = trigger_tx.try_send(());
+                        let pending = stat.packages.as_ref().and_then(|p| p.pending_updates);
+                        let msg = match pending {
+                            Some(0) => "Sistema atualizado.".to_string(),
+                            Some(n) => format!("Existem {} atualizações pendentes. Execute a atualização no terminal.", n),
+                            None => "Verificando atualizações...".to_string(),
+                        };
+                        let _ = tx.send(AppEvent::Toast(Toast::info(msg)));
+                    }
                     // Ajustes de brilho/volume disparam um snapshot imediato
                     // para refletir o novo valor sem esperar o próximo tick.
                     if apply_control(&action, &tx).await {
-                        let snap = refresh(&mut sys, &mut disks);
+                        let snap = refresh(&mut sys, &mut disks, &stat);
                         if tx.send(AppEvent::System(snap)).is_err() {
                             break;
                         }
@@ -1154,4 +1311,41 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+async fn check_updates() -> usize {
+    let mut total = 0;
+    if let Ok(out) = tokio::process::Command::new("checkupdates").output().await {
+        if out.status.success() {
+            total += String::from_utf8_lossy(&out.stdout).lines().count();
+        } else if let Ok(out2) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
+            if out2.status.success() {
+                total += String::from_utf8_lossy(&out2.stdout).lines().count();
+            }
+        }
+    } else if let Ok(out2) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
+        if out2.status.success() {
+            total += String::from_utf8_lossy(&out2.stdout).lines().count();
+        }
+    }
+    if let Ok(out) = tokio::process::Command::new("flatpak").args(["remote-ls", "--updates"]).output().await {
+        if out.status.success() {
+            total += String::from_utf8_lossy(&out.stdout).lines().count();
+        }
+    }
+    if std::path::Path::new("/usr/lib/update-notifier/apt-check").exists() {
+        if let Ok(out) = tokio::process::Command::new("/usr/lib/update-notifier/apt-check").output().await {
+            let s = String::from_utf8_lossy(&out.stderr);
+            if let Some(num) = s.split(';').next() {
+                if let Ok(n) = num.parse::<usize>() {
+                    total += n;
+                }
+            }
+        }
+    } else if let Ok(out) = tokio::process::Command::new("apt-get").args(["-s", "upgrade"]).output().await {
+        if out.status.success() {
+            total += String::from_utf8_lossy(&out.stdout).lines().filter(|l| l.starts_with("Inst ")).count();
+        }
+    }
+    total
 }

@@ -1736,6 +1736,22 @@ impl App {
 
         match action {
             Action::Quit => self.should_quit = true,
+            Action::KillTopProcess => {
+                if let Some(sys) = &self.system {
+                    if let Some(top) = sys.detail.top_processes.first() {
+                        unsafe {
+                            libc::kill(top.pid as libc::pid_t, libc::SIGTERM);
+                        }
+                        self.toast = Some((
+                            Toast::info(format!(
+                                "[PROCESSO] Sinal de finalização enviado para PID: {} ({})",
+                                top.pid, top.name
+                            )),
+                            Instant::now(),
+                        ));
+                    }
+                }
+            }
             Action::NextTab => {
                 self.active = Tab::from_index((self.active.index() + 1) % Tab::ALL.len());
                 self.pty_focused = false;
@@ -1990,8 +2006,12 @@ impl App {
                 let _ = action_tx.send(action);
             }
             Action::Refresh
+            | Action::CheckUpdates
             | Action::BrightnessUp
             | Action::BrightnessDown
+            | Action::KbdBrightnessUp
+            | Action::KbdBrightnessDown
+            | Action::ToggleAirplaneMode
             | Action::CyclePowerProfile => {
                 let _ = action_tx.send(action);
             }
