@@ -795,7 +795,7 @@ impl App {
     /// Navega para o campo anterior no modal de configuração.
     pub fn config_prev_field(&mut self) {
         self.config_cursor = if self.config_cursor == 0 {
-            5
+            6
         } else {
             self.config_cursor - 1
         };
@@ -803,7 +803,7 @@ impl App {
 
     /// Navega para o próximo campo no modal de configuração.
     pub fn config_next_field(&mut self) {
-        self.config_cursor = (self.config_cursor + 1) % 6;
+        self.config_cursor = (self.config_cursor + 1) % 7;
     }
 
     /// Cicla o valor da opção selecionada para a esquerda/anterior.
@@ -834,8 +834,17 @@ impl App {
                 self.lang = self.config.ui.resolved_language();
             }
             1 => {
-                // Theme: ["hal", "mono"]
-                let options = ["hal", "mono"];
+                // Theme: ["hal", "catppuccin", "tokyo-night", "nord", "gruvbox", "cyberpunk", "dracula", "mono"]
+                let options = [
+                    "hal",
+                    "catppuccin",
+                    "tokyo-night",
+                    "nord",
+                    "gruvbox",
+                    "cyberpunk",
+                    "dracula",
+                    "mono",
+                ];
                 let cur = options
                     .iter()
                     .position(|&s| s.eq_ignore_ascii_case(&self.config.theme.name))
@@ -882,6 +891,26 @@ impl App {
             5 => {
                 // Splash: [true, false]
                 self.config.splash.enabled = !self.config.splash.enabled;
+            }
+            6 => {
+                // Polling profile: [1500 (Balanced), 750 (Fast/Performance), 3000 (Eco/Battery)]
+                let options = [1500u64, 750, 3000];
+                let cur = options
+                    .iter()
+                    .position(|&ms| ms == self.config.polling.system_ms)
+                    .unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % options.len()
+                } else {
+                    (cur + options.len() - 1) % options.len()
+                };
+                let base = options[next];
+                self.config.polling.system_ms = base;
+                self.config.polling.audio_ms = base;
+                self.config.polling.bluetooth_ms = base * 2;
+                self.config.polling.network_ms = base * 3;
+                self.config.polling.display_ms = base + 500;
+                self.config.polling.storage_ms = base * 4;
             }
             _ => {}
         }

@@ -41,7 +41,7 @@ fn navigate_and_cycle_config_fields() {
     // Cycle Theme
     assert_eq!(app.config.theme.name, "hal");
     app.dispatch(Action::Right, &tx);
-    assert_eq!(app.config.theme.name, "mono");
+    assert_eq!(app.config.theme.name, "catppuccin");
 
     // Navigate down to ASCII Logo
     app.dispatch(Action::Down, &tx);
@@ -69,6 +69,13 @@ fn navigate_and_cycle_config_fields() {
     assert!(app.config.splash.enabled);
     app.dispatch(Action::Left, &tx);
     assert!(!app.config.splash.enabled);
+
+    // Navigate down to Polling Profile
+    app.dispatch(Action::Down, &tx);
+    assert_eq!(app.config_cursor, 6);
+    assert_eq!(app.config.polling.system_ms, 1500);
+    app.dispatch(Action::Right, &tx);
+    assert_eq!(app.config.polling.system_ms, 750);
 
     // Wrap around to Row 0
     app.dispatch(Action::Down, &tx);

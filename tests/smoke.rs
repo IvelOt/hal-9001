@@ -272,3 +272,101 @@ fn brightness_and_volume_actions_dispatch_without_panic() {
     }
     assert_eq!(count, 6);
 }
+
+#[test]
+fn all_theme_palettes_build_and_render_without_panic() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let themes = [
+        "hal",
+        "catppuccin",
+        "tokyo-night",
+        "nord",
+        "gruvbox",
+        "cyberpunk",
+        "dracula",
+        "mono",
+    ];
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    for theme_name in themes {
+        let mut cfg = Config::default();
+        cfg.splash.enabled = false;
+        cfg.theme.name = theme_name.to_string();
+
+        let pal = Palette::from_config(&cfg);
+        assert_ne!(pal.accent, ratatui::style::Color::Reset);
+
+        let app = App::new(cfg);
+        terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+    }
+}
+
+#[test]
+fn config_modal_navigation_and_theme_cycling() {
+    use hal9001::events::Action;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let mut app = App::new(cfg);
+
+    // Abre o modal de configurações
+    app.dispatch(Action::ToggleConfig, &tx);
+    assert!(app.show_config);
+    assert_eq!(app.config_cursor, 0);
+
+    // Navega para baixo -> Campo 1 (Tema)
+    app.dispatch(Action::Down, &tx);
+    assert_eq!(app.config_cursor, 1);
+
+    // Cicla tema para a direita: hal -> catppuccin -> tokyo-night -> etc.
+    app.dispatch(Action::Right, &tx);
+    assert_eq!(app.config.theme.name, "catppuccin");
+
+    app.dispatch(Action::Right, &tx);
+    assert_eq!(app.config.theme.name, "tokyo-night");
+
+    // Cicla para trás
+    app.dispatch(Action::Left, &tx);
+    assert_eq!(app.config.theme.name, "catppuccin");
+
+    // Navega para o campo 6 (Polling)
+    app.dispatch(Action::Up, &tx);
+    assert_eq!(app.config_cursor, 0); // de 1 para 0
+    app.dispatch(Action::Up, &tx);
+    assert_eq!(app.config_cursor, 6); // wrap para 6
+
+    // Cicla perfil de polling para a direita (Fast)
+    app.dispatch(Action::Right, &tx);
+    assert_eq!(app.config.polling.system_ms, 750);
+
+    // Salva configuração
+    app.dispatch(Action::SaveConfig, &tx);
+    assert!(app.toast.is_some());
+
+    // Renderiza frame com o modal aberto para screenshot
+    let backend = TestBackend::new(100, 26);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut ansi_out = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = buffer.cell((x, y)).unwrap();
+            ansi_out.push_str(cell.symbol());
+        }
+        ansi_out.push('\n');
+    }
+    let _ = std::fs::write("/tmp/hall9001_config_modal.ansi", ansi_out);
+
+    // Fecha o modal
+    app.dispatch(Action::ToggleConfig, &tx);
+    assert!(!app.show_config);
+}
+

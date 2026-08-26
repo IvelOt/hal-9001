@@ -197,11 +197,21 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     };
     spans.extend(hint(".", details_label));
     spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
+    let mute_label = match app.lang {
+        crate::i18n::Language::EnUs => "Mute",
+        crate::i18n::Language::EsEs => "Mudo",
+        crate::i18n::Language::PtBr => "Mudo",
+    };
+    let config_label = match app.lang {
+        crate::i18n::Language::EnUs => "Config",
+        crate::i18n::Language::EsEs => "Config",
+        crate::i18n::Language::PtBr => "Config",
+    };
     spans.extend(hint("p", m.label_power_profile));
     spans.extend(hint("b/B", m.label_brightness));
     spans.extend(hint("v/V", m.label_volume));
-    spans.extend(hint("m", m.hint_mute));
-    spans.extend(hint("c", m.hint_config));
+    spans.extend(hint("m", mute_label));
+    spans.extend(hint("c", config_label));
     // Trunca a linha inteira à largura disponível para nunca vazar.
     let mut line = Line::from(spans);
     if line_width(&line) > area.width as usize {

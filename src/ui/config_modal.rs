@@ -11,7 +11,7 @@ use crate::i18n::Language;
 use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
-    let area = centered(64, 52, f.area());
+    let area = centered(68, 62, f.area());
     f.render_widget(Clear, area);
 
     let lang_display = match app.config.ui.language.to_lowercase().as_str() {
@@ -25,9 +25,15 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         },
     };
 
-    let theme_display = match app.config.theme.name.as_str() {
-        "mono" => "mono (Monocromático)",
-        _ => "hal (Âmbar / Sistema)",
+    let theme_display = match app.config.theme.name.to_lowercase().as_str() {
+        "catppuccin" | "mocha" => "Catppuccin (Mocha)",
+        "tokyo-night" | "tokyonight" => "Tokyo Night",
+        "nord" => "Nord (Arctic)",
+        "gruvbox" => "Gruvbox (Dark)",
+        "cyberpunk" => "Cyberpunk (Neon)",
+        "dracula" => "Dracula",
+        "mono" => "Monocromático",
+        _ => "HAL-9001 (Âmbar Sci-Fi)",
     };
 
     let logo_display = match app.config.overview.ascii.as_str() {
@@ -68,30 +74,39 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         "Desativada"
     };
 
+    let polling_display = match app.config.polling.system_ms {
+        750 => if app.lang == Language::EnUs { "Performance (0.7s)" } else { "Desempenho (0.7s)" },
+        3000 => if app.lang == Language::EnUs { "Eco / Battery (3.0s)" } else { "Econômico (3.0s)" },
+        _ => if app.lang == Language::EnUs { "Balanced (1.5s)" } else { "Equilibrado (1.5s)" },
+    };
+
     let labels = match app.lang {
         Language::EnUs => [
             "Language",
-            "Theme",
+            "Theme Palette",
             "ASCII Logo",
             "Nerd Font Icons",
             "Frame Rate",
             "Splash Screen",
+            "Hardware Polling",
         ],
         Language::EsEs => [
             "Idioma",
-            "Tema",
+            "Paleta de Tema",
             "Logo ASCII",
             "Iconos Nerd Font",
             "Tasa de Cuadros",
             "Pantalla de Inicio",
+            "Sondeo de Hardware",
         ],
         Language::PtBr => [
             "Idioma",
-            "Tema",
+            "Paleta de Tema",
             "Logo ASCII",
             "Ícones Nerd Font",
             "Taxa de Quadros",
             "Splash Screen",
+            "Telemetria / Polling",
         ],
     };
 
@@ -102,6 +117,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         icons_display,
         fps_display,
         splash_display,
+        polling_display,
     ];
 
     let mut lines: Vec<Line> = Vec::new();
@@ -109,7 +125,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
 
     for (idx, (label, val)) in labels.iter().zip(values.iter()).enumerate() {
         let is_selected = app.config_cursor == idx;
-        let prefix = if is_selected { " ● " } else { "   " };
+        let prefix = if is_selected { " ▶ " } else { "   " };
         let style_label = if is_selected {
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)
         } else {
@@ -122,17 +138,27 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         };
 
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(pal.accent)),
-            Span::styled(format!("{label:<20} "), style_label),
+            Span::styled(prefix, Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{label:<22} "), style_label),
             Span::styled(format!("◄ {val} ►"), style_val),
         ]));
         lines.push(Line::from(""));
     }
 
+    // Amostra de cores da paleta ativa (Color Swatches)
+    lines.push(Line::from(vec![
+        Span::styled(" Amostra da Paleta: ", Style::default().fg(pal.dim)),
+        Span::styled(" [● ACCENT] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(" [● OK] ", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" [● WARN] ", Style::default().fg(pal.warn).add_modifier(Modifier::BOLD)),
+        Span::styled(" [● ERR] ", Style::default().fg(pal.err).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+
     let footer_text = match app.lang {
         Language::EnUs => "[↑/↓] Navigate  [←/→/Enter] Change  [s] Save to disk  [Esc/c] Close",
         Language::EsEs => "[↑/↓] Navegar  [←/→/Enter] Cambiar  [s] Guardar  [Esc/c] Cerrar",
-        Language::PtBr => "[↑/↓] Navegar  [←/→/Enter] Alterar  [s] Salvar  [Esc/c] Fechar",
+        Language::PtBr => "[↑/↓] Navegar  [←/→/Enter] Alterar  [s] Salvar no disco  [Esc/c] Fechar",
     };
 
     lines.push(Line::from(Span::styled(
@@ -141,14 +167,14 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     )));
 
     let modal_title = match app.lang {
-        Language::EnUs => " Settings ",
-        Language::EsEs => " Configuración ",
-        Language::PtBr => " Configurações ",
+        Language::EnUs => " Settings & Theme Preferences ",
+        Language::EsEs => " Configuración y Preferencias de Tema ",
+        Language::PtBr => " Configurações & Preferências de Tema ",
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(pal.accent))
+        .border_style(Style::default().fg(pal.accent).add_modifier(Modifier::BOLD))
         .title(Span::styled(
             modal_title,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
