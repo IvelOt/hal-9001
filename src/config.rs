@@ -162,10 +162,11 @@ impl Config {
         if let Ok(p) = std::env::var("HAL9001_CONFIG") {
             paths.push(std::path::PathBuf::from(p));
         }
-        if let Some(dirs) = directories::ProjectDirs::from("com", "hal9001", "hall-9001") {
+        if let Some(dirs) = directories::ProjectDirs::from("com", "hal9001", "hal-9001") {
             paths.push(dirs.config_dir().join("config.toml"));
         }
         if let Ok(home) = std::env::var("HOME") {
+            paths.push(std::path::PathBuf::from(&home).join(".config/hal-9001/config.toml"));
             paths.push(std::path::PathBuf::from(&home).join(".config/hall-9001/config.toml"));
             paths.push(std::path::PathBuf::from(&home).join(".config/hal9001/config.toml"));
         }

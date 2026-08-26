@@ -1,5 +1,5 @@
 # Maintainer: IvelOt <contact@ivelot.dev>
-pkgname=hall-9001
+pkgname=hal-9001
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui)"
@@ -18,11 +18,10 @@ optdepends=(
     'xorg-xrandr: gerenciamento e auto-expansão de múltiplos monitores sob X11'
     'wlr-randr: gerenciamento de múltiplos monitores sob Wayland (wlroots)'
     'hyprland: gerenciamento de múltiplos monitores sob Hyprland (hyprctl)'
-    'yazi: gerenciador de arquivos em terminal embutido'
     'sudo: elevação de privilégios para formatação de partições e gravação de ISO'
 )
-provides=('hall-9001' 'hal9001')
-conflicts=('hall-9001-bin')
+provides=('hal-9001' 'hal9001')
+conflicts=('hal-9001-bin')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 

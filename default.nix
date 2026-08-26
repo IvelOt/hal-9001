@@ -16,7 +16,7 @@
 }:
 
 rustPlatform.buildRustPackage {
-  pname = "hall-9001";
+  pname = "hal-9001";
   version = "0.1.0";
 
   src = lib.cleanSource ./.;

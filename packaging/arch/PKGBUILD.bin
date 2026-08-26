@@ -1,6 +1,6 @@
 # Maintainer: IvelOt <contact@ivelot.dev>
-pkgname=hall-9001-bin
-_pkgname=hall-9001
+pkgname=hal-9001-bin
+_pkgname=hal-9001
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui) - binário pré-compilado"
@@ -18,14 +18,13 @@ optdepends=(
     'xorg-xrandr: gerenciamento e auto-expansão de múltiplos monitores sob X11'
     'wlr-randr: gerenciamento de múltiplos monitores sob Wayland (wlroots)'
     'hyprland: gerenciamento de múltiplos monitores sob Hyprland (hyprctl)'
-    'yazi: gerenciador de arquivos em terminal embutido'
     'sudo: elevação de privilégios para formatação de partições e gravação de ISO'
 )
-provides=('hall-9001' 'hal9001')
-conflicts=('hall-9001')
+provides=('hal-9001' 'hal9001')
+conflicts=('hal-9001')
 
-source_x86_64=("${url}/releases/download/v${pkgver}/hal9001-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-source_aarch64=("${url}/releases/download/v${pkgver}/hal9001-v${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+source_x86_64=("${url}/releases/download/v${pkgver}/hal-9001-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/hal-9001-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
 

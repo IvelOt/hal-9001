@@ -13,8 +13,8 @@
       in
       {
         packages = rec {
-          hall-9001 = pkgs.callPackage ./default.nix { };
-          default = hall-9001;
+          hal-9001 = pkgs.callPackage ./default.nix { };
+          default = hal-9001;
         };
 
         apps = rec {
