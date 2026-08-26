@@ -2,7 +2,7 @@
 
 **HALL-9001** is an advanced, high-performance Rust terminal system monitor and hardware control hub featuring a modern, btop-inspired TUI. It provides comprehensive system telemetry alongside active hardware, network, bluetooth, and storage management from a single responsive dashboard.
 
-![HALL-9001 Overview Dashboard](assets/screenshots/overview.png)
+![HALL-9001 Overview Dashboard](assets/screenshots/tab1_overview.png)
 
 ## Overview
 
@@ -14,19 +14,19 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 
 | Overview & Telemetry (Tab 1) | Detailed Overview & Top Processes (Tab 1 `[.]`) |
 |:---:|:---:|
-| ![Overview](assets/screenshots/overview.png) | ![Detailed Overview](assets/screenshots/overview_detailed.png) |
+| ![Overview](assets/screenshots/tab1_overview.png) | ![Detailed Overview](assets/screenshots/tab1_overview_detailed.png) |
 
 | Network & Wi-Fi Access Points (Tab 2) | Bluetooth & Peripheral Devices (Tab 3) |
 |:---:|:---:|
-| ![Network Management](assets/screenshots/network.png) | ![Bluetooth Management](assets/screenshots/bluetooth.png) |
+| ![Network Management](assets/screenshots/tab2_network.png) | ![Bluetooth Management](assets/screenshots/tab3_bluetooth.png) |
 
 | Storage, Drives & Partitions (Tab 4) | Native Disk Space Analyzer (Tab 4 `[a]`) |
 |:---:|:---:|
-| ![Storage Management](assets/screenshots/storage.png) | ![Disk Space Analyzer](assets/screenshots/tab4_disk_analyzer.png) |
+| ![Storage Management](assets/screenshots/tab4_storage.png) | ![Disk Space Analyzer](assets/screenshots/tab4_disk_analyzer.png) |
 
 | PipeWire & PulseAudio Mixer (Tab 5) | Displays & Virtual Canvas Auto-Expand (Tab 6) |
 |:---:|:---:|
-| ![Audio Mixer](assets/screenshots/audio_mixer.png) | ![Displays Management](assets/screenshots/displays.png) |
+| ![Audio Mixer](assets/screenshots/tab5_audio.png) | ![Displays Management](assets/screenshots/tab6_displays.png) |
 
 ---
 

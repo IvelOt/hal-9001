@@ -90,23 +90,24 @@ def capture_sessions(binary_path, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 
+    tmp_config_path = "/tmp/hal9001_en_config.toml"
+    with open(tmp_config_path, "w") as f:
+        f.write('[ui]\nlanguage = "en-US"\n[splash]\nenabled = false\n')
+
     targets = [
-        ("overview.png", []),
-        ("overview_detailed.png", ["."]),
-        ("network.png", ["2"]),
-        ("bluetooth.png", ["3"]),
+        ("tab1_overview.png", []),
+        ("tab1_overview_detailed.png", ["."]),
+        ("tab2_network.png", ["2"]),
         ("tab3_bluetooth.png", ["3"]),
-        ("storage.png", ["4"]),
+        ("tab4_storage.png", ["4"]),
         ("tab4_disk_analyzer.png", ["4", "a"]),
-        ("audio_mixer.png", ["5"]),
         ("tab5_audio.png", ["5"]),
-        ("displays.png", ["6"]),
-        ("tab6_display.png", ["6"]),
+        ("tab6_displays.png", ["6"]),
         ("config_modal.png", ["c"]),
     ]
 
     for filename, key_seq in targets:
-        print(f"[*] Capturing {filename} in English (2x HD) with keys {key_seq}...")
+        print(f"[*] Capturing {filename} (Pure English 2K Retina) with keys {key_seq}...")
         master, slave = pty.openpty()
         set_terminal_size(slave, COLS, ROWS)
 
@@ -119,7 +120,7 @@ def capture_sessions(binary_path, out_dir):
         env["LANG"] = "en_US.UTF-8"
         env["LC_ALL"] = "en_US.UTF-8"
         env["LC_MESSAGES"] = "en_US.UTF-8"
-        env["HAL9001_CONFIG"] = "/nonexistent/config.toml"
+        env["HAL9001_CONFIG"] = tmp_config_path
 
         p = subprocess.Popen(
             [binary_path],
@@ -131,9 +132,7 @@ def capture_sessions(binary_path, out_dir):
         )
         os.close(slave)
 
-        time.sleep(0.4)
-        os.write(master, b" ") # pass splash screen
-        time.sleep(0.4)
+        time.sleep(0.5)
 
         for k in key_seq:
             os.write(master, k.encode("utf-8"))
@@ -168,4 +167,4 @@ if __name__ == "__main__":
     bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
     output_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
     capture_sessions(bin_path, output_dir)
-    print("[+] All high-res English screenshots generated successfully!")
+    print("[+] All new English screenshots generated successfully!")
