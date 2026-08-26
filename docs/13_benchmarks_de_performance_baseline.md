@@ -9,11 +9,11 @@ Este documento registra a medição exata do consumo de **CPU, Memória RAM e Ta
 | Métrica | Valor Baseline (Pré-Otimização) | Meta Pós-Otimização | Ganho Esperado |
 |---|---|---|---|
 | **Tamanho do Binário (`target/release/hal9001`)** | **5.71 MB** (5,991,544 bytes) | **&lt; 5.0 MB** | Redução de tamanho com LTO Thin e exclusão de código morto |
-| **Uso Médio de CPU (Loop de Telemetria & Eventos)** | **6.64%** | **&lt; 0.50%** | -80% com eliminação de subprocessos N+1 no áudio |
-| **RAM em Repouso (Overview Idle)** | **13.56 MB** (Pico: 13.80 MB) | **&lt; 15 MB** | Redução com eliminação de alocações transitórias |
-| **RAM sob Navegação Ativa (Abas 1–8)** | **14.33 MB** (Pico: 14.70 MB) | **&lt; 20 MB** | `Arc<T>` zero-copy e buffers D-Bus reutilizados |
-| **RAM sob Redimensionamento (40x20 a 200x50)** | **15.00 MB** (Pico: 15.34 MB) | **&lt; 22 MB** | Buffer 1D contíguo no PTY e zero-alloc na logo ASCII |
-| **Pico Global Máximo de RAM (RSS)** | **15.34 MB** | **&lt; 22 MB** | Estabilidade sem picos de heap |
+| **Uso Médio de CPU (Loop de Telemetria & Eventos)** | **7.48%** | **&lt; 0.50%** | -80% com eliminação de subprocessos N+1 no áudio |
+| **RAM em Repouso (Overview Idle)** | **14.16 MB** (Pico: 14.98 MB) | **&lt; 15 MB** | Redução com eliminação de alocações transitórias |
+| **RAM sob Navegação Ativa (Abas 1–8)** | **15.45 MB** (Pico: 15.84 MB) | **&lt; 20 MB** | `Arc<T>` zero-copy e buffers D-Bus reutilizados |
+| **RAM sob Redimensionamento (40x20 a 200x50)** | **16.08 MB** (Pico: 16.36 MB) | **&lt; 22 MB** | Buffer 1D contíguo no PTY e zero-alloc na logo ASCII |
+| **Pico Global Máximo de RAM (RSS)** | **16.36 MB** | **&lt; 22 MB** | Estabilidade sem picos de heap |
 
 ---
 
@@ -33,4 +33,4 @@ O benchmark foi executado de forma automatizada via pseudo-terminal (`pty`) simu
 3. **Matriz 2D de Células no PTY (`Vec<Vec<PtyCell>>`):** Fragmentação da heap ao alocar 40 vetores por frame.
 4. **Alocações de String na Logo ASCII:** ~150 strings criadas por frame no redesenho do Olho do HAL.
 
-*Medição realizada em: 2026-08-26 07:33:45*
+*Medição realizada em: 2026-08-26 07:36:01*

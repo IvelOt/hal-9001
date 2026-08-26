@@ -74,18 +74,18 @@ def run_benchmark():
 
     time.sleep(0.5)
 
-    # 1. Phase 1: Idle Overview (5 seconds)
-    print("▶ Phase 1: Idle on Overview (5 seconds)...")
-    for _ in range(50):
+    # 1. Phase 1: Idle Overview (15 seconds)
+    print("▶ Phase 1: Idle on Overview (15 seconds)...")
+    for _ in range(150):
         s = get_proc_stats(pid)
         if s:
             idle_samples.append(s)
         time.sleep(0.1)
 
-    # 2. Phase 2: Rapid Tab Navigation (10 seconds)
-    print("▶ Phase 2: Rapid Tab Navigation across all 8 tabs (10 seconds)...")
+    # 2. Phase 2: Rapid Tab Navigation (25 seconds)
+    print("▶ Phase 2: Rapid Tab Navigation across all 8 tabs (25 seconds)...")
     tabs = [b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"\t"]
-    for i in range(100):
+    for i in range(250):
         t = tabs[i % len(tabs)]
         try:
             os.write(master, t)
@@ -96,13 +96,13 @@ def run_benchmark():
             tab_samples.append(s)
         time.sleep(0.1)
 
-    # 3. Phase 3: Dynamic Window Resizing (10 seconds)
-    print("▶ Phase 3: Continuous Window Resizing & Aspect Ratio Changes (10 seconds)...")
+    # 3. Phase 3: Dynamic Window Resizing (20 seconds)
+    print("▶ Phase 3: Continuous Window Resizing & Aspect Ratio Changes (20 seconds)...")
     sizes = [(20, 40), (24, 80), (35, 120), (50, 180), (45, 45), (15, 60), (30, 100)]
-    for i in range(100):
+    for i in range(200):
         r, c = sizes[i % len(sizes)]
         set_winsize(master, r, c)
-        if i % 3 == 0:
+        if i % 2 == 0:
             try:
                 os.write(master, b"\t")
             except OSError:
