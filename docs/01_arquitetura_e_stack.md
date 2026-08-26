@@ -30,7 +30,7 @@
 ## 3. Estrutura de Pastas
 
 ```
-hall-9001/
+hal-9001/
 ├── Cargo.toml
 ├── Makefile
 ├── bin/

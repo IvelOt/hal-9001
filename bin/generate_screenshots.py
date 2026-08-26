@@ -153,8 +153,8 @@ def run_and_capture(binary_path, config_path, key_seq, font):
     return render_screen_to_image(screen, font)
 
 def main():
-    bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
-    base_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
+    bin_path = "/home/ivelot/Projetos/firstmate/projects/hal-9001/target/release/hal9001"
+    base_dir = "/home/ivelot/Projetos/firstmate/projects/hal-9001/assets/screenshots"
     themes_dir = os.path.join(base_dir, "themes")
     os.makedirs(base_dir, exist_ok=True)
     os.makedirs(themes_dir, exist_ok=True)

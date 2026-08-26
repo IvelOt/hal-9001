@@ -1,7 +1,7 @@
 # 11 — Guia de Deploy, Empacotamento e Distribuição
 
 > **HAL-9001** — Central TUI de Controle do Sistema & Assistente de Sistema  
-> **Versão:** `0.1.0` | **Licença:** `MIT` | **Repositório:** [https://github.com/IvelOt/hall-9001](https://github.com/IvelOt/hall-9001)
+> **Versão:** `0.1.0` | **Licença:** `MIT` | **Repositório:** [https://github.com/IvelOt/hal-9001](https://github.com/IvelOt/hal-9001)
 
 ---
 
@@ -18,10 +18,10 @@ O **HAL-9001** foi projetado seguindo princípios rigorosos de portabilidade, se
    - Se um daemon de sistema (ex: `NetworkManager`, `bluez`, `UDisks2`, `UPower`, `pipewire`/`pulseaudio`) não estiver em execução ou não estiver instalado, o HAL-9001 não quebra nem entra em pânico. A respectiva aba entra em modo "Indisponível / N/A" e as outras abas continuam operando normalmente.
 3. **Distribuição Multi-Plataforma:**
    - Suporte oficial para 4 frentes de distribuição:
-     - **Arch Linux (AUR):** Compilação de código-fonte (`hall-9001`) e pacote pré-compilado (`hall-9001-bin`).
-     - **Crates.io & Cargo:** Publicação oficial e instalação universal com `cargo install --locked hall-9001`.
+     - **Arch Linux (AUR):** Compilação de código-fonte (`hal-9001`) e pacote pré-compilado (`hal-9001-bin`).
+     - **Crates.io & Cargo:** Publicação oficial e instalação universal com `cargo install --locked hal-9001`.
      - **Debian & Ubuntu (.deb):** Pacotes binários nativos gerados via `cargo-deb` ou `dpkg-deb`.
-     - **NixOS & Flakes:** Suporte nativo a `nix run github:IvelOt/hall-9001` e `nix build`.
+     - **NixOS & Flakes:** Suporte nativo a `nix run github:IvelOt/hal-9001` e `nix build`.
 
 ---
 
@@ -29,11 +29,11 @@ O **HAL-9001** foi projetado seguindo princípios rigorosos de portabilidade, se
 
 | Canal | Tipo de Pacote | Comando de Instalação | Plataformas Suportadas |
 |---|---|---|---|
-| **AUR (Fonte)** | `PKGBUILD` (`hall-9001`) | `paru -S hall-9001` ou `yay -S hall-9001` | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) |
-| **AUR (Binário)** | `PKGBUILD.bin` (`hall-9001-bin`) | `paru -S hall-9001-bin` ou `yay -S hall-9001-bin` | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) |
-| **Crates.io** | Crate Rust | `cargo install --locked hall-9001` | Qualquer Linux, macOS, BSD com Rust 1.80+ |
-| **Debian / Ubuntu** | `.deb` | `sudo dpkg -i hall-9001_0.1.0_amd64.deb` | Debian 12+, Ubuntu 22.04+, Pop!_OS, Mint |
-| **Nix Flake** | Flake / Derivation | `nix run github:IvelOt/hall-9001` | NixOS, Linux com Nix instalado, macOS com Nix |
+| **AUR (Fonte)** | `PKGBUILD` (`hal-9001`) | `paru -S hal-9001` ou `yay -S hal-9001` | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) |
+| **AUR (Binário)** | `PKGBUILD.bin` (`hal-9001-bin`) | `paru -S hal-9001-bin` ou `yay -S hal-9001-bin` | Arch Linux, Manjaro, EndeavourOS (x86_64, aarch64) |
+| **Crates.io** | Crate Rust | `cargo install --locked hal-9001` | Qualquer Linux, macOS, BSD com Rust 1.80+ |
+| **Debian / Ubuntu** | `.deb` | `sudo dpkg -i hal-9001_0.1.0_amd64.deb` | Debian 12+, Ubuntu 22.04+, Pop!_OS, Mint |
+| **Nix Flake** | Flake / Derivation | `nix run github:IvelOt/hal-9001` | NixOS, Linux com Nix instalado, macOS com Nix |
 | **GitHub Releases** | Tarball com binário estático | `curl -sSL ... \| tar -xz` | Linux (glibc e musl), x86_64 e aarch64 |
 
 ---
@@ -83,7 +83,7 @@ makepkg -si
 # 3. Teste a execução do binário instalado
 hal9001
 # ou
-hall-9001
+hal-9001
 ```
 
 Para testar o pacote pré-compilado (`PKGBUILD.bin`):
@@ -104,16 +104,16 @@ makepkg --printsrcinfo > .SRCINFO
 
 # Validar conformidade com as diretrizes do Arch
 namcap PKGBUILD
-namcap hall-9001-*.pkg.tar.zst
+namcap hal-9001-*.pkg.tar.zst
 ```
 
 Para publicar no AUR:
 
 ```bash
 # Clonar o repositório do AUR (após criar o pacote no aur.archlinux.org)
-git clone ssh://aur@aur.archlinux.org/hall-9001.git /tmp/aur-hall-9001
-cp packaging/arch/PKGBUILD /tmp/aur-hall-9001/PKGBUILD
-cd /tmp/aur-hall-9001
+git clone ssh://aur@aur.archlinux.org/hal-9001.git /tmp/aur-hal-9001
+cp packaging/arch/PKGBUILD /tmp/aur-hal-9001/PKGBUILD
+cd /tmp/aur-hal-9001
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO
 git commit -m "chore: release v0.1.0"
@@ -132,7 +132,7 @@ O `Cargo.toml` foi enriquecido com metadados completos de publicação:
 
 ```toml
 [package]
-name = "hall-9001"
+name = "hal-9001"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
@@ -140,9 +140,9 @@ authors = ["IvelOt <contact@ivelot.dev>"]
 description = "HAL-9001 — Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui)"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/IvelOt/hall-9001"
-homepage = "https://github.com/IvelOt/hall-9001"
-documentation = "https://docs.rs/hall-9001"
+repository = "https://github.com/IvelOt/hal-9001"
+homepage = "https://github.com/IvelOt/hal-9001"
+documentation = "https://docs.rs/hal-9001"
 keywords = ["tui", "system-monitor", "btop", "ratatui", "hardware-control"]
 categories = ["command-line-utilities", "system::hardware", "system::monitoring"]
 exclude = [
@@ -174,7 +174,7 @@ exclude = [
 Após publicado no Crates.io, qualquer usuário pode instalar com um único comando:
 
 ```bash
-cargo install --locked hall-9001
+cargo install --locked hal-9001
 ```
 
 O binário `hal9001` será colocado automaticamente em `~/.cargo/bin/hal9001`.
@@ -189,7 +189,7 @@ O HAL-9001 fornece suporte completo para empacotamento Debian tanto através do 
 
 ```toml
 [package.metadata.deb]
-name = "hall-9001"
+name = "hal-9001"
 maintainer = "IvelOt <contact@ivelot.dev>"
 copyright = "2026 IvelOt <contact@ivelot.dev>"
 license-file = ["LICENSE", "4"]
@@ -205,9 +205,9 @@ section = "utils"
 priority = "optional"
 assets = [
     ["target/release/hal9001", "usr/bin/hal9001", "755"],
-    ["config.toml", "etc/hall-9001/config.toml", "644"],
-    ["README.md", "usr/share/doc/hall-9001/README.md", "644"],
-    ["packaging/desktop/hall-9001.desktop", "usr/share/applications/hall-9001.desktop", "644"],
+    ["config.toml", "etc/hal-9001/config.toml", "644"],
+    ["README.md", "usr/share/doc/hal-9001/README.md", "644"],
+    ["packaging/desktop/hal-9001.desktop", "usr/share/applications/hal-9001.desktop", "644"],
 ]
 ```
 
@@ -223,13 +223,13 @@ bash packaging/debian/build-deb.sh
 ```
 
 O arquivo `.deb` é gerado em:
-`target/debian/hall-9001_0.1.0_amd64.deb`
+`target/debian/hal-9001_0.1.0_amd64.deb`
 
 ### 6.3. Instalando e Testando no Debian / Ubuntu
 
 ```bash
 # Instalação local do arquivo gerado
-sudo dpkg -i target/debian/hall-9001_0.1.0_amd64.deb
+sudo dpkg -i target/debian/hal-9001_0.1.0_amd64.deb
 
 # Caso falte alguma dependência recomendada:
 sudo apt-get install -f
@@ -240,7 +240,7 @@ hal9001
 
 Para desinstalar:
 ```bash
-sudo apt-get remove hall-9001
+sudo apt-get remove hal-9001
 ```
 
 ---
@@ -259,7 +259,7 @@ O HAL-9001 inclui suporte nativo a **Nix Flakes** e derivações clássicas do N
 Sem precisar instalar nada permanentemente, qualquer usuário com Nix Flakes habilitado pode rodar o HAL-9001 diretamente do repositório GitHub:
 
 ```bash
-nix run github:IvelOt/hall-9001
+nix run github:IvelOt/hal-9001
 ```
 
 ### 7.3. Compilação com `nix build`
@@ -287,16 +287,16 @@ Adicione o flake aos inputs do seu `flake.nix` do sistema:
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    hall-9001.url = "github:IvelOt/hall-9001";
+    hal-9001.url = "github:IvelOt/hal-9001";
   };
 
-  outputs = { self, nixpkgs, hall-9001, ... }: {
+  outputs = { self, nixpkgs, hal-9001, ... }: {
     nixosConfigurations.meu-host = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         ({ pkgs, ... }: {
           environment.systemPackages = [
-            hall-9001.packages.${pkgs.system}.default
+            hal-9001.packages.${pkgs.system}.default
           ];
         })
       ];
@@ -312,7 +312,7 @@ Adicione o flake aos inputs do seu `flake.nix` do sistema:
 A organização dos arquivos de empacotamento no projeto segue a estrutura padronizada:
 
 ```
-projects/hall-9001/
+projects/hal-9001/
 ├── Cargo.toml                       # Metadados de publicação Crates.io e cargo-deb
 ├── LICENSE                          # Licença MIT
 ├── Makefile                         # Targets de build, test, deb e publish-check
@@ -320,13 +320,13 @@ projects/hall-9001/
 ├── flake.nix                        # Definição do Flake Nix
 ├── packaging/
 │   ├── arch/
-│   │   ├── PKGBUILD                 # Build da fonte para AUR (hall-9001)
-│   │   └── PKGBUILD.bin             # Build do binário pré-compilado para AUR (hall-9001-bin)
+│   │   ├── PKGBUILD                 # Build da fonte para AUR (hal-9001)
+│   │   └── PKGBUILD.bin             # Build do binário pré-compilado para AUR (hal-9001-bin)
 │   ├── debian/
 │   │   ├── build-deb.sh             # Script unificado de geração .deb (cargo-deb / dpkg-deb)
 │   │   └── control                  # Template de controle Debian para dpkg-deb
 │   └── desktop/
-│       └── hall-9001.desktop        # Entrada XDG Desktop com Terminal=true
+│       └── hal-9001.desktop        # Entrada XDG Desktop com Terminal=true
 └── docs/
     └── 11_guia_de_deploy_e_distribuicao.md # Este documento de especificação
 ```
@@ -405,8 +405,8 @@ jobs:
 ## 10. Resumo e Próximos Passos
 
 Com essa infraestrutura:
-1. O HAL-9001 está pronto para submissão imediata no **AUR** (`hall-9001` e `hall-9001-bin`).
+1. O HAL-9001 está pronto para submissão imediata no **AUR** (`hal-9001` e `hal-9001-bin`).
 2. O `Cargo.toml` está 100% validado para o **Crates.io** (`cargo publish`).
 3. O pacote **Debian/Ubuntu (.deb)** pode ser gerado em um único comando (`make deb`).
-4. O **Nix Flake** permite execução instantânea com `nix run github:IvelOt/hall-9001`.
+4. O **Nix Flake** permite execução instantânea com `nix run github:IvelOt/hal-9001`.
 5. A documentação técnica detalhada fica disponível centralizadamente em `docs/11_guia_de_deploy_e_distribuicao.md`.

@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Central TUI de Controle do Sistema & Assistente de Sistema (Rust/ratatui)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/IvelOt/hall-9001"
+url="https://github.com/IvelOt/hal-9001"
 license=('MIT')
 depends=('dbus' 'glibc' 'gcc-libs')
 makedepends=('cargo' 'rust')
@@ -49,11 +49,11 @@ package() {
 
     # Binário principal
     install -Dm755 "target/release/hal9001" "$pkgdir/usr/bin/hal9001"
-    ln -sf "/usr/bin/hal9001" "$pkgdir/usr/bin/hall-9001"
+    ln -sf "/usr/bin/hal9001" "$pkgdir/usr/bin/hal-9001"
 
     # Arquivo Desktop e Configuração de Exemplo
-    install -Dm644 "packaging/desktop/hall-9001.desktop" "$pkgdir/usr/share/applications/hall-9001.desktop"
-    install -Dm644 "config.toml" "$pkgdir/etc/hall-9001/config.toml"
+    install -Dm644 "packaging/desktop/hal-9001.desktop" "$pkgdir/usr/share/applications/hal-9001.desktop"
+    install -Dm644 "config.toml" "$pkgdir/etc/hal-9001/config.toml"
     install -Dm644 "config.toml" "$pkgdir/usr/share/doc/$pkgname/config.toml.example"
     install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
 

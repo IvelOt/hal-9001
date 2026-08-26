@@ -36,7 +36,7 @@ def get_proc_stats(pid):
         return None
 
 def run_benchmark():
-    bin_path = os.path.abspath("projects/hall-9001/target/release/hal9001")
+    bin_path = os.path.abspath("projects/hal-9001/target/release/hal9001")
     if not os.path.exists(bin_path):
         print(f"Error: {bin_path} not found.")
         sys.exit(1)
@@ -203,7 +203,7 @@ O benchmark foi executado de forma automatizada via pseudo-terminal (`pty`) simu
 *Medição realizada em: {time.strftime('%Y-%m-%d %H:%M:%S')}*
 """
 
-    doc_path = "projects/hall-9001/docs/13_benchmarks_de_performance_baseline.md"
+    doc_path = "projects/hal-9001/docs/13_benchmarks_de_performance_baseline.md"
     with open(doc_path, "w") as f:
         f.write(doc_content)
     print(f"\n📄 Documento de baseline salvo em: {doc_path}")

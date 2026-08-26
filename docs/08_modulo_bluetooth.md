@@ -11,7 +11,7 @@
 
 ## 0. Contexto e Estado Atual
 
-O repositório `hall-9001` possui os seguintes *stubs* para Bluetooth:
+O repositório `hal-9001` possui os seguintes *stubs* para Bluetooth:
 
 - `src/backend/bluetooth.rs` — registra `ServiceDegraded` via
   `pending_stub("bluetooth", "Módulo 3 (bluez)", tx)`.

@@ -134,11 +134,11 @@ impl Config {
         let target_file = if let Ok(p) = std::env::var("HAL9001_CONFIG") {
             std::path::PathBuf::from(p)
         } else {
-            let target_dir = directories::ProjectDirs::from("com", "hal9001", "hall-9001")
+            let target_dir = directories::ProjectDirs::from("com", "hal9001", "hal-9001")
                 .map(|dirs| dirs.config_dir().to_path_buf())
                 .unwrap_or_else(|| {
                     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                    std::path::PathBuf::from(home).join(".config/hall-9001")
+                    std::path::PathBuf::from(home).join(".config/hal-9001")
                 });
             let _ = std::fs::create_dir_all(&target_dir);
             target_dir.join("config.toml")
@@ -167,7 +167,7 @@ impl Config {
         }
         if let Ok(home) = std::env::var("HOME") {
             paths.push(std::path::PathBuf::from(&home).join(".config/hal-9001/config.toml"));
-            paths.push(std::path::PathBuf::from(&home).join(".config/hall-9001/config.toml"));
+            paths.push(std::path::PathBuf::from(&home).join(".config/hal-9001/config.toml"));
             paths.push(std::path::PathBuf::from(&home).join(".config/hal9001/config.toml"));
         }
         paths.push(std::path::PathBuf::from("./config.toml"));

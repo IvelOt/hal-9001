@@ -135,8 +135,8 @@ Ensure you have Rust stable (1.80+) installed.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/IvelOt/hall-9001.git
-cd hall-9001
+git clone https://github.com/IvelOt/hal-9001.git
+cd hal-9001
 
 # 2. Run the test suite (100+ unit and integration tests)
 cargo test
@@ -169,11 +169,11 @@ Packaging configurations and specifications are currently prepared in `packaging
 
 | Channel / Package Manager | Target Platform | Target Installation Command | Status |
 |:---|:---|:---|:---:|
-| **Cargo (Crates.io)** | Universal (Linux x86_64, aarch64) | `cargo install --locked hall-9001` | Planned (Next Step) |
-| **Arch Linux (AUR)** | Arch, Manjaro, EndeavourOS | `paru -S hall-9001` / `hall-9001-bin` | Planned (Next Step) |
-| **Debian / Ubuntu (.deb)** | Debian 12+, Ubuntu 22.04+, Mint | `sudo dpkg -i hall-9001_amd64.deb` | Planned (Next Step) |
-| **NixOS & Flakes** | NixOS, Linux with Nix | `nix run github:IvelOt/hall-9001` | Planned (Next Step) |
-| **Fedora / RHEL (RPM)** | Fedora Copr, openSUSE | `sudo dnf install hall-9001` | Planned (Next Step) |
+| **Cargo (Crates.io)** | Universal (Linux x86_64, aarch64) | `cargo install --locked hal-9001` | Planned (Next Step) |
+| **Arch Linux (AUR)** | Arch, Manjaro, EndeavourOS | `paru -S hal-9001` / `hal-9001-bin` | Planned (Next Step) |
+| **Debian / Ubuntu (.deb)** | Debian 12+, Ubuntu 22.04+, Mint | `sudo dpkg -i hal-9001_amd64.deb` | Planned (Next Step) |
+| **NixOS & Flakes** | NixOS, Linux with Nix | `nix run github:IvelOt/hal-9001` | Planned (Next Step) |
+| **Fedora / RHEL (RPM)** | Fedora Copr, openSUSE | `sudo dnf install hal-9001` | Planned (Next Step) |
 | **Standalone Tarball** | Portable Musl Binary | GitHub Releases download | Planned (Next Step) |
 
 ---
@@ -182,7 +182,7 @@ Packaging configurations and specifications are currently prepared in `packaging
 
 HALL-9001 searches for configuration in order:
 1. `$HAL9001_CONFIG`
-2. `~/.config/hall-9001/config.toml`
+2. `~/.config/hal-9001/config.toml`
 3. `./config.toml`
 
 Customizable options include UI refresh rates (15/30/60 FPS), language (`auto`, `pt-BR`, `en-US`, `es-ES`), Nerd Font icon toggles, ASCII logo styles, polling intervals, and color palettes (*HAL Classic*, *Monochrome*, *Catppuccin*, *Dracula*, *Gruvbox*, *Nord*, *Tokyo Night*, *Cyberpunk*).

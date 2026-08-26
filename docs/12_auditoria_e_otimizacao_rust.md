@@ -1,6 +1,6 @@
 # Relatório Mestre de Auditoria, Padrões e Otimização Rust — HAL-9001
 
-Este documento consolida a auditoria sênior exaustiva de todo o repositório `hall-9001`, realizada pelo **Auditor-Chefe (Claude Opus)** em conjunto com os **6 Auditores Especialistas de Módulos (Nemotron 3 Ultra Free / OpenCode)**.
+Este documento consolida a auditoria sênior exaustiva de todo o repositório `hal-9001`, realizada pelo **Auditor-Chefe (Claude Opus)** em conjunto com os **6 Auditores Especialistas de Módulos (Nemotron 3 Ultra Free / OpenCode)**.
 
 ---
 
