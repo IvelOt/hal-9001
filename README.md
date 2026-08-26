@@ -109,21 +109,6 @@ HALL-9001 includes 8 built-in themes out of the box, switchable in real-time via
 
 ---
 
-## Supported Operating Systems & Environments
-
-HAL-9001 runs natively on Linux across modern desktop environments and window managers:
-
-| Distribution / Platform | Packaging / Installation | Status |
-|:---|:---|:---|
-| **Arch Linux / Manjaro / EndeavourOS** | AUR: `hall-9001` or `hall-9001-bin` (`paru -S hall-9001`) | Supported |
-| **Debian / Ubuntu / Pop!_OS / Mint** | Native `.deb` package (`dpkg -i hall-9001_amd64.deb`) | Supported |
-| **NixOS / Linux with Nix** | Flake: `nix run github:IvelOt/hall-9001` | Supported |
-| **Fedora / RHEL / Rocky Linux** | RPM package / Copr (`dnf install hall-9001`) | Supported |
-| **Alpine Linux / Void Linux** | Static binary (`x86_64-unknown-linux-musl`) | Supported |
-| **Cargo / Crates.io (Universal)** | `cargo install --locked hall-9001` | Supported |
-
----
-
 ## Global Keybindings
 
 | Key | Action |
@@ -142,24 +127,54 @@ HAL-9001 runs natively on Linux across modern desktop environments and window ma
 
 ---
 
-## Installation & Build
+## Installation & Getting Started
 
-Ensure you have Rust (stable) installed. System daemons (`dbus`, `systemd`, `NetworkManager`, `bluez`, `udisks2`) are queried directly via D-Bus.
+### Build from Source (Current Recommended Method)
+
+Ensure you have Rust stable (1.80+) installed.
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/IvelOt/hall-9001.git
 cd hall-9001
 
-# Run full test suite (100+ unit and integration tests)
+# 2. Run the test suite (100+ unit and integration tests)
 cargo test
 
-# Build release binary
+# 3. Compile the optimized release binary
 cargo build --release
 
-# Run HALL-9001
+# 4. Run HALL-9001
 ./target/release/hal9001
 ```
+
+### System Requirements & Graceful Degradation
+
+HAL-9001 interacts with system daemons directly over asynchronous D-Bus (`zbus`). If any service is absent or not running, the application gracefully degrades without panicking:
+
+| Subsystem | Required Daemon / Service | Fallback Behavior |
+|:---|:---|:---|
+| **System & Telemetry** | Linux `/proc` and `/sys` | Standard sysinfo metrics |
+| **Wi-Fi & Network** | `NetworkManager` (`org.freedesktop.NetworkManager`) | Shows network card info without active scan |
+| **Bluetooth** | BlueZ (`org.bluez`) | Displays "Bluetooth unavailable" badge |
+| **Storage & Disks** | UDisks2 (`org.freedesktop.UDisks2`) | Falls back to mount table inspection |
+| **Audio Mixer** | PipeWire (`wpctl`) or PulseAudio | Volume sliders disabled if daemon absent |
+| **Displays** | `wlr-randr` / `hyprctl` (Wayland) or `xrandr` (X11) | Reads DRM connector status |
+
+---
+
+## Distribution Roadmap (Upcoming Packaging Pipelines)
+
+Packaging configurations and specifications are currently prepared in `packaging/`. Public distribution channels are being deployed in the next milestone:
+
+| Channel / Package Manager | Target Platform | Target Installation Command | Status |
+|:---|:---|:---|:---:|
+| **Cargo (Crates.io)** | Universal (Linux x86_64, aarch64) | `cargo install --locked hall-9001` | Planned (Next Step) |
+| **Arch Linux (AUR)** | Arch, Manjaro, EndeavourOS | `paru -S hall-9001` / `hall-9001-bin` | Planned (Next Step) |
+| **Debian / Ubuntu (.deb)** | Debian 12+, Ubuntu 22.04+, Mint | `sudo dpkg -i hall-9001_amd64.deb` | Planned (Next Step) |
+| **NixOS & Flakes** | NixOS, Linux with Nix | `nix run github:IvelOt/hall-9001` | Planned (Next Step) |
+| **Fedora / RHEL (RPM)** | Fedora Copr, openSUSE | `sudo dnf install hall-9001` | Planned (Next Step) |
+| **Standalone Tarball** | Portable Musl Binary | GitHub Releases download | Planned (Next Step) |
 
 ---
 
