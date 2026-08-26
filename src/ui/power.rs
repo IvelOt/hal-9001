@@ -1,4 +1,3 @@
-//! Aba 5 — Energia & Bateria (UPower). Render do Módulo 5.
 
 use ratatui::layout::Rect;
 use ratatui::Frame;

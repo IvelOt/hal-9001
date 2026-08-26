@@ -1,4 +1,3 @@
-//! Helpers de widgets reutilizáveis (barras, linhas chave/valor).
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,12 +6,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::Palette;
 
-/// Largura reservada ao rótulo das linhas `rótulo valor` do Overview. Comporta
-/// o rótulo mais longo (`Disco (/)`, 9 col) com ao menos 1 col de folga.
 const LABEL_W: usize = 10;
 
-/// Trunca `s` para caber em `max` colunas de exibição, anexando `…` quando
-/// corta. Respeita a largura Unicode de cada caractere (CJK/emoji contam 2).
 pub fn truncate_str(s: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -23,7 +18,7 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     if max == 1 {
         return "…".to_string();
     }
-    // Reserva 1 coluna para a reticência.
+
     let budget = max - 1;
     let mut out = String::new();
     let mut used = 0usize;
@@ -39,7 +34,6 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     out
 }
 
-/// Formata bytes em unidade humana (KiB/MiB/GiB).
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut val = bytes as f64;
@@ -55,7 +49,6 @@ pub fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// Uptime humano a partir de segundos: `1d 2h 3m`.
 pub fn human_uptime(secs: u64) -> String {
     let d = secs / 86_400;
     let h = (secs % 86_400) / 3_600;
@@ -71,8 +64,6 @@ pub fn human_uptime(secs: u64) -> String {
     out
 }
 
-/// Título de seção estilo Hermes: rótulo em âmbar/amarelo, maiúsculo e negrito,
-/// com um marcador `▍` à esquerda para ancorar a coluna de informações.
 pub fn section_title<'a>(text: &str, pal: &Palette) -> Line<'a> {
     Line::from(vec![
         Span::styled("▍ ", Style::default().fg(pal.accent)),
@@ -85,9 +76,6 @@ pub fn section_title<'a>(text: &str, pal: &Palette) -> Line<'a> {
     ])
 }
 
-/// Linha "rótulo valor" com rótulo destacado. O valor é truncado com `…` para
-/// nunca ultrapassar `width` colunas (rótulo incluso), evitando o vazamento
-/// horizontal apontado no briefing.
 pub fn kv_line<'a>(label: &'a str, value: String, width: usize, pal: &Palette) -> Line<'a> {
     let avail = width.saturating_sub(LABEL_W).max(1);
     Line::from(vec![
@@ -99,14 +87,6 @@ pub fn kv_line<'a>(label: &'a str, value: String, width: usize, pal: &Palette) -
     ])
 }
 
-/// Linha densa que combina, numa única linha, o rótulo, uma **coluna do meio**
-/// (o `valor` métrico como `6.3 / 15.3 GiB` e/ou um `suffix` de status como
-/// `[CHARGING +25W]`, `[MUTED]`) e a barra de progresso com percentual.
-///
-/// A coluna do meio é preenchida (padding) até `val_w` colunas para que as
-/// barras `[…]` fiquem **perfeitamente alinhadas verticalmente** entre todas as
-/// métricas — o status fica assim *entre* o rótulo/valor e a barra, conforme o
-/// briefing. Tanto o valor quanto o status são truncados com `…` se necessário.
 #[allow(clippy::too_many_arguments)]
 pub fn metric_line<'a>(
     label: &'a str,
@@ -127,8 +107,6 @@ pub fn metric_line<'a>(
         Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
     )];
 
-    // Coluna do meio: valor (fg) e, em seguida, o status (dim). Ambos partilham
-    // o orçamento `val_w`, garantindo o alinhamento das barras à direita.
     let mut mid_w = 0usize;
     if !value.is_empty() {
         let val = truncate_str(value, val_w);
@@ -149,7 +127,6 @@ pub fn metric_line<'a>(
         }
     }
 
-    // Padding até a barra (folga da coluna do meio + 1 folga).
     let pad = val_w.saturating_sub(mid_w);
     spans.extend([
         Span::raw(" ".repeat(pad + 1)),
@@ -165,7 +142,6 @@ pub fn metric_line<'a>(
     Line::from(spans)
 }
 
-/// Faixa de 16 blocos representando a paleta de cores do terminal.
 pub fn palette_line<'a>() -> Line<'a> {
     use ratatui::style::Color;
     let colors = [

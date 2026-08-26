@@ -1,8 +1,3 @@
-//! Carregamento, defaults e persistência do `config.toml`.
-//!
-//! Procura, em ordem: `$HAL9001_CONFIG`, `~/.config/hall-9001/config.toml`,
-//! `~/.config/hal9001/config.toml`, `./config.toml`. Se nada existir ou o parse
-//! falhar, usa os defaults.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,16 +16,16 @@ use crate::i18n::Language;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
-    /// Intervalo entre frames de render (ms). ~33ms ≈ 30fps.
+
     pub frame_ms: u64,
-    /// Habilita ícones nerd-font (fallback ASCII quando `false`).
+
     pub icons: bool,
-    /// Idioma da interface: `"auto"`, `"pt-BR"`, `"en-US"`, `"es-ES"`.
+
     pub language: String,
 }
 
 impl UiConfig {
-    /// Resolve o idioma configurado, utilizando detecção automática por `$LANG` quando `"auto"`.
+
     pub fn resolved_language(&self) -> Language {
         if self.language.trim().eq_ignore_ascii_case("auto") || self.language.trim().is_empty() {
             Language::detect()
@@ -53,7 +48,7 @@ impl Default for UiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
-    /// Nome do tema embutido: `hal` (padrão), `mono`.
+
     pub name: String,
 }
 
@@ -94,7 +89,7 @@ impl Default for PollingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SplashConfig {
-    /// Tempo mínimo da splash antes de revelar o Overview (ms).
+
     pub min_ms: u64,
     pub enabled: bool,
 }
@@ -111,8 +106,7 @@ impl Default for SplashConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverviewConfig {
-    /// Seleção da logo: `auto`, `main`, `medium`, `compact`, `none`.
-    /// (Aliases legados: `A`=main, `B`=compact, `C`=medium.)
+
     pub ascii: String,
 }
 
@@ -125,15 +119,14 @@ impl Default for OverviewConfig {
 }
 
 impl Config {
-    /// Carrega a config do primeiro caminho existente, ou defaults.
+
     pub fn load() -> Self {
         for path in Self::candidate_paths() {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 match toml::from_str::<Config>(&text) {
                     Ok(cfg) => return cfg,
                     Err(e) => {
-                        // Não temos TUI ainda; um aviso em stderr é aceitável
-                        // aqui pois ocorre antes de entrar no alt-screen.
+
                         eprintln!("hal9001: config inválida em {path:?}: {e}");
                     }
                 }
@@ -142,11 +135,10 @@ impl Config {
         Config::default()
     }
 
-    /// Salva a configuração atual no diretório de configuração do usuário (`~/.config/hall-9001/config.toml`).
     pub fn save(&self) -> Result<std::path::PathBuf, String> {
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| format!("erro ao serializar config: {e}"))?;
-            
+
         let target_file = if let Ok(p) = std::env::var("HAL9001_CONFIG") {
             std::path::PathBuf::from(p)
         } else {
@@ -159,17 +151,17 @@ impl Config {
             let _ = std::fs::create_dir_all(&target_dir);
             target_dir.join("config.toml")
         };
-        
+
         if let Some(parent) = target_file.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        
+
         let tmp_file = target_file.with_extension("tmp");
         std::fs::write(&tmp_file, &toml_str)
             .map_err(|e| format!("erro ao salvar {tmp_file:?}: {e}"))?;
         std::fs::rename(&tmp_file, &target_file)
             .map_err(|e| format!("erro ao renomear {tmp_file:?} para {target_file:?}: {e}"))?;
-            
+
         Ok(target_file)
     }
 

@@ -1,13 +1,8 @@
-//! Backend de Atualizações do Sistema (detecção de distro + contagem).
-//! Stub do Módulo 0 — implementação no Módulo 6.
-//!
-//! Já expõe [`Distro::detect`] (usada no roadmap) para detecção da família.
 
 use tokio::sync::broadcast;
 
 use crate::events::{Action, EventTx};
 
-/// Família de distribuição detectada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distro {
     Arch,
@@ -16,7 +11,7 @@ pub enum Distro {
 }
 
 impl Distro {
-    /// Detecção heurística a partir de `/etc/os-release`.
+
     pub fn detect() -> Distro {
         let Ok(text) = std::fs::read_to_string("/etc/os-release") else {
             return Distro::Unknown;

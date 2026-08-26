@@ -1,4 +1,3 @@
-//! Splash animada: `LOADING...` → `Bem-vindo, <user>!` sobre o besouro.
 
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -16,10 +15,8 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let total = app.config.splash.min_ms.max(1) as u128;
     let progress = (elapsed as f64 / total as f64).clamp(0.0, 1.0);
 
-    // Reticências animadas.
     let dots = ".".repeat(((elapsed / 300) % 4) as usize);
 
-    // Barra de carregamento.
     let bar_w = 24usize;
     let filled = (progress * bar_w as f64).round() as usize;
     let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_w - filled));
@@ -27,7 +24,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
     let user = std::env::var("USER").unwrap_or_else(|_| "operador".into());
 
-    // Nas primeiras ~2/3 do tempo: LOADING; depois: boas-vindas.
     let headline = if progress < 0.66 {
         Line::from(Span::styled(
             format!("{}{dots}", m.splash_loading),
@@ -40,9 +36,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ))
     };
 
-    // Logo das engrenagens com o olho do HAL, colorida, responsiva e com o pulso
-    // de respiração do olho (fase derivada do tempo decorrido). Em telas micro,
-    // `select` devolve `None` e a logo é recolhida, mantendo o texto centralizado.
     let size = ascii::select("auto", area.width.saturating_sub(4));
     let phase = ((elapsed / 250) % 4) as u8;
 
@@ -60,8 +53,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         Style::default().fg(pal.dim),
     )));
 
-    // Centraliza o bloco vertical e horizontalmente (`Flex::Center` + alinhamento
-    // central do parágrafo), recortando à área quando o terminal é curto.
     let content_h = (lines.len() as u16).min(area.height).max(1);
     let band = Layout::vertical([Constraint::Length(content_h)])
         .flex(Flex::Center)

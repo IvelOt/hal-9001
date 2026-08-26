@@ -1,7 +1,3 @@
-//! Aba 6 — Telas, Monitores & Configuração de Displays (estilo monitui).
-//!
-//! 100% Pure Rust & Ratatui — Layout visual espacial com canvas de monitores,
-//! seletor de modos de arranjo e inspetor interativo de resoluções suportadas.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -35,10 +31,10 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header & Modo Ativo
-            Constraint::Length(9), // Canvas Visual 2D dos Monitores (estilo monitui)
-            Constraint::Min(9),    // Painel Inferior: Modos de Layout + Inspetor de Resoluções
-            Constraint::Length(3), // Rodapé & Atalhos Globais
+            Constraint::Length(3),
+            Constraint::Length(9),
+            Constraint::Min(9),
+            Constraint::Length(3),
         ])
         .split(area);
 
@@ -80,7 +76,6 @@ fn draw_header(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect)
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
-/// Canvas visual dos monitores no espaço virtual 2D (inspirado no monitui).
 fn draw_monitor_canvas(snap: &DisplaySnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let connected = snap.connected_displays();
 
@@ -93,7 +88,6 @@ fn draw_monitor_canvas(snap: &DisplaySnapshot, app: &App, pal: &Palette, f: &mut
 
     let sel_idx = app.display_selected.min(connected.len().saturating_sub(1));
 
-    // Divide a largura do canvas proporcionalmente entre os monitores conectados
     let mut constraints = Vec::new();
     for _ in 0..connected.len() {
         constraints.push(Constraint::Ratio(1, connected.len() as u32));
@@ -198,13 +192,12 @@ fn draw_single_monitor_box(
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// Painel inferior dividido em: Modos de Layout (Esquerda) e Inspetor de Resoluções (Direita).
 fn draw_inspector_and_modes(snap: &DisplaySnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let sub_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(45), // Modos Rápidos de Arranjo
-            Constraint::Percentage(55), // Lista de Resoluções Suportadas
+            Constraint::Percentage(45),
+            Constraint::Percentage(55),
         ])
         .split(area);
 

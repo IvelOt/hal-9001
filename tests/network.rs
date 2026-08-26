@@ -1,4 +1,3 @@
-//! Testes do Módulo 2 — Wi-Fi & Rede (NetworkManager).
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -15,22 +14,17 @@ use hal9001::ui;
 
 #[test]
 fn test_security_derivation() {
-    // Open
+
     assert_eq!(derive_security(0, 0, 0), Security::Open);
 
-    // WEP (Privacy flag without WPA/RSN)
     assert_eq!(derive_security(0x1, 0, 0), Security::Wep);
 
-    // WPA1
     assert_eq!(derive_security(0x1, 0x100, 0), Security::Wpa);
 
-    // WPA2-PSK (RSN 0x188 = 392)
     assert_eq!(derive_security(0x1, 0, 392), Security::Wpa2);
 
-    // WPA3-SAE (RSN with 0x400)
     assert_eq!(derive_security(0x1, 0, 0x400), Security::Wpa3);
 
-    // WPA2-Enterprise (0x200)
     assert_eq!(derive_security(0x1, 0, 0x200), Security::Wpa2Enterprise);
 }
 
@@ -51,7 +45,6 @@ fn test_network_actions_and_event_handling() {
 
     let (action_tx, mut action_rx) = broadcast::channel::<Action>(16);
 
-    // Simulate Network Snapshot event
     let snap = NetworkSnapshot {
         nm_available: true,
         networking_enabled: true,
@@ -112,23 +105,19 @@ fn test_network_actions_and_event_handling() {
     assert!(app.network.is_some());
     assert_eq!(app.network.as_ref().unwrap().access_points.len(), 2);
 
-    // Test Rescan action dispatch
     app.dispatch(Action::NetworkRescan, &action_tx);
     let recv = action_rx.try_recv();
     assert!(matches!(recv, Ok(Action::NetworkRescan)));
 
-    // Test Toggle Radio action dispatch
     app.dispatch(Action::NetworkToggleRadio, &action_tx);
     let recv = action_rx.try_recv();
     assert!(matches!(recv, Ok(Action::NetworkToggleRadio)));
 
-    // Select second AP (unsaved WPA2) and press Enter -> opens wifi prompt
     app.network_selected = 1;
     app.dispatch(Action::Enter, &action_tx);
     assert!(app.wifi_prompt.is_some());
     assert_eq!(app.wifi_prompt.as_ref().unwrap().ssid, "Coffee_Shop");
 
-    // Type password in modal
     app.dispatch(Action::NetworkModalChar('s'), &action_tx);
     app.dispatch(Action::NetworkModalChar('e'), &action_tx);
     app.dispatch(Action::NetworkModalChar('c'), &action_tx);
@@ -137,7 +126,6 @@ fn test_network_actions_and_event_handling() {
     app.dispatch(Action::NetworkModalChar('t'), &action_tx);
     assert_eq!(app.wifi_prompt.as_ref().unwrap().password, "secret");
 
-    // Press Enter to connect
     app.dispatch(Action::Enter, &action_tx);
     assert!(app.wifi_prompt.is_none());
     let recv = action_rx.try_recv();
@@ -158,10 +146,8 @@ fn test_render_network_tab_without_panic() {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    // 1. Render without snapshot (pending)
     terminal.draw(|f| ui::draw(&app, f)).unwrap();
 
-    // 2. Render with snapshot
     let snap = NetworkSnapshot {
         nm_available: true,
         networking_enabled: true,
@@ -197,7 +183,6 @@ fn test_render_network_tab_without_panic() {
     let _ = app.handle_event(AppEvent::Network(Box::new(snap)));
     terminal.draw(|f| ui::draw(&app, f)).unwrap();
 
-    // 3. Render with Wi-Fi Password Prompt modal open
     app.wifi_prompt = Some(WifiPasswordPromptState {
         ap_id: "/ap/1".to_string(),
         ssid: "Test_SSID".to_string(),

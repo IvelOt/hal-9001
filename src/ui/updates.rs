@@ -1,4 +1,3 @@
-//! Aba 6 — Atualizações do Sistema. Render do Módulo 6.
 
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -30,7 +29,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ],
     );
 
-    // Rodapé informativo com a distro detectada (linha extra sobre o painel).
     let footer = Rect {
         x: area.x + 2,
         y: area.y + area.height.saturating_sub(2),

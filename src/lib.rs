@@ -1,7 +1,3 @@
-//! HAL-9001 — biblioteca central da TUI de controle de sistema.
-//!
-//! Exposto como `lib` para permitir testes de integração e reuso do loop
-//! principal fora do binário.
 
 pub mod app;
 pub mod ascii;
@@ -23,17 +19,11 @@ use crate::config::Config;
 use crate::events::input::InputStream;
 use crate::events::{Action, AppEvent, SudoPasswordRequest};
 
-/// Executa o loop principal do Assistente de Sistema até o usuário sair.
-///
-/// - `event_rx`: dados vindos dos backends (`AppEvent`).
-/// - `action_tx`: comandos difundidos para os backends (`Action`).
-/// - Render é *tick-driven*, desacoplado da chegada de dados.
 pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
     let (action_tx, _action_rx) = broadcast::channel::<Action>(64);
     let (sudo_tx, mut sudo_rx) = mpsc::unbounded_channel::<SudoPasswordRequest>();
 
-    // Sobe uma task Tokio por serviço de backend.
     backend::spawn_all(&config, event_tx.clone(), &action_tx, sudo_tx);
 
     let mut app = App::new(config);
@@ -41,7 +31,6 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     let mut render_tick = tokio::time::interval(Duration::from_millis(250));
     render_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Render inicial
     terminal.draw(|f| ui::draw(&app, f))?;
 
     loop {

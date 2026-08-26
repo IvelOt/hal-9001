@@ -1,4 +1,3 @@
-//! Testes unitários e de integração do Modal Interativo de Configurações.
 
 use hal9001::app::App;
 use hal9001::config::Config;
@@ -29,55 +28,46 @@ fn navigate_and_cycle_config_fields() {
     assert!(app.show_config);
     assert_eq!(app.config_cursor, 0);
 
-    // Row 0: Language. Cycle forward.
     let initial_lang = app.config.ui.language.clone();
     app.dispatch(Action::Right, &tx);
     assert_ne!(app.config.ui.language, initial_lang);
 
-    // Navigate down to Theme
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 1);
 
-    // Cycle Theme
     assert_eq!(app.config.theme.name, "hal");
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.theme.name, "catppuccin");
 
-    // Navigate down to ASCII Logo
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 2);
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.overview.ascii, "main");
 
-    // Navigate down to Icons
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 3);
     assert!(app.config.ui.icons);
     app.dispatch(Action::Enter, &tx);
     assert!(!app.config.ui.icons);
 
-    // Navigate down to FPS
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 4);
     assert_eq!(app.config.ui.frame_ms, 33);
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.ui.frame_ms, 16);
 
-    // Navigate down to Splash
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 5);
     assert!(app.config.splash.enabled);
     app.dispatch(Action::Left, &tx);
     assert!(!app.config.splash.enabled);
 
-    // Navigate down to Polling Profile
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 6);
     assert_eq!(app.config.polling.system_ms, 1500);
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.polling.system_ms, 750);
 
-    // Wrap around to Row 0
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 0);
 }
@@ -93,7 +83,6 @@ fn realtime_language_switch_in_modal() {
     app.dispatch(Action::ToggleConfig, &tx);
     assert_eq!(app.config_cursor, 0);
 
-    // Cycle language forward to "es-ES"
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.ui.language, "es-ES");
     assert_eq!(app.lang, Language::EsEs);

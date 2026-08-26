@@ -1,4 +1,3 @@
-//! Ponte assíncrona entre o `EventStream` do crossterm e as [`Action`]s.
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
@@ -7,7 +6,6 @@ use crate::app::Tab;
 
 use super::Action;
 
-/// Stream de input que traduz eventos de terminal em [`Action`]s.
 pub struct InputStream {
     inner: EventStream,
 }
@@ -19,23 +17,6 @@ impl InputStream {
         }
     }
 
-    /// Próxima ação, ou `None` quando o stream de terminal encerra. `active`
-    /// desambigua teclas que mudam de significado conforme a aba (ex.: `m`
-    /// alterna mudo global, mas monta/desmonta na aba Storage).
-    ///
-    /// `storage_modal_open` e `text_mode` desviam o teclado para os modais
-    /// interativos de Storage (formatação/ISO Flasher): com um modal aberto,
-    /// atalhos globais (`m`, `r`, dígitos de aba, etc.) ficam suspensos; em
-    /// `text_mode` (campo de caminho de ISO, rótulo ou confirmação digitada),
-    /// todo caractere vira `Action::StorageModalChar`.
-    ///
-    /// `sudo_prompt_open` tem prioridade máxima sobre tudo isso: enquanto o
-    /// modal nativo de senha de sudo estiver aberto, todo o teclado (mesmo
-    /// fora da aba Storage) vira digitação mascarada nesse campo.
-    ///
-    /// `storage_analyzer_open` desvia o teclado para o Analisador de Espaço
-    /// em Disco Nativo (navegação, drill-down/up, re-escaneio e fechamento)
-    /// enquanto ele estiver aberto na aba Storage.
     #[allow(clippy::too_many_arguments)]
     pub async fn next(
         &mut self,
@@ -58,7 +39,7 @@ impl InputStream {
                     ) {
                         return Some(action);
                     }
-                    // Tecla ignorada; continua aguardando.
+
                 }
                 Some(Ok(Event::Resize(_, _))) => return Some(Action::Redraw),
                 Some(Ok(_)) => continue,
@@ -75,8 +56,6 @@ impl Default for InputStream {
     }
 }
 
-/// Keymap global. Teclas não reconhecidas viram [`Action::Raw`] para eventual
-/// repasse ao PTY da aba de terminal.
 fn map_key(
     key: KeyEvent,
     active: Tab,
@@ -87,13 +66,10 @@ fn map_key(
 ) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-    // Ctrl+C sempre encerra, mesmo dentro de um campo de texto de modal.
     if ctrl && key.code == KeyCode::Char('c') {
         return Some(Action::Quit);
     }
 
-    // Analisador de Espaço em Disco Nativo (aba Storage): prioridade máxima
-    // (mesmo nível do modal de sudo), enquanto estiver aberto.
     if active == Tab::Storage && storage_analyzer_open {
         return match key.code {
             KeyCode::Up | KeyCode::Char('k') => Some(Action::Up),
@@ -110,9 +86,6 @@ fn map_key(
         };
     }
 
-    // Modal nativo de senha de sudo: prioridade máxima, funciona em qualquer
-    // aba — todo caractere digitado vira `Action::StorageModalChar` (exibido
-    // mascarado pela UI), `Enter` confirma, `Esc` cancela a operação.
     if sudo_prompt_open {
         return match key.code {
             KeyCode::Char(c) => Some(Action::StorageModalChar(c)),
@@ -123,7 +96,6 @@ fn map_key(
         };
     }
 
-    // Modal de senha de Wi-Fi: digitação mascarada da PSK.
     if active == Tab::Network && text_mode {
         return match key.code {
             KeyCode::Char(c) => Some(Action::NetworkModalChar(c)),
@@ -134,13 +106,10 @@ fn map_key(
         };
     }
 
-    // Tecla dedicada (F3) que abre o seletor de arquivos estilo Yazi a partir
-    // de qualquer modal de storage.
     if active == Tab::Storage && storage_modal_open && key.code == KeyCode::F(3) {
         return Some(Action::StorageModalOpenPicker);
     }
 
-    // Campo de texto ativo num modal de Storage:
     if active == Tab::Storage && text_mode {
         return match key.code {
             KeyCode::Char(c) => Some(Action::StorageModalChar(c)),
@@ -155,7 +124,6 @@ fn map_key(
         };
     }
 
-    // Aba Network (Wi-Fi):
     if active == Tab::Network {
         match key.code {
             KeyCode::Char('r') => return Some(Action::NetworkRescan),
@@ -166,7 +134,6 @@ fn map_key(
         }
     }
 
-    // Aba Overview:
     if active == Tab::Overview {
         if key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K') {
             return Some(Action::KillTopProcess);
@@ -176,7 +143,6 @@ fn map_key(
         }
     }
 
-    // Aba Bluetooth:
     if active == Tab::Bluetooth {
         match key.code {
             KeyCode::Char('r') => return Some(Action::BluetoothRescan),
@@ -188,7 +154,6 @@ fn map_key(
         }
     }
 
-    // Aba Audio (Mixer):
     if active == Tab::Audio {
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right | KeyCode::Char('l') => {
@@ -204,7 +169,6 @@ fn map_key(
         }
     }
 
-    // Aba Displays (Telas & Monitores):
     if active == Tab::Displays {
         match key.code {
             KeyCode::Char('e') => {
@@ -229,7 +193,6 @@ fn map_key(
         }
     }
 
-    // Aba Storage:
     if active == Tab::Storage {
         match key.code {
             KeyCode::Char('f') if !storage_modal_open => return Some(Action::StorageFormatOpen),
@@ -274,17 +237,17 @@ fn map_key(
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('U') => Some(Action::CheckUpdates),
         KeyCode::Char('.') => Some(Action::ToggleDetail),
-        // Configurações interativas: `c`/`C`.
+
         KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::ToggleConfig),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SaveConfig),
-        // Brilho: minúscula/`-` diminui, maiúscula/`+`/`=` aumenta.
+
         KeyCode::Char('b') | KeyCode::Char('-') => Some(Action::BrightnessDown),
         KeyCode::Char('B') | KeyCode::Char('+') | KeyCode::Char('=') => Some(Action::BrightnessUp),
-        // Volume: minúscula/`[` diminui, maiúscula/`]` aumenta, `m` alterna mudo.
+
         KeyCode::Char('v') | KeyCode::Char('[') => Some(Action::VolumeDown),
         KeyCode::Char('V') | KeyCode::Char(']') => Some(Action::VolumeUp),
         KeyCode::Char('m') => Some(Action::ToggleMute),
-        // Perfil de energia: `p`/`P` cicla Economia→Equilibrado→Desempenho.
+
         KeyCode::Char('p') | KeyCode::Char('P') => Some(Action::CyclePowerProfile),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Esc => Some(Action::ToggleConfig),

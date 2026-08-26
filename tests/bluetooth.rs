@@ -1,4 +1,3 @@
-//! Testes unitários e de integração do Módulo 3 (Bluetooth).
 
 use hal9001::app::{App, Tab};
 use hal9001::backend::bluetooth::{
@@ -12,7 +11,7 @@ use tokio::sync::broadcast;
 
 #[test]
 fn test_derive_device_type_icon_and_cod() {
-    // 1. Icon explícito
+
     assert_eq!(
         derive_device_type(Some("audio-headset"), None, None, &[]),
         BluetoothDeviceType::Audio
@@ -38,18 +37,16 @@ fn test_derive_device_type_icon_and_cod() {
         BluetoothDeviceType::Computer
     );
 
-    // 2. Class of Device (CoD)
-    // Major 0x04 = Audio (ex: 0x240404)
     assert_eq!(
         derive_device_type(None, Some(0x240404), None, &[]),
         BluetoothDeviceType::Audio
     );
-    // Major 0x05, Minor Keyboard (0x10)
+
     assert_eq!(
         derive_device_type(None, Some(0x002540), None, &[]),
         BluetoothDeviceType::Keyboard
     );
-    // Major 0x05, Minor Gamepad (0x02)
+
     assert_eq!(
         derive_device_type(None, Some(0x002508), None, &[]),
         BluetoothDeviceType::Gamepad
@@ -58,25 +55,23 @@ fn test_derive_device_type_icon_and_cod() {
 
 #[test]
 fn test_derive_device_type_ble_appearance_and_uuids() {
-    // BLE Appearance 960 (0x03C0 >> 6 = 15 -> Gamepad)
+
     assert_eq!(
         derive_device_type(None, None, Some(960), &[]),
         BluetoothDeviceType::Gamepad
     );
-    // BLE Appearance 832 (0x0340 >> 6 = 13.. or Keyboard = 961)
+
     assert_eq!(
         derive_device_type(None, None, Some(961), &[]),
         BluetoothDeviceType::Gamepad
     );
 
-    // UUIDs A2DP Audio Sink
     let uuids = vec!["0000110b-0000-1000-8000-00805f9b34fb".to_string()];
     assert_eq!(
         derive_device_type(None, None, None, &uuids),
         BluetoothDeviceType::Audio
     );
 
-    // UUIDs HID Service
     let hid_uuids = vec!["00001124-0000-1000-8000-00805f9b34fb".to_string()];
     assert_eq!(
         derive_device_type(None, None, None, &hid_uuids),
@@ -135,13 +130,11 @@ fn test_bluetooth_snapshot_navigation_and_actions() {
         devices: vec![dev1, dev2],
     };
 
-    // 1. Recebe snapshot
     let follow_ups = app.handle_event(AppEvent::Bluetooth(Box::new(snap)));
     assert!(follow_ups.is_empty());
     assert!(app.bluetooth.is_some());
     assert_eq!(app.bluetooth.as_ref().unwrap().devices.len(), 2);
 
-    // 2. Muda para Tab::Bluetooth e navega
     app.active = Tab::Bluetooth;
     assert_eq!(app.bluetooth_selected, 0);
 
@@ -151,14 +144,12 @@ fn test_bluetooth_snapshot_navigation_and_actions() {
     app.dispatch(Action::Up, &action_tx);
     assert_eq!(app.bluetooth_selected, 0);
 
-    // 3. Enter no dev1 (conectado) -> envia Disconnect
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::BluetoothDisconnect(DeviceId("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_11".to_string()))
     );
 
-    // 4. Enter no dev2 (desconectado) -> envia Connect
     app.bluetooth_selected = 1;
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
@@ -166,15 +157,12 @@ fn test_bluetooth_snapshot_navigation_and_actions() {
         Action::BluetoothConnect(DeviceId("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_22".to_string()))
     );
 
-    // 5. Atalho de rescan [r]
     app.dispatch(Action::BluetoothRescan, &action_tx);
     assert_eq!(action_rx.try_recv().unwrap(), Action::BluetoothRescan);
 
-    // 6. Atalho de toggle rádio [t]
     app.dispatch(Action::BluetoothToggleRadio, &action_tx);
     assert_eq!(action_rx.try_recv().unwrap(), Action::BluetoothToggleRadio);
 
-    // 7. Atalho de parear [p]
     app.dispatch(Action::BluetoothPair(DeviceId(String::new())), &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),

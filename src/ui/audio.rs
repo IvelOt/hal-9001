@@ -1,9 +1,3 @@
-//! Aba 5 — Mixer de Áudio & Dispositivos (PipeWire / PulseAudio).
-//!
-//! Visão unificada com 3 divisões simultâneas: Saídas + Aplicativos lado a
-//! lado no painel superior, Microfones em largura total no painel inferior.
-//! `Tab`/`BackTab` alternam qual painel tem o foco (navegação/rolagem); as
-//! teclas `1`..`8` permanecem livres para a tabbar principal.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -39,10 +33,10 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Percentage(55), // Painel Superior (Saídas + Apps)
-            Constraint::Percentage(45), // Painel Inferior (Microfones)
-            Constraint::Length(3), // Rodapé
+            Constraint::Length(3),
+            Constraint::Percentage(55),
+            Constraint::Percentage(45),
+            Constraint::Length(3),
         ])
         .split(area);
 
@@ -95,8 +89,7 @@ fn draw_header(snap: &AudioSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
     let output = default_node_name(&snap.sinks).unwrap_or("Nenhuma saída padrão");
     let mic = default_node_name(&snap.sources).unwrap_or("Nenhum microfone padrão");
 
-    // Colunas truncadas para nunca estourar a borda, mesmo em terminais estreitos.
-    let avail = area.width.saturating_sub(2) as usize; // desconta bordas
+    let avail = area.width.saturating_sub(2) as usize;
     let seg = avail / 3;
 
     let line = Line::from(vec![
@@ -128,10 +121,6 @@ fn draw_header(snap: &AudioSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(line).block(block), area);
 }
 
-/// Calcula a janela `[start, end)` de itens visíveis dado o total, a altura
-/// visível (em itens) e o índice selecionado — rola para manter a seleção
-/// dentro da vista quando o painel está focado; painéis sem foco sempre
-/// mostram a partir do topo.
 fn scroll_window(len: usize, visible: usize, selected: usize, focused: bool) -> (usize, usize) {
     if visible == 0 || len == 0 {
         return (0, 0);
@@ -150,7 +139,6 @@ fn scroll_window(len: usize, visible: usize, selected: usize, focused: bool) -> 
     (start, (start + visible).min(len))
 }
 
-/// Sufixo discreto de rolagem para o título do painel (`▲N ▼N`).
 fn scroll_indicator(start: usize, end: usize, len: usize) -> String {
     let above = start;
     let below = len.saturating_sub(end);
@@ -179,8 +167,6 @@ fn empty_message(cat: AudioCategory) -> &'static str {
     }
 }
 
-/// Painel de card (2 linhas por item: nome + barra/badge) usado pelas
-/// colunas superiores (Saídas e Aplicativos), ~50% de largura cada.
 fn draw_card_panel(
     nodes: &[AudioNode],
     cat: AudioCategory,
@@ -280,8 +266,6 @@ fn bar_status_line<'a>(node: &AudioNode, width: usize, pal: &Palette) -> Line<'a
         pal.dim
     };
 
-    // Reserva espaço para o badge de status + 1 separador; o restante vira a
-    // barra de volume compacta.
     let status_w = status.len().min(width.saturating_sub(4));
     let bar_budget = width.saturating_sub(status_w + 1).max(4);
     let bar_span = format_volume_bar(node.volume, node.is_muted, pal, bar_budget);
@@ -294,12 +278,10 @@ fn bar_status_line<'a>(node: &AudioNode, width: usize, pal: &Palette) -> Line<'a
     ])
 }
 
-/// Barra de volume compacta `[████░░░░] %`, com o número de blocos ajustado
-/// ao orçamento de colunas disponível (nunca estoura o painel).
 fn format_volume_bar<'a>(volume: f32, is_muted: bool, pal: &Palette, budget: usize) -> Span<'a> {
     let pct = (volume * 100.0).round() as u32;
     let pct_str = format!("{pct:>3}%");
-    // "[" + barras + "] " + pct
+
     let overhead = 2 + 1 + pct_str.len();
     let total_bars = budget.saturating_sub(overhead).clamp(3, 16);
     let filled_bars = ((volume.min(1.0) * total_bars as f32).round() as usize).min(total_bars);
@@ -328,8 +310,6 @@ fn format_volume_bar<'a>(volume: f32, is_muted: bool, pal: &Palette, budget: usi
     )
 }
 
-/// Painel de microfones (largura total, ~45% da altura útil): tabela em
-/// linha única por item.
 fn draw_source_panel(
     nodes: &[AudioNode],
     focused: bool,
@@ -341,7 +321,7 @@ fn draw_source_panel(
     let border_color = if focused { pal.accent } else { pal.dim };
     let icon = AudioCategory::Source.nerd_glyph();
 
-    let visible_items = area.height.saturating_sub(3).max(1) as usize; // desconta bordas + header da tabela
+    let visible_items = area.height.saturating_sub(3).max(1) as usize;
     let (start, end) = scroll_window(nodes.len(), visible_items, selected, focused);
 
     let block = Block::default()

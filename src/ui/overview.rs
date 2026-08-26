@@ -1,13 +1,3 @@
-//! Aba 1 — Overview (estilo Hermes-Agent): coluna de **identidade** à esquerda
-//! (logo das engrenagens com o olho do HAL-9000 + metadados compactos) e coluna
-//! de **seções categorizadas** à direita (Hardware, Sistema, Periféricos, Paleta).
-//!
-//! O bloco de conteúdo é centralizado harmoniosamente na área disponível via
-//! layouts flexíveis (`Flex::Center`). A largura da coluna da logo é **fixada**
-//! pelo tamanho escolhido — a tecla `.` (modo Detalhado) apenas revela linhas
-//! extras nas seções da direita, **sem encolher a logo**. Em telas muito
-//! estreitas a logo é reduzida (Main→Medium→Compact) ou recolhida, mantendo
-//! apenas o painel de informações centralizado.
 
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -26,12 +16,8 @@ use super::widgets::{
     human_bytes, human_uptime, kv_line, metric_line, palette_line, section_title, truncate_str,
 };
 
-/// Folga horizontal entre a coluna de identidade e a de informações.
 const GAP: u16 = 4;
 
-/// Largura mínima reservada à coluna de informações ao decidir o tamanho da
-/// logo. Mantém as seções legíveis e — por ser fixa — protege a largura da logo
-/// ao alternar o modo detalhado.
 const MIN_INFO: u16 = 34;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
@@ -40,19 +26,16 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Reserva a última linha para a statusline do Overview (indicador do modo).
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
     draw_center(app, pal, f, rows[0]);
     draw_footer(app, pal, f, rows[1]);
 }
 
-/// Centraliza identidade + informações, protegendo a largura da logo.
 fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Sem snapshot ainda: mensagem simples e centralizada.
     let Some(s) = &app.system else {
         let msg = Paragraph::new(Line::from(Span::styled(
             "coletando dados do sistema…",
@@ -68,14 +51,8 @@ fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     }
 }
 
-/// Escolhe o tamanho da logo pela largura reservada à sua coluna **e** pela
-/// altura disponível, degradando (Main→Medium→Compact→sem logo) até caber. O
-/// orçamento de largura usa `MIN_INFO` fixo — independente dos campos
-/// detalhados —, então a logo não encolhe ao alternar `.`.
 fn pick_size(pref: &str, area: Rect) -> Option<LogoSize> {
-    // Modo Celular / Retrato: se a altura for maior que a largura (portrait)
-    // ou se a largura for estreita (< 72 cols), colapsa a logo ASCII para
-    // dar prioridade total às métricas de telemetria verticalmente!
+
     if area.height > area.width || area.width < 72 {
         return None;
     }
@@ -83,14 +60,13 @@ fn pick_size(pref: &str, area: Rect) -> Option<LogoSize> {
     let first = ascii::select(pref, budget)?;
     let order = [LogoSize::Main, LogoSize::Medium, LogoSize::Compact];
     let start = order.iter().position(|&s| s == first).unwrap_or(0);
-    // Precisa caber a logo + linha em branco + ao menos a 1ª linha de metadados.
+
     order[start..]
         .iter()
         .copied()
         .find(|s| s.width() <= budget && area.height >= s.height() + 2)
 }
 
-/// Layout de duas colunas: identidade (logo + metadados) | seções.
 fn draw_two_columns(
     app: &App,
     s: &SystemSnapshot,
@@ -102,14 +78,9 @@ fn draw_two_columns(
     let meta = build_meta(s, pal);
     let meta_w = meta.iter().map(line_width).max().unwrap_or(0) as u16;
 
-    // A largura da coluna da esquerda acomoda a logo e os metadados; ambos são
-    // independentes do modo detalhado, então a coluna é estável.
     let left_w = size.width().max(meta_w).min(area.width);
     let remaining = area.width.saturating_sub(left_w + GAP).max(1);
 
-    // A coluna de informações é dimensionada pelo seu conteúdo (não pelo espaço
-    // restante), permitindo que o bloco inteiro seja centralizado em telas
-    // largas em vez de colar na borda.
     let sections = build_sections(app, s, pal, remaining);
     let info_w = sections
         .iter()
@@ -119,7 +90,6 @@ fn draw_two_columns(
         .min(remaining as usize)
         .max(1) as u16;
 
-    // Altura do bloco = maior das duas colunas, limitada à área.
     let logo_h = size.height();
     let left_h = logo_h + 1 + meta.len() as u16;
     let content_h = left_h.max(sections.len() as u16).min(area.height).max(1);
@@ -140,18 +110,14 @@ fn draw_two_columns(
     f.render_widget(Paragraph::new(Text::from(sections)), cols[2]);
 }
 
-/// Fase do pulso de respiração do Olho do HAL, derivada do tempo decorrido.
-/// Cicla 0→1→2→3 a cada 250 ms, produzindo uma pulsação sutil e contínua.
 fn eye_phase(app: &App) -> u8 {
     ((app.elapsed_ms() / 250) % 4) as u8
 }
 
-/// Layout de coluna única (telas estreitas / celular portrait): logo ASCII no topo + HAL-9001 + metadados + seções.
 fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
     let info_w = area.width;
     let mut lines = Vec::new();
 
-    // Escolhe a melhor logo ASCII para o topo em modo vertical/retrato:
     let logo_size = if app.config.overview.ascii != "none" && app.config.overview.ascii != "off" {
         if area.width >= 30 && area.height >= 34 {
             Some(LogoSize::Compact)
@@ -176,7 +142,6 @@ fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Fram
         lines.push(Line::from(""));
     }
 
-    // Título limpo do projeto (sem subtítulos!)
     let title_pad = (info_w as usize).saturating_sub(8) / 2;
     lines.push(Line::from(vec![
         Span::raw(" ".repeat(title_pad)),
@@ -200,8 +165,6 @@ fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Fram
     f.render_widget(Paragraph::new(Text::from(lines)), col);
 }
 
-/// Desenha a coluna de identidade: logo colorida (com o pulso do olho na `phase`
-/// atual) + metadados compactos.
 fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>, phase: u8) {
     let mut lines = ascii::logo_lines_phase(size, phase);
     lines.push(Line::from(""));
@@ -209,8 +172,6 @@ fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>, pha
     f.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
-/// Statusline interna do Overview: indicador do modo de detalhe + atalhos de
-/// controle interativo (brilho/volume/mudo).
 fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
     let mode = if app.detailed_overview {
@@ -231,18 +192,18 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
     if area.width < 50 {
-        // Modo ultra-compacto para celular
+
         spans.extend(hint(".", "Det"));
         spans.extend(hint("p", "Perfil"));
         spans.extend(hint("c", "Config"));
     } else if area.width < 68 {
-        // Modo médio
+
         spans.extend(hint(".", "Detalhe"));
         spans.extend(hint("p", m.label_power_profile));
         spans.extend(hint("b/v", "Brilho/Vol"));
         spans.extend(hint("c", "Config"));
     } else {
-        // Modo tela cheia
+
         let details_label = if app.lang == crate::i18n::Language::EnUs {
             "Details:"
         } else if app.lang == crate::i18n::Language::EsEs {
@@ -269,7 +230,6 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         spans.extend(hint("c", config_label));
     }
 
-    // Trunca a linha inteira à largura disponível para nunca vazar.
     let mut line = Line::from(spans);
     if line_width(&line) > area.width as usize {
         let text = truncate_str(&spans_text(&line), area.width as usize);
@@ -278,19 +238,13 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-/// Concatena o texto de todos os spans de uma linha.
 fn spans_text(line: &Line) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
-// --- Coluna de identidade (metadados) ------------------------------------
-
-/// Metadados compactos exibidos sob a logo — idênticos nos modos Normal e
-/// Detalhado (garantindo a estabilidade da coluna da esquerda).
 fn build_meta<'a>(s: &SystemSnapshot, pal: &Palette) -> Vec<Line<'a>> {
     let mut out: Vec<Line> = Vec::new();
 
-    // user@host + régua.
     out.push(Line::from(vec![
         Span::styled(s.user.clone(), Style::default().fg(pal.accent)),
         Span::styled("@", Style::default().fg(pal.dim)),
@@ -304,14 +258,12 @@ fn build_meta<'a>(s: &SystemSnapshot, pal: &Palette) -> Vec<Line<'a>> {
 
     out.push(meta_line("uptime", human_uptime(s.uptime_secs), pal));
 
-    // kernel · arch.
     let kernel = match &s.detail.cpu_arch {
         Some(arch) => format!("{} · {arch}", s.kernel),
         None => s.kernel.clone(),
     };
     out.push(meta_line("kernel", kernel, pal));
 
-    // session: desktop/WM (+ tipo de sessão).
     let session = match (&s.detail.desktop, &s.detail.session_type) {
         (Some(de), Some(st)) => format!("{de} ({st})"),
         (Some(de), None) => de.clone(),
@@ -323,7 +275,6 @@ fn build_meta<'a>(s: &SystemSnapshot, pal: &Palette) -> Vec<Line<'a>> {
     out
 }
 
-/// Linha de metadado compacta `rótulo  valor` (rótulo esmaecido).
 fn meta_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label:<8}"), Style::default().fg(pal.dim)),
@@ -331,32 +282,24 @@ fn meta_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
     ])
 }
 
-// --- Coluna de seções ----------------------------------------------------
-
-/// Larguras das colunas de informação, derivadas da largura disponível. As
-/// linhas densas (`métrica + barra`) usam `bar_w` para a barra e `val_w` para o
-/// valor alinhado; as linhas `rótulo valor` usam `width` para o truncamento.
 #[derive(Clone, Copy)]
 struct Cols {
-    /// Largura total disponível para a coluna de informações.
+
     width: usize,
-    /// Largura da barra de progresso (blocos internos).
+
     bar_w: usize,
-    /// Largura alinhada da coluna de valor nas linhas densas.
+
     val_w: usize,
 }
 
-/// Largura-alvo máxima da coluna de informações. Impede que valores longos
-/// (GPU/BIOS/Host) estiquem a coluna até a borda em telas largas — preservando
-/// a folga que permite centralizar o bloco (`Flex::Center`).
 const MAX_INFO_W: usize = 48;
 
 impl Cols {
     fn new(width: u16) -> Self {
-        // Limita a largura-alvo para manter a coluna compacta e centralizável.
+
         let width = (width as usize).min(MAX_INFO_W);
         let bar_w = (width / 4).clamp(6, 14);
-        // Reserva: rótulo(10) + barra(`[`+bar_w+`] `+`NNN%`) + 1 folga.
+
         let reserved = 10 + bar_w + 7 + 1;
         let val_w = width.saturating_sub(reserved).clamp(8, 40);
         Self {
@@ -367,11 +310,6 @@ impl Cols {
     }
 }
 
-/// Monta as seções categorizadas da coluna direita.
-///
-/// O layout é **denso**: cada métrica (CPU/RAM/Swap/Disco/Bateria/Brilho/
-/// Volume) ocupa uma única linha combinando valor + barra, e as seções são
-/// separadas apenas pelos títulos (sem linhas em branco), mantendo o total em
 fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) -> Vec<Line<'a>> {
     let cols = Cols::new(width);
     let detailed = app.detailed_overview;
@@ -390,7 +328,6 @@ fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) 
     out
 }
 
-/// Seção **TOP PROCESSES** (modo detalhado apenas).
 fn section_top_processes<'a>(
     s: &SystemSnapshot,
     pal: &Palette,
@@ -398,7 +335,7 @@ fn section_top_processes<'a>(
     out: &mut Vec<Line<'a>>,
 ) {
     out.push(section_title("TOP PROCESSES", pal));
-    
+
     let pid_w = 6;
     let cpu_w = 6;
     let ram_w = 8;
@@ -408,22 +345,21 @@ fn section_top_processes<'a>(
     } else {
         5
     };
-    
+
     let header = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", "PID", "PROCESSO", "CPU%", "RAM", pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
     out.push(Line::from(vec![Span::styled(header, ratatui::style::Style::default().fg(pal.dim).add_modifier(ratatui::style::Modifier::BOLD))]));
-    
+
     for p in &s.detail.top_processes {
         let pid_str = p.pid.to_string();
-        let cpu_str = format!("{:.1}", p.cpu_usage); // format!("{:.1}%", p.cpu_usage) but % is already in header
+        let cpu_str = format!("{:.1}", p.cpu_usage);
         let ram_str = human_bytes(p.mem_bytes);
-        
+
         let name_trunc = truncate_str(&p.name, proc_w);
         let row = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", pid_str, name_trunc, cpu_str, ram_str, pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
         out.push(Line::from(vec![Span::styled(row, ratatui::style::Style::default().fg(pal.fg))]));
     }
 }
 
-/// Seção **Available Compute / Hardware** — linhas densas (métrica + barra).
 fn section_hardware(
     s: &SystemSnapshot,
     pal: &Palette,
@@ -435,7 +371,6 @@ fn section_hardware(
     let d: &DetailInfo = &s.detail;
     out.push(section_title(m.sec_compute, pal));
 
-    // CPU: nome limpo + núcleos combinados numa única linha com a barra de uso.
     let cores = match d.cpu_cores_physical {
         Some(p) => format!("{p}c/{}t", d.cpu_cores_logical),
         None => format!("{}t", d.cpu_cores_logical),
@@ -451,7 +386,6 @@ fn section_hardware(
         None,
     ));
 
-    // RAM: uso / total + barra.
     out.push(metric_line(
         m.label_ram,
         &format!("{} / {}", human_bytes(s.mem_used), human_bytes(s.mem_total)),
@@ -463,7 +397,7 @@ fn section_hardware(
     ));
 
     if detailed {
-        // Swap.
+
         if d.swap_total > 0 {
             out.push(metric_line(
                 m.label_swap,
@@ -482,7 +416,6 @@ fn section_hardware(
             out.push(kv_line(m.label_swap, "N/A".into(), cols.width, pal));
         }
 
-        // Temperatura da CPU (+ frequência, quando houver).
         if let Some(t) = d.cpu_temp_c {
             let val = match d.cpu_freq_ghz {
                 Some(fq) => format!("{t:.0} °C @ {fq:.2} GHz"),
@@ -491,19 +424,16 @@ fn section_hardware(
             out.push(kv_line(m.label_temperature, val, cols.width, pal));
         }
 
-        // Placa-mãe.
         if let Some(board) = join_opt(d.board_vendor.as_deref(), d.board_name.as_deref()) {
             out.push(kv_line(m.label_board, board, cols.width, pal));
         }
 
-        // GPU (nome limpo).
         if let Some(gpu) = &d.gpu {
             out.push(kv_line(m.label_gpu, clean_gpu(gpu), cols.width, pal));
         }
     }
 }
 
-/// Seção **System & Platform**.
 fn section_platform(
     s: &SystemSnapshot,
     pal: &Palette,
@@ -539,14 +469,12 @@ fn section_platform(
         pal,
     ));
 
-    // Shell (+ WM/desktop no modo detalhado).
     let shell = match (detailed, &d.desktop) {
         (true, Some(de)) => format!("{} · {de}", s.shell),
         _ => s.shell.clone(),
     };
     out.push(kv_line(m.label_shell, shell, cols.width, pal));
 
-    // Disco raiz — linha densa quando há dados.
     match (s.disk_ratio(), s.disk_used, s.disk_total) {
         (Some(r), Some(u), Some(t)) => out.push(metric_line(
             m.label_disk_root,
@@ -561,7 +489,6 @@ fn section_platform(
     }
 }
 
-/// Seção **Peripherals & Power** — bateria/brilho/volume em linhas densas.
 fn section_power(
     s: &SystemSnapshot,
     pal: &Palette,
@@ -572,7 +499,6 @@ fn section_power(
 ) {
     out.push(section_title(m.sec_peripherals, pal));
 
-    // Bateria (ou N/A em desktop) — sufixo neofetch: [DISCHARGING -14W].
     match &s.battery {
         Some(b) => {
             let suffix = battery_suffix(b);
@@ -605,7 +531,6 @@ fn section_power(
         None => out.push(kv_line(m.label_battery, "N/A (Desktop)".into(), cols.width, pal)),
     }
 
-    // Brilho.
     match s.brightness {
         Some(r) => out.push(metric_line(
             m.label_brightness, "", cols.val_w, r, cols.bar_w, pal, None,
@@ -613,7 +538,6 @@ fn section_power(
         None => out.push(kv_line(m.label_brightness, "N/A".into(), cols.width, pal)),
     }
 
-    // Volume — sem emojis; [MUTED] apenas quando mudo.
     match &s.volume {
         Some(v) => {
             let suffix = if v.muted { Some("[MUTED]") } else { None };
@@ -630,8 +554,6 @@ fn section_power(
         None => out.push(kv_line(m.label_volume, "N/A".into(), cols.width, pal)),
     }
 
-    // Perfil de energia — tag neofetch + dica de atalho; N/A gracioso quando
-    // não há daemon/governor (ex.: desktop).
     match s.power_profile {
         Some(p) => out.push(kv_line(
             m.label_power_profile,
@@ -643,8 +565,6 @@ fn section_power(
     }
 }
 
-/// Encurta o nome da CPU removendo ruído de marketing (`(R)`, `(TM)`, `CPU`,
-/// `Processor`), colapsando espaços redundantes.
 fn clean_cpu(name: &str) -> String {
     let cleaned = name
         .replace("(R)", "")
@@ -661,8 +581,6 @@ fn clean_cpu(name: &str) -> String {
     }
 }
 
-/// Encurta o nome da GPU: prefere o nome comercial entre colchetes
-/// (`[Iris Xe Graphics]`) quando presente; senão remove `Corporation`.
 fn clean_gpu(name: &str) -> String {
     if let Some(open) = name.find('[') {
         if let Some(close_rel) = name[open + 1..].find(']') {
@@ -681,8 +599,6 @@ fn clean_gpu(name: &str) -> String {
     }
 }
 
-/// Sufixo textual de bateria no estilo neofetch clássico, sem emojis:
-/// `[CHARGING +18W]`, `[DISCHARGING -14W]`, `[FULL]`.
 fn battery_suffix(b: &crate::backend::system::Battery) -> String {
     match (b.power_watts, b.status.power_sign()) {
         (Some(w), sign) if !sign.is_empty() => {
@@ -692,7 +608,6 @@ fn battery_suffix(b: &crate::backend::system::Battery) -> String {
     }
 }
 
-/// Junta dois campos opcionais com espaço, retornando `None` se ambos vazios.
 fn join_opt(a: Option<&str>, b: Option<&str>) -> Option<String> {
     match (a, b) {
         (Some(a), Some(b)) => Some(format!("{a} {b}")),
@@ -702,7 +617,6 @@ fn join_opt(a: Option<&str>, b: Option<&str>) -> Option<String> {
     }
 }
 
-/// Largura de exibição (colunas) de uma `Line`, somando seus spans.
 fn line_width(line: &Line) -> usize {
     line.spans
         .iter()

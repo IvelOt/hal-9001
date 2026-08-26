@@ -1,7 +1,3 @@
-//! Testes do Módulo 1 — coleta e parsing do Overview (neofetch).
-//!
-//! Exercitam parsers puros, cálculos de ratio, leitura via `/sys` simulado
-//! (tempfile) e a degradação graciosa (fallback `N/A`) sem tocar hardware real.
 
 use std::fs;
 
@@ -11,24 +7,20 @@ use hal9001::backend::system::{
     ratio, read_battery, read_brightness, read_cpu_temp, BatteryStatus, Packages, CONTROL_STEP,
 };
 
-// --- ratios --------------------------------------------------------------
-
 #[test]
 fn ratio_is_clamped_and_zero_safe() {
     assert_eq!(ratio(0, 0), 0.0);
     assert_eq!(ratio(1, 0), 0.0);
     assert!((ratio(1, 2) - 0.5).abs() < 1e-9);
-    assert_eq!(ratio(10, 4), 1.0); // clamp em 1.0
+    assert_eq!(ratio(10, 4), 1.0);
 }
-
-// --- brilho --------------------------------------------------------------
 
 #[test]
 fn brightness_ratio_parses_and_guards() {
     assert!((brightness_ratio("120", "240").unwrap() - 0.5).abs() < 1e-9);
     assert_eq!(brightness_ratio("300", "240").unwrap(), 1.0);
-    assert_eq!(brightness_ratio("100", "0"), None); // max inválido
-    assert_eq!(brightness_ratio("abc", "240"), None); // não numérico
+    assert_eq!(brightness_ratio("100", "0"), None);
+    assert_eq!(brightness_ratio("abc", "240"), None);
 }
 
 #[test]
@@ -49,8 +41,6 @@ fn read_brightness_missing_is_none() {
     assert_eq!(read_brightness(dir.path()), None);
     assert_eq!(read_brightness(std::path::Path::new("/no/such/path")), None);
 }
-
-// --- volume --------------------------------------------------------------
 
 #[test]
 fn wpctl_volume_variants() {
@@ -79,22 +69,17 @@ fn amixer_volume_parsing() {
     assert_eq!(mv.level, 0.0);
 }
 
-// --- controles interativos (brilho / volume) -----------------------------
-
 #[test]
 fn control_delta_args_relative_syntax() {
-    // Passo padrão positivo/negativo no formato `brightnessctl`/`wpctl`/`amixer`.
+
     assert_eq!(delta_arg(CONTROL_STEP), "5%+");
     assert_eq!(delta_arg(-CONTROL_STEP), "5%-");
     assert_eq!(delta_arg(10), "10%+");
     assert_eq!(delta_arg(0), "0%+");
 
-    // `pactl` usa o sinal como prefixo.
     assert_eq!(pactl_delta_arg(CONTROL_STEP), "+5%");
     assert_eq!(pactl_delta_arg(-CONTROL_STEP), "-5%");
 }
-
-// --- bateria -------------------------------------------------------------
 
 #[test]
 fn battery_status_parsing() {
@@ -112,7 +97,7 @@ fn read_battery_from_sysfs_with_power() {
     fs::create_dir_all(&bat).unwrap();
     fs::write(bat.join("capacity"), "82\n").unwrap();
     fs::write(bat.join("status"), "Charging\n").unwrap();
-    fs::write(bat.join("power_now"), "12500000\n").unwrap(); // 12.5 W
+    fs::write(bat.join("power_now"), "12500000\n").unwrap();
 
     let b = read_battery(dir.path()).unwrap();
     assert_eq!(b.percent, 82.0);
@@ -128,7 +113,7 @@ fn read_battery_power_from_current_voltage() {
     fs::create_dir_all(&bat).unwrap();
     fs::write(bat.join("capacity"), "50").unwrap();
     fs::write(bat.join("status"), "Discharging").unwrap();
-    // 1.0 A * 12.0 V = 12 W → em µA·µV.
+
     fs::write(bat.join("current_now"), "1000000").unwrap();
     fs::write(bat.join("voltage_now"), "12000000").unwrap();
 
@@ -138,7 +123,7 @@ fn read_battery_power_from_current_voltage() {
 
 #[test]
 fn battery_health_and_details_from_sysfs() {
-    // saúde = full/design; ignora zero/negativos.
+
     assert!((battery_health(4400.0, 5000.0).unwrap() - 0.88).abs() < 1e-9);
     assert_eq!(battery_health(0.0, 5000.0), None);
     assert_eq!(battery_health(4400.0, 0.0), None);
@@ -159,15 +144,13 @@ fn battery_health_and_details_from_sysfs() {
     assert_eq!(b.technology.as_deref(), Some("Li-poly"));
 }
 
-// --- GPU / temperatura ---------------------------------------------------
-
 #[test]
 fn lspci_gpu_extraction() {
     let out = "\
 00:00.0 Host bridge: Intel Corporation Device 1234
 00:02.0 VGA compatible controller: Intel Corporation Raptor Lake-P [Iris Xe Graphics]
 2e:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]";
-    // Pega a primeira controladora VGA/3D.
+
     assert_eq!(
         parse_lspci_gpu(out).as_deref(),
         Some("Intel Corporation Raptor Lake-P [Iris Xe Graphics]")
@@ -178,11 +161,11 @@ fn lspci_gpu_extraction() {
 #[test]
 fn thermal_temp_parsing_and_reading() {
     assert!((parse_thermal_temp("45000").unwrap() - 45.0).abs() < 1e-9);
-    assert_eq!(parse_thermal_temp("999000"), None); // absurdo → descartado
+    assert_eq!(parse_thermal_temp("999000"), None);
     assert_eq!(parse_thermal_temp("abc"), None);
 
     let dir = tempfile::tempdir().unwrap();
-    // Zona genérica primeiro, zona de CPU depois — deve preferir a de CPU.
+
     let z0 = dir.path().join("thermal_zone0");
     let z1 = dir.path().join("thermal_zone1");
     fs::create_dir_all(&z0).unwrap();
@@ -199,12 +182,10 @@ fn thermal_temp_parsing_and_reading() {
 #[test]
 fn read_battery_absent_is_none() {
     let dir = tempfile::tempdir().unwrap();
-    // Só há um AC adapter, sem BAT*.
+
     fs::create_dir_all(dir.path().join("ADP0")).unwrap();
     assert_eq!(read_battery(dir.path()), None);
 }
-
-// --- pacotes -------------------------------------------------------------
 
 #[test]
 fn package_line_counters() {

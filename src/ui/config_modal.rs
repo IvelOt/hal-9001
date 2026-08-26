@@ -1,4 +1,3 @@
-//! Modal interativo de Configurações do HAL-9001.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -145,7 +144,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         lines.push(Line::from(""));
     }
 
-    // Amostra de cores da paleta ativa (Color Swatches)
     lines.push(Line::from(vec![
         Span::styled(" Amostra da Paleta: ", Style::default().fg(pal.dim)),
         Span::styled(" [● ACCENT] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),

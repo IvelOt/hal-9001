@@ -1,7 +1,3 @@
-//! Backend do Módulo de Monitores & Displays (X11 / xrandr).
-//!
-//! 100% Pure Rust — Zero dependências de novas crates externas.
-//! Fornece detecção de telas, auto-expansão automática ao plugar monitor e controle de modos.
 
 use std::time::Duration;
 
@@ -10,20 +6,19 @@ use tokio::sync::broadcast;
 
 use crate::events::{Action, AppEvent, EventTx, Toast};
 
-/// Modos de arranjo/layout entre múltiplos monitores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DisplayLayoutMode {
-    /// Expandir monitor secundário à direita do primário (padrão auto-expand)
+
     ExtendRight,
-    /// Expandir monitor secundário à esquerda do primário
+
     ExtendLeft,
-    /// Espelhar tela (mesma imagem em ambos os monitores)
+
     Mirror,
-    /// Apenas o monitor externo ligado
+
     ExternalOnly,
-    /// Apenas a tela do notebook ligada
+
     InternalOnly,
-    /// Customizado / Outro arranjo
+
     Custom,
 }
 
@@ -59,7 +54,6 @@ impl DisplayLayoutMode {
     }
 }
 
-/// Modo de resolução e taxa de atualização suportado por um monitor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DisplayMode {
     pub width: u32,
@@ -75,28 +69,27 @@ impl DisplayMode {
     }
 }
 
-/// Representação de uma saída de vídeo / monitor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DisplayNode {
-    /// Nome da saída no xrandr (ex: "eDP-1", "HDMI-1", "DP-1")
+
     pub name: String,
-    /// Se o conector possui um cabo de monitor plugado
+
     pub is_connected: bool,
-    /// Se este monitor é a saída primária
+
     pub is_primary: bool,
-    /// Se a saída está ativa e renderizando imagem
+
     pub is_active: bool,
-    /// Resolução e taxa de atualização atual
+
     pub current_mode: Option<DisplayMode>,
-    /// Lista de resoluções suportadas
+
     pub supported_modes: Vec<DisplayMode>,
-    /// Posição X no canvas virtual
+
     pub pos_x: i32,
-    /// Posição Y no canvas virtual
+
     pub pos_y: i32,
-    /// Rotação atual ("normal", "left", "right", "inverted")
+
     pub rotation: String,
-    /// Se é tela interna do notebook (eDP, LVDS, DSI)
+
     pub is_internal: bool,
 }
 
@@ -112,16 +105,15 @@ impl DisplayNode {
     }
 }
 
-/// Snapshot consolidado das telas do sistema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DisplaySnapshot {
-    /// Lista de todas as saídas de vídeo detectadas
+
     pub displays: Vec<DisplayNode>,
-    /// Nome do monitor primário
+
     pub primary_name: Option<String>,
-    /// Quantidade de monitores conectados fisicamente
+
     pub connected_count: usize,
-    /// Layout inferido atual
+
     pub current_layout: Option<DisplayLayoutMode>,
     pub server_type: String,
 }
@@ -140,7 +132,6 @@ impl DisplaySnapshot {
     }
 }
 
-/// Task assíncrona Tokio para monitoramento e controle de monitores.
 pub async fn run(
     poll_interval_ms: u64,
     tx: EventTx,
@@ -154,29 +145,27 @@ pub async fn run(
         tokio::select! {
             _ = interval.tick() => {
                 if let Ok(snap) = fetch_display_snapshot().await {
-                    // Verificação de Hotplug de Monitores
+
                     let current_connected: Vec<String> = snap.displays.iter()
                         .filter(|d| d.is_connected)
                         .map(|d| d.name.clone())
                         .collect();
 
                     if !is_first_run {
-                        // Detecta monitores recém-conectados
+
                         for name in &current_connected {
                             if !last_connected_names.contains(name) {
-                                // Novo monitor conectado!
+
                                 let _ = tx.send(AppEvent::Toast(Toast::success(format!(
                                     "Monitor {name} conectado. Ativando modo Expandir..."
                                 ))));
 
-                                // Regra de Ouro: Auto-Expandir automaticamente!
                                 if let (Some(internal), Some(external)) = (snap.internal_display(), snap.external_display()) {
                                     let _ = apply_layout(DisplayLayoutMode::ExtendRight, &internal.name, &external.name, &snap.server_type).await;
                                 }
                             }
                         }
 
-                        // Detecta monitores desconectados
                         for name in &last_connected_names {
                             if !current_connected.contains(name) {
                                 let _ = tx.send(AppEvent::Toast(Toast::info(format!(
@@ -282,7 +271,6 @@ pub async fn run(
     }
 }
 
-/// Extrai o snapshot de telas através do `xrandr --query`.
 pub async fn fetch_display_snapshot() -> anyhow::Result<DisplaySnapshot> {
     let wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
         || std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland";
@@ -323,7 +311,6 @@ pub async fn fetch_display_snapshot() -> anyhow::Result<DisplaySnapshot> {
     Ok(snap)
 }
 
-/// Parser puro da saída de `xrandr --query`.
 pub fn parse_xrandr_query(output: &str) -> anyhow::Result<DisplaySnapshot> {
     let mut displays = Vec::new();
     let mut current_display: Option<DisplayNode> = None;
@@ -335,7 +322,6 @@ pub fn parse_xrandr_query(output: &str) -> anyhow::Result<DisplaySnapshot> {
             continue;
         }
 
-        // Nova linha de saída: ex: "eDP-1 connected primary 1366x768+0+0 ..." ou "HDMI-1 connected (normal..."
         if !line.starts_with("   ") && !line.starts_with('\t') && (line.contains("connected") || line.contains("disconnected")) {
             if let Some(d) = current_display.take() {
                 if d.is_primary {
@@ -348,7 +334,7 @@ pub fn parse_xrandr_query(output: &str) -> anyhow::Result<DisplaySnapshot> {
                 current_display = Some(node);
             }
         } else if let Some(d) = &mut current_display {
-            // Linha de modo de resolução (ex: "   1920x1080     60.00*+  59.94")
+
             if let Some(mode) = parse_display_mode_line(line) {
                 if mode.is_current {
                     d.current_mode = Some(mode.clone());
@@ -393,7 +379,6 @@ fn parse_display_header_line(line: &str) -> Option<DisplayNode> {
     let mut is_active = false;
     let mut rotation = "normal".to_string();
 
-    // Extrai geometria (ex: "1366x768+0+0")
     for token in &tokens[2..] {
         if token.contains('x') && token.contains('+') {
             if let Some((_, pos_part)) = token.split_once('+') {
@@ -493,7 +478,6 @@ fn infer_layout(displays: &[DisplayNode]) -> Option<DisplayLayoutMode> {
     }
 }
 
-/// Aplica um layout de monitores usando `xrandr`.
 async fn run_cmd(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
     let out = tokio::process::Command::new(cmd).args(args).output().await?;
     if !out.status.success() {
@@ -694,7 +678,7 @@ pub fn parse_hyprctl_monitors(output: &str) -> anyhow::Result<DisplaySnapshot> {
                             let w: u32 = w_str.parse().unwrap_or(0);
                             let h: u32 = h_str.parse().unwrap_or(0);
                             let rate: f32 = rate_str.parse().unwrap_or(60.0);
-                            
+
                             if !d.supported_modes.iter().any(|m| m.width == w && m.height == h && (m.rate - rate).abs() < 0.1) {
                                 d.supported_modes.push(DisplayMode {
                                     width: w,

@@ -1,7 +1,3 @@
-//! Estado global do Assistente de Sistema e roteamento de [`Action`]/[`AppEvent`].
-//!
-//! `App` é a única fonte da verdade consumida pelo render. A UI é uma função
-//! pura de `&App`.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -15,7 +11,6 @@ use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
 use crate::ui::file_picker::{self, FileEntry};
 
-/// Sistemas de arquivos ofertados pelo modal de formatação (Épico G).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsChoice {
     Vfat,
@@ -34,7 +29,6 @@ impl FsChoice {
         FsChoice::Btrfs,
     ];
 
-    /// Valor de `type` esperado por `Block.Format` do UDisks2.
     pub fn udisks_type(self) -> &'static str {
         match self {
             FsChoice::Vfat => "vfat",
@@ -56,7 +50,6 @@ impl FsChoice {
     }
 }
 
-/// Campo com foco no modal de formatação.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatField {
     Fs,
@@ -64,7 +57,6 @@ pub enum FormatField {
     Confirm,
 }
 
-/// Estado do modal de formatação (Épico G).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatModalState {
     pub device_id: String,
@@ -74,7 +66,6 @@ pub struct FormatModalState {
     pub field: FormatField,
 }
 
-/// Máquina de estados do wizard do ISO Flasher (Épico H, seção 4.1 do plano).
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlasherStage {
     SelectIso {
@@ -103,7 +94,6 @@ pub enum FlasherStage {
     },
 }
 
-/// Estado do modal do ISO Flasher (Épico H).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlasherModalState {
     pub device_id: String,
@@ -115,11 +105,6 @@ pub struct FlasherModalState {
     pub stage: FlasherStage,
 }
 
-/// Para onde o arquivo escolhido no seletor (Yazi-style) deve ser
-/// encaminhado — carrega os dados necessários para reconstruir o modal de
-/// origem (Flasher ou gerenciador de ISOs multi-boot) sem precisar manter uma
-/// pilha de "modal anterior": ao escolher o arquivo, `App` reconstrói o modal
-/// alvo diretamente a partir destes campos.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilePickerPurpose {
     FlasherIso {
@@ -134,23 +119,20 @@ pub enum FilePickerPurpose {
     },
 }
 
-/// Resultado de confirmar a seleção (`Enter`/`l`/`→`) no seletor de arquivos.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilePickerOutcome {
-    /// Navegação pura (entrou num diretório, ou nada aconteceu).
+
     None,
-    /// Arquivo com extensão reconhecida (`.iso`/`.img`/`.vhd`) escolhido.
+
     Picked(PathBuf),
-    /// Arquivo com extensão não suportada — permanece no seletor com erro.
+
     Unsupported,
 }
 
-/// Estado do seletor de arquivos estilo Yazi (ver `ui::file_picker`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilePickerState {
     pub cwd: PathBuf,
-    /// Listagem do diretório atual, já ordenada (diretórios primeiro, depois
-    /// arquivos, alfabeticamente sem diferenciar caixa).
+
     pub entries: Vec<FileEntry>,
     pub selected: usize,
     pub error: Option<String>,
@@ -158,8 +140,7 @@ pub struct FilePickerState {
 }
 
 impl FilePickerState {
-    /// Abre o seletor em `start_dir` (ou no diretório temporário do sistema,
-    /// caso `start_dir` não seja um diretório válido).
+
     pub fn open(start_dir: PathBuf, purpose: FilePickerPurpose) -> Self {
         let cwd = if start_dir.is_dir() {
             start_dir
@@ -177,7 +158,6 @@ impl FilePickerState {
         s
     }
 
-    /// Relista o diretório atual, clampeando a seleção ao novo tamanho.
     pub fn reload(&mut self) {
         match file_picker::list_dir(&self.cwd) {
             Ok(entries) => {
@@ -207,7 +187,6 @@ impl FilePickerState {
         }
     }
 
-    /// Sobe para o diretório pai, se houver (sem efeito na raiz `/`).
     pub fn go_up(&mut self) {
         if let Some(parent) = self.cwd.parent() {
             self.cwd = parent.to_path_buf();
@@ -216,8 +195,6 @@ impl FilePickerState {
         }
     }
 
-    /// Salta diretamente para `path` (atalhos `~`/`d`/`M`/`/`). Superfícia um
-    /// erro em vez de entrar num diretório inexistente/ilegível.
     pub fn jump_to(&mut self, path: PathBuf) {
         if path.is_dir() {
             self.cwd = path;
@@ -228,8 +205,6 @@ impl FilePickerState {
         }
     }
 
-    /// Confirma a seleção atual: desce em diretórios, ou "escolhe" arquivos
-    /// com extensão de imagem reconhecida.
     pub fn enter_selected(&mut self) -> FilePickerOutcome {
         let Some(entry) = self.entries.get(self.selected).cloned() else {
             return FilePickerOutcome::None;
@@ -247,7 +222,6 @@ impl FilePickerState {
     }
 }
 
-/// Fase do gerenciador de ISOs multi-boot (tecla `G`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum MultibootIsoManagerStage {
     Loading,
@@ -272,7 +246,6 @@ pub enum MultibootIsoManagerStage {
     },
 }
 
-/// Estado do gerenciador de ISOs multi-boot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultibootIsoManagerState {
     pub device_id: String,
@@ -280,9 +253,6 @@ pub struct MultibootIsoManagerState {
     pub stage: MultibootIsoManagerStage,
 }
 
-/// Estado do Analisador de Espaço em Disco Nativo (tecla `a` na aba
-/// Storage) — navegação estilo `ncdu`/`dua`, independente dos modais em
-/// [`StorageModal`] (drives ainda podem ser montados/ejetados por baixo).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiskAnalyzerState {
     pub current_path: PathBuf,
@@ -291,20 +261,16 @@ pub struct DiskAnalyzerState {
     pub selected: usize,
     pub is_scanning: bool,
     pub error: Option<String>,
-    /// Último item (arquivo/subdiretório) visitado, reportado por
-    /// `AppEvent::StorageAnalyzerProgress` — exibido na linha de status
-    /// enquanto a varredura está em curso.
+
     pub current_scanning_item: Option<String>,
-    /// Contagem de itens já visitados na varredura em curso.
+
     pub files_scanned: usize,
-    /// Frame atual do spinner ASCII de loading, avançado por `App::on_tick`
-    /// enquanto `is_scanning == true`.
+
     pub spinner_frame: usize,
 }
 
 impl DiskAnalyzerState {
-    /// Abre o Analisador em `path`, já marcado como "escaneando" — o
-    /// resultado chega depois via `AppEvent::StorageAnalyzerSnapshot`.
+
     pub fn opening(path: PathBuf) -> Self {
         Self {
             current_path: path,
@@ -330,7 +296,6 @@ impl DiskAnalyzerState {
     }
 }
 
-/// Modal interativo ativo na aba Storage (mutuamente exclusivo).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum StorageModal {
     #[default]
@@ -341,7 +306,6 @@ pub enum StorageModal {
     MultibootIsoManager(MultibootIsoManagerState),
 }
 
-/// Abas do Assistente de Sistema, na ordem da tabbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
@@ -373,7 +337,6 @@ impl Tab {
         Tab::ALL.get(i).copied().unwrap_or(Tab::Overview)
     }
 
-    /// Título traduzido para a tabbar no idioma informado.
     pub fn title_in(self, lang: Language) -> &'static str {
         let m = lang.messages();
         match self {
@@ -386,26 +349,22 @@ impl Tab {
         }
     }
 
-    /// Título curto para a tabbar (fallback/padrão).
     pub fn title(self) -> &'static str {
         self.title_in(Language::default())
     }
 }
 
-/// Fase de apresentação: splash animada antes do dashboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Splash,
     Running,
 }
 
-/// Estado de um serviço de backend para exibição na UI.
 #[derive(Debug, Clone, Default)]
 pub struct ServiceStatus {
     pub degraded: Option<String>,
 }
 
-/// Estado do modal nativo (senha mascarada com `•`) de autenticação sudo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SudoPromptState {
     pub label: String,
@@ -413,7 +372,6 @@ pub struct SudoPromptState {
     pub error: Option<String>,
 }
 
-/// Estado do modal de senha Wi-Fi (WPA2/WPA3 PSK).
 #[derive(Debug, Clone, PartialEq)]
 pub struct WifiPasswordPromptState {
     pub ap_id: String,
@@ -422,66 +380,55 @@ pub struct WifiPasswordPromptState {
     pub error: Option<String>,
 }
 
-/// Estado global do aplicativo.
 pub struct App {
     pub config: Config,
-    /// Idioma ativo resolvido da interface.
+
     pub lang: Language,
     pub should_quit: bool,
     pub phase: Phase,
     pub active: Tab,
     pub show_help: bool,
-    /// Modal interativo de configurações (alternado pela tecla `c`/`C`).
+
     pub show_config: bool,
-    /// Índice da linha selecionada no modal de configurações (0..5).
+
     pub config_cursor: usize,
-    /// Overview em modo detalhado (alternado pela tecla `.`).
+
     pub detailed_overview: bool,
 
-    /// Índice selecionado por aba (para listas navegáveis).
     pub selection: [usize; 6],
 
-    /// Último snapshot de sistema.
     pub system: Option<SystemSnapshot>,
 
-    /// Último snapshot da árvore de discos/partições (Módulo 4).
     pub storage: Option<StorageSnapshot>,
-    /// Índice do drive selecionado na lista da aba Storage.
+
     pub storage_selected: usize,
-    /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
+
     pub storage_modal: StorageModal,
-    /// Estado do Analisador de Espaço em Disco Nativo (tecla `a`), quando
-    /// aberto — independente de `storage_modal`.
+
     pub storage_analyzer: Option<DiskAnalyzerState>,
-    /// Modal nativo de senha de sudo.
+
     pub sudo_prompt: Option<SudoPromptState>,
     sudo_respond: Option<tokio::sync::oneshot::Sender<Option<String>>>,
 
-    /// Estado do Wi-Fi e rede (Módulo 2).
     pub network: Option<Box<crate::backend::network::NetworkSnapshot>>,
     pub network_selected: usize,
     pub network_scanning: bool,
     pub wifi_prompt: Option<WifiPasswordPromptState>,
 
-    /// Estado do Bluetooth e dispositivos (Módulo 3).
     pub bluetooth: Option<Box<crate::backend::bluetooth::BluetoothSnapshot>>,
     pub bluetooth_selected: usize,
     pub bluetooth_scanning: bool,
 
-    /// Estado do Mixer de Áudio e dispositivos (Módulo 5).
     pub audio: Option<Box<crate::backend::audio::AudioSnapshot>>,
     pub audio_selected: usize,
     pub audio_category: usize,
 
-    /// Estado das Telas e Monitores (Módulo 6).
     pub displays: Option<Box<crate::backend::display::DisplaySnapshot>>,
     pub display_selected: usize,
     pub display_res_selected: usize,
 
-    /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
-    /// Toast atual (o mais recente) e quando expira.
     pub toast: Option<(Toast, Instant)>,
 
     started: Instant,
@@ -532,7 +479,6 @@ impl App {
         }
     }
 
-    /// Retorna `true` se a UI precisa de atualização contínua (animações).
     pub fn needs_continuous_tick(&self) -> bool {
         self.phase == Phase::Splash
             || self.active == Tab::Overview
@@ -544,17 +490,15 @@ impl App {
                 .unwrap_or(false)
     }
 
-    /// Milissegundos desde o boot — usado pela animação da splash.
     pub fn elapsed_ms(&self) -> u128 {
         self.started.elapsed().as_millis()
     }
 
-    /// Chamado a cada frame: gerencia transições temporais.
     pub fn on_tick(&mut self) {
         if self.phase == Phase::Splash && self.elapsed_ms() as u64 >= self.config.splash.min_ms {
             self.phase = Phase::Running;
         }
-        // Expira toast após 4s.
+
         if let Some((_, at)) = &self.toast {
             if at.elapsed().as_secs() >= 4 {
                 self.toast = None;
@@ -567,11 +511,6 @@ impl App {
         }
     }
 
-    /// Consome um evento de backend, mutando o estado. Devolve ações de
-    /// acompanhamento (ex.: relistar ISOs multi-boot após uma cópia/remoção
-    /// concluída) que o chamador deve repassar ao `action_tx` — `handle_event`
-    /// não recebe o `Sender` diretamente para não quebrar a assinatura usada
-    /// em dezenas de testes existentes.
     pub fn handle_event(&mut self, event: AppEvent) -> Vec<Action> {
         let mut follow_up: Vec<Action> = Vec::new();
         match event {
@@ -604,10 +543,10 @@ impl App {
             }
             AppEvent::Network(snap) => {
                 if let Some(old_snap) = self.network.as_ref() {
-                    // Check if we gained an active connection with IP
+
                     let old_has_ip = old_snap.active.is_some() && old_snap.telemetry.ipv4.is_some();
                     let new_has_ip = snap.active.is_some() && snap.telemetry.ipv4.is_some();
-                    
+
                     if !old_has_ip && new_has_ip {
                         if let (Some(active), Some(ip)) = (&snap.active, &snap.telemetry.ipv4) {
                             self.toast = Some((Toast::success(format!("[REDE] Conectado em '{}' (IP: {})", active.ssid, ip)), Instant::now()));
@@ -805,8 +744,7 @@ impl App {
             }
             AppEvent::StorageAnalyzerSnapshot(snap) => {
                 if let Some(state) = &mut self.storage_analyzer {
-                    // Descarta respostas de uma varredura já obsoleta (o
-                    // usuário navegou para outro diretório antes dela chegar).
+
                     if state.current_path == snap.current_path {
                         state.total_bytes = snap.total_bytes;
                         state.items = snap.items;
@@ -840,7 +778,6 @@ impl App {
         follow_up
     }
 
-    /// Navega para o campo anterior no modal de configuração.
     pub fn config_prev_field(&mut self) {
         self.config_cursor = if self.config_cursor == 0 {
             6
@@ -849,17 +786,14 @@ impl App {
         };
     }
 
-    /// Navega para o próximo campo no modal de configuração.
     pub fn config_next_field(&mut self) {
         self.config_cursor = (self.config_cursor + 1) % 7;
     }
 
-    /// Cicla o valor da opção selecionada para a esquerda/anterior.
     pub fn config_prev_value(&mut self) {
         self.cycle_config_value(false);
     }
 
-    /// Cicla o valor da opção selecionada para a direita/próximo.
     pub fn config_next_value(&mut self) {
         self.cycle_config_value(true);
     }
@@ -867,7 +801,7 @@ impl App {
     fn cycle_config_value(&mut self, forward: bool) {
         match self.config_cursor {
             0 => {
-                // Language: ["auto", "pt-BR", "en-US", "es-ES"]
+
                 let options = ["auto", "pt-BR", "en-US", "es-ES"];
                 let cur = options
                     .iter()
@@ -882,7 +816,7 @@ impl App {
                 self.lang = self.config.ui.resolved_language();
             }
             1 => {
-                // Theme: ["hal", "catppuccin", "tokyo-night", "nord", "gruvbox", "cyberpunk", "dracula", "mono"]
+
                 let options = [
                     "hal",
                     "catppuccin",
@@ -905,7 +839,7 @@ impl App {
                 self.config.theme.name = options[next].to_string();
             }
             2 => {
-                // Logo: ["auto", "main", "medium", "compact", "none"]
+
                 let options = ["auto", "main", "medium", "compact", "none"];
                 let cur = options
                     .iter()
@@ -919,11 +853,11 @@ impl App {
                 self.config.overview.ascii = options[next].to_string();
             }
             3 => {
-                // Icons: [true, false]
+
                 self.config.ui.icons = !self.config.ui.icons;
             }
             4 => {
-                // FPS / frame_ms: [33 (30fps), 16 (60fps), 66 (15fps)]
+
                 let options = [33u64, 16, 66];
                 let cur = options
                     .iter()
@@ -937,11 +871,11 @@ impl App {
                 self.config.ui.frame_ms = options[next];
             }
             5 => {
-                // Splash: [true, false]
+
                 self.config.splash.enabled = !self.config.splash.enabled;
             }
             6 => {
-                // Polling profile: [1500 (Balanced), 750 (Fast/Performance), 3000 (Eco/Battery)]
+
                 let options = [1500u64, 750, 3000];
                 let cur = options
                     .iter()
@@ -964,9 +898,6 @@ impl App {
         }
     }
 
-    /// Índice do drive atualmente selecionado na lista da aba Storage, já
-    /// clampeado ao tamanho atual (evita índice fora dos limites após um
-    /// refresh que encolheu a lista de drives).
     pub fn storage_drive_index(&self) -> Option<usize> {
         let snap = self.storage.as_ref()?;
         if snap.drives.is_empty() {
@@ -975,11 +906,6 @@ impl App {
         Some(self.storage_selected.min(snap.drives.len() - 1))
     }
 
-    /// Drive selecionado e sua partição "primária" (ver
-    /// [`crate::backend::storage::primary_partition`]) na aba Storage — a
-    /// visão simplificada de um item por drive não expõe mais navegação por
-    /// partição individual; ações como montar/desmontar e multi-boot sempre
-    /// operam sobre a partição primária resolvida automaticamente.
     pub fn storage_selection(&self) -> Option<(&DriveInfo, Option<&PartitionInfo>)> {
         let snap = self.storage.as_ref()?;
         let idx = self.storage_drive_index()?;
@@ -987,8 +913,6 @@ impl App {
         Some((drive, primary_partition(drive)))
     }
 
-    /// Tecla `m`: monta a partição selecionada, ou a desmonta se já montada.
-    /// Sem efeito sobre a linha de um drive (sem partição selecionada).
     fn storage_mount_toggle(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some((_, Some(partition))) = self.storage_selection() else {
             return;
@@ -1001,8 +925,6 @@ impl App {
         let _ = action_tx.send(action);
     }
 
-    /// Tecla `e`: ejeta o drive selecionado (ou o drive-pai de uma partição
-    /// selecionada), com a trava de segurança como primeira camada de defesa.
     fn storage_eject_selected(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some((drive, _)) = self.storage_selection() else {
             return;
@@ -1014,22 +936,14 @@ impl App {
         let _ = action_tx.send(Action::StorageEject(drive.id.clone()));
     }
 
-    /// `true` quando um modal de storage (formatação, flasher ou gerenciador
-    /// aberto — usado para desviar a navegação/teclado da aba.
     pub fn storage_modal_open(&self) -> bool {
         !matches!(self.storage_modal, StorageModal::None)
     }
 
-    /// `true` quando o modal nativo de senha de sudo está aberto — tem
-    /// prioridade máxima no roteamento de teclado (`InputStream::next`).
     pub fn sudo_prompt_open(&self) -> bool {
         self.sudo_prompt.is_some()
     }
 
-    /// Abre o modal nativo de senha de sudo a partir de uma solicitação do
-    /// backend de Storage, guardando o canal de resposta para ser respondido
-    /// diretamente ao confirmar (`Enter`) ou cancelar (`Esc`) — ver
-    /// [`SudoPromptState`] e `crate::events::SudoPasswordRequest`.
     pub fn open_sudo_prompt(&mut self, req: crate::events::SudoPasswordRequest) {
         self.sudo_prompt = Some(SudoPromptState {
             label: req.label,
@@ -1039,9 +953,6 @@ impl App {
         self.sudo_respond = Some(req.respond);
     }
 
-    /// Roteia uma `Action` para o modal nativo de senha de sudo (digitação
-    /// mascarada, confirmação e cancelamento). Chamado com prioridade máxima
-    /// por `dispatch`, antes de qualquer outro modal.
     fn dispatch_sudo_prompt(&mut self, action: Action) {
         let Some(state) = &mut self.sudo_prompt else {
             return;
@@ -1064,7 +975,7 @@ impl App {
                 }
             }
             Action::ToggleConfig => {
-                // Esc: cancela a operação privilegiada em curso.
+
                 self.sudo_prompt = None;
                 if let Some(respond) = self.sudo_respond.take() {
                     let _ = respond.send(None);
@@ -1074,9 +985,6 @@ impl App {
         }
     }
 
-    /// Ícone de cadeado (trava de segurança) — Nerd Font quando `icons =
-    /// true`, ou o token ASCII `[LOCKED]` caso contrário (Zero Emojis
-    /// Policy: nenhum emoji é usado em toda a base de código).
     fn lock_tag(&self) -> String {
         if self.config.ui.icons {
             "\u{f023} ".to_string()
@@ -1085,8 +993,6 @@ impl App {
         }
     }
 
-    /// Emite o toast de recusa por trava de segurança (disco de sistema),
-    /// prefixado pelo ícone/tag de cadeado.
     fn toast_system_locked(&mut self) {
         let msg = format!(
             "{}{}",
@@ -1100,9 +1006,6 @@ impl App {
         self.wifi_prompt.is_some()
     }
 
-    /// `true` quando o Analisador de Espaço em Disco Nativo está aberto —
-    /// usado por `InputStream::next` para rotear o teclado, com a mesma
-    /// prioridade de `storage_modal_open`.
     pub fn storage_analyzer_open(&self) -> bool {
         self.storage_analyzer.is_some()
     }
@@ -1133,15 +1036,13 @@ impl App {
                 });
             }
             Action::ToggleConfig => {
-                // Esc: cancela o modal
+
                 self.wifi_prompt = None;
             }
             _ => {}
         }
     }
 
-    /// `true` quando o campo com foco no modal de storage ou wifi é um campo de
-    /// texto livre.
     pub fn text_input_active(&self) -> bool {
         if self.sudo_prompt.is_some() || self.wifi_prompt.is_some() {
             return true;
@@ -1158,10 +1059,6 @@ impl App {
         }
     }
 
-    /// Tecla `f`: abre o modal de formatação para o drive selecionado (na
-    /// visão simplificada de um item por drive, formatar sempre opera sobre
-    /// o disco inteiro, não numa partição isolada). Recusa discos de sistema
-    /// (camada 1 da trava).
     fn storage_format_open(&mut self) {
         let Some((drive, _)) = self.storage_selection() else {
             return;
@@ -1180,11 +1077,6 @@ impl App {
         });
     }
 
-    /// Tecla `g`/`b`: abre diretamente o seletor de arquivos estilo Yazi para
-    /// escolher a ISO do drive selecionado. Recusa discos de sistema (camada
-    /// 1 da trava). Ao escolher um arquivo `.iso`/`.img`/`.vhd` (`Enter`), o
-    /// seletor reconstrói o modal do Flasher já no estágio de confirmação
-    /// (ver `file_picker_enter`).
     fn storage_flasher_open(&mut self) {
         let Some((drive, _)) = self.storage_selection() else {
             return;
@@ -1205,9 +1097,6 @@ impl App {
         ));
     }
 
-    /// Tecla `a`: abre o Analisador de Espaço em Disco Nativo no ponto de
-    /// montagem da partição primária do drive selecionado, ou em `$HOME`
-    /// quando o drive não tiver um ponto de montagem resolvível.
     fn storage_analyzer_open_selected(&mut self, action_tx: &broadcast::Sender<Action>) {
         let start = self
             .storage_selection()
@@ -1219,7 +1108,6 @@ impl App {
         let _ = action_tx.send(Action::StorageAnalyzerScan(start));
     }
 
-    /// Tecla `Enter`/`l`: desce no diretório selecionado da listagem atual.
     fn storage_analyzer_drill_down(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some(state) = &self.storage_analyzer else {
             return;
@@ -1243,7 +1131,6 @@ impl App {
         let _ = action_tx.send(Action::StorageAnalyzerScan(new_path));
     }
 
-    /// Tecla `Backspace`/`h`: sobe para o diretório pai (sem efeito na raiz).
     fn storage_analyzer_go_up(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some(state) = &self.storage_analyzer else {
             return;
@@ -1263,7 +1150,6 @@ impl App {
         let _ = action_tx.send(Action::StorageAnalyzerScan(parent));
     }
 
-    /// Tecla `r`: re-escaneia o diretório atual do Analisador.
     fn storage_analyzer_rescan(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some(state) = &mut self.storage_analyzer else {
             return;
@@ -1276,8 +1162,6 @@ impl App {
         let _ = action_tx.send(Action::StorageAnalyzerScan(path));
     }
 
-    /// Roteia uma `Action` para o Analisador de Espaço em Disco quando
-    /// aberto — navegação, drill-down/up, re-escaneio e fechamento.
     fn dispatch_storage_analyzer(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
         match action {
             Action::Quit => self.should_quit = true,
@@ -1301,10 +1185,6 @@ impl App {
         }
     }
 
-    /// Tecla `B`: prepara (não-destrutivamente) a partição primária do drive
-    /// selecionado para o multi-boot leve embarcado. Recusa discos de
-    /// sistema (camada 1 da trava); exige uma partição primária resolvível
-    /// (o backend revalida e recusa se ela não estiver formatada FAT32).
     fn storage_multiboot_prepare_open(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some((drive, partition)) = self.storage_selection() else {
             return;
@@ -1323,8 +1203,6 @@ impl App {
         });
     }
 
-    /// Tecla `G`: abre o gerenciador de ISOs multi-boot (`<mount>/ISOs/`) da
-    /// partição primária do drive selecionado.
     fn storage_multiboot_iso_manager_open(&mut self, action_tx: &broadcast::Sender<Action>) {
         let Some((drive, partition)) = self.storage_selection() else {
             return;
@@ -1344,9 +1222,6 @@ impl App {
         let _ = action_tx.send(Action::StorageMultibootListIsos { device_id });
     }
 
-    /// Roteia uma `Action` para o modal de storage ativo (formatação,
-    /// flasher ou gerenciador de ISOs multi-boot), retornando o controle ao
-    /// fechar (`Esc`/conclusão).
     fn dispatch_storage_modal(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
         let modal = std::mem::take(&mut self.storage_modal);
         self.storage_modal = match modal {
@@ -1360,16 +1235,12 @@ impl App {
         };
     }
 
-    /// Diretório inicial do seletor de arquivos: `$HOME`, ou o diretório de
-    /// trabalho atual quando `$HOME` não puder ser resolvido.
     fn home_dir() -> PathBuf {
         directories::UserDirs::new()
             .map(|u| u.home_dir().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
     }
 
-    /// Atalho de salto `d`/`D`: pasta de downloads do usuário, com fallback
-    /// para `$HOME` quando não detectável.
     fn downloads_dir() -> PathBuf {
         directories::UserDirs::new()
             .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
@@ -1384,8 +1255,7 @@ impl App {
     ) -> StorageModal {
         match action {
             Action::Quit => self.should_quit = true,
-            // `Esc` é mapeado globalmente para `ToggleConfig`; dentro de um
-            // modal de storage, reaproveitamos o sinal para fechar o modal.
+
             Action::ToggleConfig => return StorageModal::None,
             Action::Up => {
                 s.field = match s.field {
@@ -1401,8 +1271,7 @@ impl App {
                     FormatField::Confirm => FormatField::Confirm,
                 };
             }
-            // `Tab`/`Shift-Tab` também alternam o foco entre os três campos,
-            // ciclando (ao contrário de `↑`/`↓`, que travam nas pontas).
+
             Action::NextTab => {
                 s.field = match s.field {
                     FormatField::Fs => FormatField::Label,
@@ -1439,9 +1308,7 @@ impl App {
                     s.label.pop();
                 }
             }
-            // `Enter` dispara a formatação imediatamente, em qualquer campo
-            // com foco (seletor de FS, rótulo ou botão Formatar) — não é
-            // mais necessário navegar até o botão de confirmação primeiro.
+
             Action::Enter => {
                 let fs = FsChoice::ALL[s.fs_idx];
                 let label = if s.label.trim().is_empty() {
@@ -1481,7 +1348,7 @@ impl App {
             self.should_quit = true;
             return StorageModal::Flasher(s);
         }
-        // `Esc`: cancela uma gravação em curso (se houver) e fecha o modal.
+
         if matches!(action, Action::ToggleConfig) {
             if matches!(s.stage, FlasherStage::Flashing { .. }) {
                 let _ = action_tx.send(Action::StorageFlashCancel {
@@ -1494,8 +1361,7 @@ impl App {
         let m = self.lang.messages();
         match &mut s.stage {
             FlasherStage::SelectIso { input, error } => match action {
-                // Tecla dedicada (F3, ver `events/input.rs`): abre o seletor
-                // de arquivos estilo Yazi em vez de digitar o caminho.
+
                 Action::StorageModalOpenPicker => {
                     return StorageModal::FilePicker(FilePickerState::open(
                         Self::home_dir(),
@@ -1527,7 +1393,7 @@ impl App {
                 },
                 _ => {}
             },
-            // Aguarda `AppEvent::StorageChecksumProgress`/`Done`; sem input direto.
+
             FlasherStage::Checksumming { .. } => {}
             FlasherStage::Ready { sha256 } => match action {
                 Action::StorageModalChar('c') if sha256.is_none() => {
@@ -1570,7 +1436,7 @@ impl App {
                 }
                 _ => {}
             },
-            // Progresso chega via `AppEvent::StorageFlashProgress`/`Done`.
+
             FlasherStage::Flashing { .. } => {}
             FlasherStage::Done { .. } => {
                 if matches!(action, Action::Enter) {
@@ -1581,10 +1447,6 @@ impl App {
         StorageModal::Flasher(s)
     }
 
-    /// Roteia navegação/seleção dentro do seletor de arquivos estilo Yazi.
-    /// `h/j/k/l` chegam como `Action::StorageModalChar` (ver generalização em
-    /// `events/input.rs`); as setas continuam chegando como `Action::Up/Down/
-    /// Left/Right` por usarem `KeyCode` dedicado — ambos são aceitos.
     fn dispatch_file_picker_modal(
         &mut self,
         mut s: FilePickerState,
@@ -1595,7 +1457,7 @@ impl App {
             self.should_quit = true;
             return StorageModal::FilePicker(s);
         }
-        // `Esc`: cancela a seleção e fecha o seletor sem escolher nada.
+
         if matches!(action, Action::ToggleConfig) {
             return StorageModal::None;
         }
@@ -1609,8 +1471,7 @@ impl App {
             Action::Right | Action::StorageModalChar('l') | Action::Enter => {
                 return self.file_picker_enter(s, action_tx);
             }
-            // Atalhos de salto rápido: `~` casa, `d`/`D` downloads, `M`
-            // pasta de mídia removível, `/` raiz do filesystem.
+
             Action::StorageModalChar('~') => s.jump_to(Self::home_dir()),
             Action::StorageModalChar('d') | Action::StorageModalChar('D') => {
                 s.jump_to(Self::downloads_dir())
@@ -1622,10 +1483,6 @@ impl App {
         StorageModal::FilePicker(s)
     }
 
-    /// Confirma a seleção do seletor de arquivos: navega para dentro de
-    /// diretórios, ou — ao escolher um arquivo de imagem válido — reconstrói
-    /// o modal de origem (Flasher ou gerenciador de ISOs multi-boot) já com o
-    /// caminho escolhido.
     fn file_picker_enter(
         &mut self,
         mut s: FilePickerState,
@@ -1700,9 +1557,6 @@ impl App {
         }
     }
 
-    /// Roteia ações dentro do gerenciador de ISOs multi-boot
-    /// (tecla `i`/`I`): listar, adicionar (via seletor de arquivos) e remover
-    /// (com confirmação) ISOs na partição de dados.
     fn dispatch_multiboot_iso_manager_modal(
         &mut self,
         mut s: MultibootIsoManagerState,
@@ -1790,7 +1644,6 @@ impl App {
         StorageModal::MultibootIsoManager(s)
     }
 
-    /// Salva a configuração atual em disco e notifica via toast.
     pub fn save_config(&mut self) {
         match self.config.save() {
             Ok(path) => {
@@ -1807,43 +1660,32 @@ impl App {
         }
     }
 
-    /// Traduz uma ação de input em mutação de estado e/ou broadcast a backends.
     pub fn dispatch(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
-        // Durante a splash, qualquer tecla pula para o dashboard.
+
         if self.phase == Phase::Splash {
             self.phase = Phase::Running;
         }
 
-        // O modal nativo de senha de sudo tem prioridade máxima: captura
-        // toda a digitação antes de qualquer outro modal/roteamento, mesmo
-        // enquanto um modal de storage (ex.: gravação de ISO, com seu
-        // log de progresso) permanece aberto por trás dele.
         if self.sudo_prompt_open() {
             self.dispatch_sudo_prompt(action);
             return;
         }
 
-        // Modal de senha de Wi-Fi: captura digitação antes da navegação comum.
         if self.wifi_prompt_open() {
             self.dispatch_wifi_prompt(action, action_tx);
             return;
         }
 
-        // Se um modal de storage (formatação/flasher) estiver aberto, captura
-        // a navegação e o input de texto antes de qualquer outro roteamento.
         if self.storage_modal_open() {
             self.dispatch_storage_modal(action, action_tx);
             return;
         }
 
-        // Se o Analisador de Espaço em Disco estiver aberto, captura
-        // navegação/drill-down antes de qualquer outro roteamento.
         if self.storage_analyzer_open() {
             self.dispatch_storage_analyzer(action, action_tx);
             return;
         }
 
-        // Se o modal de configurações estiver aberto, captura a navegação e controles.
         if self.show_config {
             match action {
                 Action::Quit => self.should_quit = true,
@@ -2056,10 +1898,10 @@ impl App {
             }
             Action::AudioSelectCategory(cat_idx) => {
                 if cat_idx == 99 {
-                    // `Tab`: ciclo circular de foco 0 -> 1 -> 2 -> 0
+
                     self.audio_category = (self.audio_category + 1) % 3;
                 } else if cat_idx == 98 {
-                    // `Shift+Tab`: ciclo circular reverso 0 -> 2 -> 1 -> 0
+
                     self.audio_category = (self.audio_category + 2) % 3;
                 } else {
                     self.audio_category = cat_idx.min(2);
@@ -2164,18 +2006,15 @@ impl App {
             | Action::StorageMultibootListIsos { .. }
             | Action::StorageMultibootAddIso { .. }
             | Action::StorageMultibootRemoveIso { .. } => {
-                // Já totalmente formadas (com DeviceId/paths resolvidos);
-                // repassa direto ao backend de storage.
+
                 let _ = action_tx.send(action);
             }
-            // Sem modal de storage aberto, não há campo de texto/navegação
-            // para receber estes atalhos; ignora.
+
             Action::StorageModalChar(_)
             | Action::StorageModalBackspace
             | Action::StorageModalDelete
             | Action::StorageModalOpenPicker => {}
-            // Sem o Analisador aberto (já capturado antes, no topo de
-            // `dispatch`), estas intenções não têm alvo; ignora.
+
             Action::StorageAnalyzerDrillDown
             | Action::StorageAnalyzerGoUp
             | Action::StorageAnalyzerRescan

@@ -1,4 +1,3 @@
-//! Camada de render. `draw` é uma função pura de `&App`.
 
 pub mod theme;
 pub mod widgets;
@@ -25,7 +24,6 @@ use crate::app::{App, Phase, Tab};
 use crate::events::ToastLevel;
 use theme::Palette;
 
-/// Ponto de entrada do render.
 pub fn draw(app: &App, f: &mut Frame) {
     let pal = Palette::from_config(&app.config);
 
@@ -35,9 +33,9 @@ pub fn draw(app: &App, f: &mut Frame) {
     }
 
     let chunks = Layout::vertical([
-        Constraint::Length(3), // tabbar
-        Constraint::Min(0),    // conteúdo
-        Constraint::Length(1), // statusline
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
     ])
     .split(f.area());
 
@@ -54,9 +52,7 @@ pub fn draw(app: &App, f: &mut Frame) {
     if app.show_config {
         config_modal::draw(app, &pal, f);
     }
-    // Prioridade máxima de render: o modal nativo de senha de sudo aparece
-    // por cima de qualquer outro modal (ex.: instalação do Ventoy em curso),
-    // em qualquer aba.
+
     if let Some(sudo_prompt) = &app.sudo_prompt {
         storage::draw_sudo_prompt(app, &pal, f, sudo_prompt);
     }
@@ -82,8 +78,7 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 };
                 format!("{} {short}", i + 1)
             } else {
-                // Modo ultra-compacto para celular / telas estreitas:
-                // Exibe o nome apenas na aba ativa e apenas o número nas demais!
+
                 if app.active == *t {
                     let short = match t {
                         Tab::Overview => "Visão",
@@ -102,7 +97,6 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         })
         .collect();
 
-    // Título da janela: apenas HAL-9001 (+ SO/arch quando couber, sem subtítulos).
     let title = if width < 50 {
         " HAL-9001 ".to_string()
     } else {
@@ -152,7 +146,7 @@ fn draw_content(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 }
 
 fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
-    // Toast tem prioridade sobre os hints de atalho.
+
     if let Some((toast, _)) = &app.toast {
         let color = match toast.level {
             ToastLevel::Info => pal.accent,
@@ -214,7 +208,6 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
     );
 }
 
-/// Retângulo centralizado com `pw`/`ph` por cento da área.
 fn centered(pw: u16, ph: u16, area: Rect) -> Rect {
     let v = Layout::vertical([
         Constraint::Percentage((100 - ph) / 2),
@@ -230,8 +223,6 @@ fn centered(pw: u16, ph: u16, area: Rect) -> Rect {
     .split(v[1])[1]
 }
 
-/// Painel padrão para abas cujo backend ainda é um stub (Módulos 2..8).
-/// Mostra o estado do serviço e as ações previstas.
 pub(crate) fn draw_pending(
     app: &App,
     pal: &Palette,
@@ -275,7 +266,6 @@ pub(crate) fn draw_pending(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Bloco padrão de conteúdo com título de aba.
 pub(crate) fn content_block(title: &str, pal: &Palette) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)

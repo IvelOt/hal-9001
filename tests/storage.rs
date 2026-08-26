@@ -1,8 +1,3 @@
-//! Testes do Módulo 4 (Armazenamento/Discos): parsing puro, trava de
-//! segurança `is_system_disk` e render da aba sem pânico. Também cobre os
-//! Épicos G (Formatador) e H (ISO Flasher): máquina de estados dos modais,
-//! cálculo de velocidade/ETA e a invariante de segurança contra discos de
-//! sistema.
 
 use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
@@ -49,14 +44,9 @@ fn partition(mount_points: Vec<&str>, is_swap: bool) -> PartitionInfo {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Trava de segurança `is_system_disk` — invariante inegociável.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn root_mount_is_always_system() {
-    // Mesmo tentando "burlar" via removable=true + bus USB, uma partição
-    // montada em `/` NUNCA pode deixar de ser marcada como sistema.
+
     let d = drive(true, BusType::Usb);
     let p = partition(vec!["/"], false);
     assert!(is_system_disk(&d, &p));
@@ -90,8 +80,7 @@ fn active_swap_partition_is_system() {
 
 #[test]
 fn fixed_internal_drive_is_system_even_without_protected_mount() {
-    // Heurística conservadora: disco interno fixo (não removível, não-USB)
-    // nunca é alvo por padrão, mesmo sem nenhuma partição montada.
+
     let d = drive(false, BusType::Sata);
     let p = partition(vec![], false);
     assert!(is_system_disk(&d, &p));
@@ -110,10 +99,6 @@ fn removable_usb_partition_mounted_elsewhere_is_not_system() {
     let p = partition(vec!["/run/media/user/KINGSTON"], false);
     assert!(!is_system_disk(&d, &p));
 }
-
-// ---------------------------------------------------------------------------
-// Parsers puros
-// ---------------------------------------------------------------------------
 
 #[test]
 fn parse_swaps_extracts_partition_devices_only() {
@@ -142,10 +127,6 @@ fn parse_mounts_extracts_device_and_mountpoint_pairs() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// StorageSnapshot / navegação achatada
-// ---------------------------------------------------------------------------
-
 fn mock_snapshot() -> StorageSnapshot {
     let mut system_drive = drive(false, BusType::Sata);
     system_drive.id = DeviceId("/drives/system".into());
@@ -169,9 +150,7 @@ fn mock_snapshot() -> StorageSnapshot {
 
 #[test]
 fn drive_only_list_has_one_row_per_drive() {
-    // A visão simplificada da aba Storage lista um item por drive físico/
-    // removível — sem navegação por partição individual (ver mock com 2
-    // drives, cada um com 1 partição: a lista deve expor só os 2 drives).
+
     let snap = mock_snapshot();
     assert_eq!(snap.drives.len(), 2);
 }
@@ -186,22 +165,19 @@ fn primary_partition_prefers_mounted_non_system() {
 
 #[test]
 fn system_disk_never_reachable_for_eject_via_app_dispatch() {
-    // Invariante de teste inegociável: um disco com `/` montado nunca pode
-    // ser selecionado como alvo de uma ação destrutiva/de ejeção — o `App`
-    // recusa e emite um toast de erro em vez de despachar `StorageEject`.
+
     let mut cfg = Config::default();
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.active = Tab::Storage;
-    app.storage_selected = 0; // linha do drive de sistema.
+    app.storage_selected = 0;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageEjectSelected, &tx);
 
-    // Nenhuma ação chegou ao backend.
     assert!(rx.try_recv().is_err());
-    // E o usuário foi avisado via toast.
+
     assert!(app.toast.is_some());
 }
 
@@ -212,7 +188,7 @@ fn non_system_drive_ejects_through_dispatch() {
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.active = Tab::Storage;
-    app.storage_selected = 1; // drive USB (não-sistema).
+    app.storage_selected = 1;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageEjectSelected, &tx);
@@ -230,7 +206,7 @@ fn mount_toggle_sends_unmount_when_already_mounted() {
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
     app.active = Tab::Storage;
-    app.storage_selected = 1; // drive USB — partição primária já montada.
+    app.storage_selected = 1;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageMountToggleSelected, &tx);
@@ -247,13 +223,9 @@ fn storage_selection_clamps_to_drive_count_after_shrink() {
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 999; // fora dos limites.
-    assert_eq!(app.storage_drive_index(), Some(1)); // clampeado ao último drive.
+    app.storage_selected = 999;
+    assert_eq!(app.storage_drive_index(), Some(1));
 }
-
-// ---------------------------------------------------------------------------
-// Render sem pânico (degradado e com snapshot populado).
-// ---------------------------------------------------------------------------
 
 #[test]
 fn render_storage_tab_degraded_without_snapshot() {
@@ -305,10 +277,6 @@ fn render_storage_tab_empty_drives_without_panic() {
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 }
 
-// ---------------------------------------------------------------------------
-// Épico G/H: cálculo puro de velocidade/ETA e helpers de snapshot
-// ---------------------------------------------------------------------------
-
 #[test]
 fn compute_speed_eta_reports_zero_when_no_bytes_transferred() {
     let (speed, eta) = compute_speed_eta(0, 1.0, 0, 100);
@@ -318,8 +286,7 @@ fn compute_speed_eta_reports_zero_when_no_bytes_transferred() {
 
 #[test]
 fn compute_speed_eta_computes_rate_and_remaining_time() {
-    // 4 MiB em 1s de janela == 4 MB/s; restam 16 MiB de um total de 20 MiB
-    // escritos até agora (4 MiB) => ETA = 16 / 4 = 4s.
+
     let window_bytes = 4 * 1024 * 1024;
     let total = 20 * 1024 * 1024;
     let written = 4 * 1024 * 1024;
@@ -333,7 +300,7 @@ fn compute_speed_eta_computes_rate_and_remaining_time() {
 
 #[test]
 fn compute_speed_eta_never_divides_by_a_zero_window() {
-    // Janela de tempo "instantânea" (0s) não deve gerar pânico/infinito.
+
     let (speed, _eta) = compute_speed_eta(1024, 0.0, 0, 1024 * 1024);
     assert!(speed.is_finite());
 }
@@ -359,16 +326,9 @@ fn app_with_usb_target(dev_node: &str, size: u64) -> App {
     app.handle_event(AppEvent::Storage(Box::new(usb_target_snapshot(
         dev_node, size,
     ))));
-    app.storage_selected = 0; // única linha: o drive USB.
+    app.storage_selected = 0;
     app
 }
-
-// ---------------------------------------------------------------------------
-// `resolve_block_object_path` — correção do bug D-Bus
-// (org.freedesktop.DBus.Error.UnknownMethod: "No such interface
-// org.freedesktop.UDisks2.Block"): a interface `Block` só existe em
-// caminhos `block_devices/...`, nunca em caminhos `drives/...`.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn resolve_block_object_path_converts_drive_path_to_its_block_device_path() {
@@ -388,9 +348,7 @@ fn resolve_block_object_path_converts_drive_path_to_its_block_device_path() {
     .expect("esperava resolver o bloco raiz do drive");
 
     assert_eq!(resolved, "/org/freedesktop/UDisks2/block_devices/sdz");
-    // Nunca deve devolver o caminho de objeto do próprio Drive: a interface
-    // `Block` não existe lá — chamar `Block.Format` nesse caminho é
-    // exatamente o bug original (UnknownMethod / No such interface).
+
     assert!(resolved.starts_with("/org/freedesktop/UDisks2/block_devices/"));
 }
 
@@ -407,8 +365,6 @@ fn resolve_block_object_path_passes_through_an_already_resolved_block_device_pat
         drives: vec![d],
     };
 
-    // Uma partição já é um `block_device`: deve ser usada diretamente, sem
-    // nenhuma tentativa de "resolução" via drive.
     let resolved = resolve_block_object_path(&snap, &part_id).expect("esperava o próprio caminho");
     assert_eq!(resolved, part_id.0);
 }
@@ -417,7 +373,7 @@ fn resolve_block_object_path_passes_through_an_already_resolved_block_device_pat
 fn resolve_block_object_path_returns_none_for_a_drive_with_unknown_block_path() {
     let mut d = drive(true, BusType::Usb);
     d.id = DeviceId("/org/freedesktop/UDisks2/drives/no_block_known".into());
-    d.block_path = None; // ex.: sysfs incompleto no boot, bloco raiz ainda não visto.
+    d.block_path = None;
     let snap = StorageSnapshot {
         udisks_available: true,
         drives: vec![d],
@@ -434,10 +390,7 @@ fn resolve_block_object_path_returns_none_for_a_drive_with_unknown_block_path() 
 
 #[test]
 fn resolve_block_object_path_never_resolves_a_drive_id_to_itself() {
-    // Invariante central do fix: para QUALQUER drive do snapshot, o caminho
-    // resolvido (quando existe) nunca é o próprio caminho de objeto do
-    // Drive — pois `Block.Format` chamado ali produz exatamente
-    // `UnknownMethod: No such interface org.freedesktop.UDisks2.Block`.
+
     let mut d = drive(true, BusType::Usb);
     d.id = DeviceId("/org/freedesktop/UDisks2/drives/anything".into());
     d.block_path = Some("/org/freedesktop/UDisks2/block_devices/sdq".into());
@@ -449,12 +402,6 @@ fn resolve_block_object_path_never_resolves_a_drive_id_to_itself() {
     let resolved = resolve_block_object_path(&snap, &d.id);
     assert_ne!(resolved.as_deref(), Some(d.id.0.as_str()));
 }
-
-// ---------------------------------------------------------------------------
-// Elevação interativa (pkexec/sudo) — detecção de erro e construção de
-// comando `mkfs.*`, usadas pelos fallbacks de montagem/formatação/gravação
-// sem agente Polkit gráfico ativo na sessão.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn is_permission_denied_error_detects_io_permission_denied() {
@@ -519,11 +466,6 @@ fn mkfs_command_returns_none_for_unmapped_fs_type() {
     assert_eq!(mkfs_command("zfs", "X", "/dev/sdz1"), None);
 }
 
-// ---------------------------------------------------------------------------
-// Elevação via `sudo -S` (senha pelo modal nativo da TUI) — construção da
-// invocação, detecção de senha incorreta e parsing do progresso do `dd`.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn sudo_invocation_uses_dash_n_without_dashes_k_or_s_when_cached() {
     let args = sudo_invocation(true, "mkfs.vfat", &["-F".to_string(), "32".to_string()]);
@@ -565,11 +507,6 @@ fn parse_dd_bytes_copied_ignores_records_in_out_lines() {
     assert_eq!(parse_dd_bytes_copied("25+0 records in"), None);
     assert_eq!(parse_dd_bytes_copied(""), None);
 }
-
-// ---------------------------------------------------------------------------
-// Modal nativo de senha de sudo — abertura, digitação mascarada, confirmação
-// e cancelamento, respondendo diretamente ao oneshot do backend.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn sudo_prompt_open_populates_label_and_retry_error() {
@@ -646,8 +583,7 @@ fn sudo_prompt_takes_priority_over_an_already_open_storage_modal() {
         retry_error: None,
         respond,
     });
-    // Mesmo com o modal de formatação ainda aberto por trás, a digitação vai
-    // para o campo de senha — não para o rótulo do volume do outro modal.
+
     app.dispatch(Action::StorageModalChar('z'), &action_tx);
     app.dispatch(Action::Enter, &action_tx);
 
@@ -659,10 +595,6 @@ fn sudo_prompt_takes_priority_over_an_already_open_storage_modal() {
     assert!(matches!(app.storage_modal, StorageModal::Format(_)));
 }
 
-// ---------------------------------------------------------------------------
-// Épico G — máquina de estados do modal de formatação
-// ---------------------------------------------------------------------------
-
 #[test]
 fn format_open_is_refused_for_system_disk_and_no_modal_opens() {
     let mut cfg = Config::default();
@@ -670,7 +602,7 @@ fn format_open_is_refused_for_system_disk_and_no_modal_opens() {
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 0; // drive de sistema.
+    app.storage_selected = 0;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
@@ -702,11 +634,9 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
 
-    // Vfat (padrão) -> Exfat -> Ext4 avançando com `Right` duas vezes.
     app.dispatch(Action::Right, &tx);
     app.dispatch(Action::Right, &tx);
 
-    // Move para o campo de rótulo, apaga o padrão e digita um novo.
     app.dispatch(Action::Down, &tx);
     for _ in 0.."PENDRIVE".len() {
         app.dispatch(Action::StorageModalBackspace, &tx);
@@ -715,8 +645,6 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
         app.dispatch(Action::StorageModalChar(c), &tx);
     }
 
-    // Um único `Enter`, sem navegar até o botão de confirmação, já dispara a
-    // formatação e fecha o modal (correção do Enter no modal de formatar).
     app.dispatch(Action::Enter, &tx);
 
     assert!(matches!(app.storage_modal, StorageModal::None));
@@ -736,9 +664,7 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
 
 #[test]
 fn format_modal_enter_on_fs_field_formats_immediately() {
-    // `Enter` deve disparar a formatação imediatamente para o filesystem e
-    // label selecionados, não importa qual campo esteja com foco no momento
-    // (aqui: logo na abertura, com foco ainda no seletor de FS).
+
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
@@ -763,7 +689,7 @@ fn format_modal_enter_on_fs_field_formats_immediately() {
         }
         other => panic!("esperava StorageFormat, obteve {other:?}"),
     }
-    // Toast de execução exibido ao disparar a formatação.
+
     assert!(app.toast.is_some());
 }
 
@@ -779,14 +705,14 @@ fn format_modal_tab_and_shift_tab_cycle_field_focus() {
     };
 
     assert_eq!(field_of(&app), FormatField::Fs);
-    app.dispatch(Action::NextTab, &tx); // Tab
+    app.dispatch(Action::NextTab, &tx);
     assert_eq!(field_of(&app), FormatField::Label);
     app.dispatch(Action::NextTab, &tx);
     assert_eq!(field_of(&app), FormatField::Confirm);
-    app.dispatch(Action::NextTab, &tx); // cicla de volta
+    app.dispatch(Action::NextTab, &tx);
     assert_eq!(field_of(&app), FormatField::Fs);
 
-    app.dispatch(Action::PrevTab, &tx); // Shift-Tab: volta ciclando
+    app.dispatch(Action::PrevTab, &tx);
     assert_eq!(field_of(&app), FormatField::Confirm);
 }
 
@@ -797,16 +723,11 @@ fn format_modal_esc_closes_without_sending_action() {
     app.dispatch(Action::StorageFormatOpen, &tx);
     assert!(app.storage_modal_open());
 
-    // `Esc` chega ao `App` como `Action::ToggleConfig` (ver `events/input.rs`).
     app.dispatch(Action::ToggleConfig, &tx);
 
     assert!(matches!(app.storage_modal, StorageModal::None));
     assert!(rx.try_recv().is_err());
 }
-
-// ---------------------------------------------------------------------------
-// Épico H — máquina de estados do wizard do ISO Flasher
-// ---------------------------------------------------------------------------
 
 #[test]
 fn flasher_open_is_refused_for_system_disk() {
@@ -815,7 +736,7 @@ fn flasher_open_is_refused_for_system_disk() {
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 0; // drive de sistema.
+    app.storage_selected = 0;
 
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFlasherOpen, &tx);
@@ -830,10 +751,6 @@ fn type_path(app: &mut App, tx: &tokio::sync::broadcast::Sender<Action>, path: &
     }
 }
 
-/// Abre o wizard do Flasher (tecla `g`/`b`) — que agora abre diretamente o
-/// seletor de arquivos estilo Yazi em vez do antigo estágio de texto
-/// `SelectIso` — e escolhe `iso_path` diretamente na listagem do diretório,
-/// como um usuário navegando com as setas/`hjkl` e confirmando com `Enter`.
 fn open_flasher_and_pick_iso(
     app: &mut App,
     tx: &tokio::sync::broadcast::Sender<Action>,
@@ -860,8 +777,6 @@ fn flasher_rejects_iso_larger_than_target_capacity() {
     let iso = tempfile::Builder::new().suffix(".iso").tempfile().unwrap();
     std::fs::write(iso.path(), vec![0u8; 4096]).unwrap();
 
-    // Alvo com capacidade menor que o arquivo (4096 bytes) força o erro de
-    // tamanho antes mesmo de qualquer I/O de gravação.
     let mut app = app_with_usb_target("/dev/sdz", 1024);
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
     open_flasher_and_pick_iso(&mut app, &tx, iso.path());
@@ -884,16 +799,15 @@ fn flasher_full_wizard_reaches_flashing_only_after_typed_confirmation_matches() 
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    open_flasher_and_pick_iso(&mut app, &tx, iso.path()); // seletor -> Ready
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path());
     match &app.storage_modal {
         StorageModal::Flasher(s) => assert!(matches!(s.stage, FlasherStage::Ready { .. })),
         other => panic!("esperava Ready, obteve {other:?}"),
     }
 
-    app.dispatch(Action::Enter, &tx); // Ready -> Confirm1
-    app.dispatch(Action::Enter, &tx); // Confirm1 -> Confirm2
+    app.dispatch(Action::Enter, &tx);
+    app.dispatch(Action::Enter, &tx);
 
-    // Confirmação digitada incorreta: NÃO deve iniciar a gravação.
     type_path(&mut app, &tx, "/dev/wrong");
     app.dispatch(Action::Enter, &tx);
     assert!(rx.try_recv().is_err(), "gravação não deveria ter iniciado");
@@ -902,7 +816,6 @@ fn flasher_full_wizard_reaches_flashing_only_after_typed_confirmation_matches() 
         other => panic!("esperava permanecer em Confirm2, obteve {other:?}"),
     }
 
-    // Limpa o campo digitado e confirma com o nó correto.
     for _ in 0.."/dev/wrong".len() {
         app.dispatch(Action::StorageModalBackspace, &tx);
     }
@@ -932,14 +845,14 @@ fn flasher_esc_during_flash_sends_cancel_and_closes_modal() {
 
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
-    open_flasher_and_pick_iso(&mut app, &tx, iso.path()); // -> Ready
-    app.dispatch(Action::Enter, &tx); // -> Confirm1
-    app.dispatch(Action::Enter, &tx); // -> Confirm2
+    open_flasher_and_pick_iso(&mut app, &tx, iso.path());
+    app.dispatch(Action::Enter, &tx);
+    app.dispatch(Action::Enter, &tx);
     type_path(&mut app, &tx, "/dev/sdz");
-    app.dispatch(Action::Enter, &tx); // -> Flashing (envia StorageFlashIso)
+    app.dispatch(Action::Enter, &tx);
     let _ = rx.try_recv();
 
-    app.dispatch(Action::ToggleConfig, &tx); // Esc
+    app.dispatch(Action::ToggleConfig, &tx);
 
     assert!(matches!(app.storage_modal, StorageModal::None));
     match rx.try_recv() {
@@ -1016,11 +929,6 @@ fn flash_done_event_transitions_to_done_stage_with_result() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Invariante de segurança: nenhuma ação destrutiva chega ao backend para um
-// alvo `is_system == true`, mesmo tentando abrir os modais diretamente.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn system_disk_never_reachable_for_format_or_flash_via_app_dispatch() {
     let mut cfg = Config::default();
@@ -1028,7 +936,7 @@ fn system_disk_never_reachable_for_format_or_flash_via_app_dispatch() {
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 0; // linha do drive de sistema.
+    app.storage_selected = 0;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
@@ -1037,10 +945,6 @@ fn system_disk_never_reachable_for_format_or_flash_via_app_dispatch() {
     assert!(matches!(app.storage_modal, StorageModal::None));
     assert!(rx.try_recv().is_err());
 }
-
-// ---------------------------------------------------------------------------
-// Render dos modais sem pânico.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn render_format_and_flasher_modals_without_panic() {
@@ -1053,19 +957,11 @@ fn render_format_and_flasher_modals_without_panic() {
 
     app.dispatch(Action::StorageFormatOpen, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
-    app.dispatch(Action::ToggleConfig, &tx); // fecha
+    app.dispatch(Action::ToggleConfig, &tx);
 
     app.dispatch(Action::StorageFlasherOpen, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 }
-
-// ---------------------------------------------------------------------------
-// Multi-boot leve embarcado — `[B]` prepara não-destrutivamente a partição
-// primária do drive selecionado (substitui o antigo instalador do Ventoy via
-// `scripts/ventoy.sh`). A trava de segurança é revalidada tanto aqui (camada
-// 1, no `App`) quanto no backend (camada 3, TOCTOU — ver
-// `backend::storage::handle_action`).
-// ---------------------------------------------------------------------------
 
 fn usb_target_snapshot_with_partition(dev_node: &str, size: u64) -> StorageSnapshot {
     let mut d = drive(true, BusType::Usb);
@@ -1093,7 +989,7 @@ fn app_with_usb_target_partitioned(dev_node: &str, size: u64) -> App {
     app.handle_event(AppEvent::Storage(Box::new(usb_target_snapshot_with_partition(
         dev_node, size,
     ))));
-    app.storage_selected = 0; // única linha: o drive USB.
+    app.storage_selected = 0;
     app
 }
 
@@ -1104,7 +1000,7 @@ fn multiboot_prepare_open_is_refused_for_system_disk() {
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_selected = 0; // drive de sistema.
+    app.storage_selected = 0;
 
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
@@ -1129,7 +1025,7 @@ fn multiboot_prepare_open_sends_action_with_primary_partition_id() {
 
 #[test]
 fn multiboot_prepare_open_toasts_when_no_partition_available() {
-    // Drive sem nenhuma partição reconhecida — não há alvo resolvível.
+
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
@@ -1140,17 +1036,11 @@ fn multiboot_prepare_open_toasts_when_no_partition_available() {
 
 #[test]
 fn multiboot_prepare_action_is_blocked_by_is_system_target() {
-    // Camada 3 (TOCTOU) do backend: `is_system_target` continua sendo a
-    // única fonte da verdade — nenhum caminho novo (preparação de
-    // multi-boot) pode contornar essa checagem.
+
     let snap = mock_snapshot();
     let system_partition_id = snap.drives[0].partitions[0].id.clone();
     assert!(snap.is_system_target(&system_partition_id));
 }
-
-// ---------------------------------------------------------------------------
-// Detecção de Ventoy e gerenciador de ISOs (novo módulo do picker/Ventoy).
-// ---------------------------------------------------------------------------
 
 fn labeled_partition(label: &str, dev_node: &str, size: u64) -> PartitionInfo {
     let mut p = partition(vec![], false);
@@ -1239,18 +1129,10 @@ fn friendly_label_prefers_the_partition_label_even_for_mmc_drives() {
     assert_eq!(d.friendly_label(), "MEUCARTAO");
 }
 
-// ---------------------------------------------------------------------------
-// Ejeção segura de SD/MMC e dispositivos sem `Drive.CanPowerOff` — a decisão
-// de pular `PowerOff` é pura e testável sem D-Bus (ver `skips_power_off`,
-// consumida por `eject` em `src/backend/storage.rs`).
-// ---------------------------------------------------------------------------
-
 #[test]
 fn mmc_drives_always_skip_power_off_even_when_can_power_off_is_true() {
     let mut d = drive(true, BusType::Mmc);
-    // Mesmo que o UDisks2 reportasse `CanPowerOff = true` por engano, um
-    // cartão MMC nunca deve receber `PowerOff` — o barramento MMC não tem
-    // um controlador USB para desligar.
+
     d.can_power_off = true;
     assert!(skips_power_off(&d));
 }
@@ -1291,11 +1173,6 @@ fn is_iso_or_img_is_case_insensitive_and_rejects_other_extensions() {
     assert!(!is_iso_or_img("readme.txt"));
     assert!(!is_iso_or_img("archive.iso.zip"));
 }
-
-// ---------------------------------------------------------------------------
-// Descompressão em streaming (gzip): detecção por magic bytes e estimativa
-// de tamanho descomprimido a partir do rodapé `ISIZE`.
-// ---------------------------------------------------------------------------
 
 fn write_gzip_fixture(dir: &std::path::Path, name: &str, payload: &[u8]) -> std::path::PathBuf {
     use std::io::Write;
@@ -1352,11 +1229,6 @@ fn build_ventoy_entries_filters_and_sorts_case_insensitively() {
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["Alpha.ISO", "beta.img", "zeta.iso"]);
 }
-
-// ---------------------------------------------------------------------------
-// Render dos novos modais (seletor de arquivos / gerenciador de ISOs
-// multi-boot) sem pânico.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn render_file_picker_modal_without_panic() {
@@ -1430,17 +1302,11 @@ fn render_multiboot_iso_manager_modal_in_every_stage_without_panic() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Formatador FAT32 100% Rust puro (`fatfs`) — zero dependências externas de
-// host (nenhuma invocação de `mkfs.vfat`/`dosfstools`).
-// ---------------------------------------------------------------------------
-
 #[test]
 fn format_fat32_pure_rust_produces_a_mountable_fat32_volume_with_label() {
-    // Arquivo regular usado como "dispositivo de bloco" — nenhum binário
-    // externo é invocado em nenhum momento deste teste.
+
     let file = tempfile::NamedTempFile::new().unwrap();
-    file.as_file().set_len(64 * 1024 * 1024).unwrap(); // 64 MiB.
+    file.as_file().set_len(64 * 1024 * 1024).unwrap();
     let path = file.path().to_str().unwrap();
 
     format_fat32_pure_rust(path, "meu label").expect("formatação FAT32 deveria ter sucesso");
@@ -1454,12 +1320,9 @@ fn format_fat32_pure_rust_produces_a_mountable_fat32_volume_with_label() {
         .expect("volume formatado deveria ser montável pela própria fatfs");
 
     assert_eq!(fs.fat_type(), fatfs::FatType::Fat32);
-    // O rótulo é normalizado para maiúsculas e preenchido/truncado em 11
-    // bytes, conforme a especificação FAT.
+
     assert_eq!(fs.volume_label(), "MEU LABEL");
 
-    // Volume recém-formatado: raiz vazia (sem arquivos além de `.`/`..`
-    // implícitos do FAT32, que a fatfs não lista).
     let root_entries: Vec<_> = fs.root_dir().iter().collect();
     assert!(
         root_entries.is_empty(),
@@ -1501,18 +1364,14 @@ fn format_fat32_pure_rust_fails_gracefully_for_a_missing_path() {
     assert!(!err.to_string().is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// Zero Emojis Policy — nenhum caractere emoji em todo o código-fonte.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn no_emojis_anywhere_in_the_source_tree() {
     fn is_emoji(c: char) -> bool {
         let cp = c as u32;
         matches!(cp,
-            0x1F300..=0x1FAFF // símbolos diversos, emoticons, transporte, suplementares...
-            | 0x2600..=0x27BF   // símbolos diversos e dingbats
-            | 0x1F1E6..=0x1F1FF // letras regionais indicadoras (bandeiras)
+            0x1F300..=0x1FAFF
+            | 0x2600..=0x27BF
+            | 0x1F1E6..=0x1F1FF
         )
     }
 

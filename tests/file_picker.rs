@@ -1,7 +1,3 @@
-//! Testes do seletor de arquivos estilo Yazi (`ui::file_picker` +
-//! `app::FilePickerState`): ordenação pura, classificação de extensão,
-//! navegação real em diretório temporário e robustez contra erros (raiz do
-//! filesystem, salto para diretório inexistente).
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -20,11 +16,6 @@ fn entry(name: &str, is_dir: bool) -> FileEntry {
         modified: None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// `sort_entries` — dirs primeiro, alfabético (sem diferenciar caixa) dentro
-// de cada grupo.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn sort_entries_puts_directories_before_files() {
@@ -46,10 +37,6 @@ fn sort_entries_is_case_insensitive_within_groups() {
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["Apple.iso", "banana.iso"]);
 }
-
-// ---------------------------------------------------------------------------
-// Classificação de extensão de imagem.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn is_pickable_image_recognizes_iso_img_vhd_raw_case_insensitively() {
@@ -80,7 +67,7 @@ fn is_flashable_image_recognizes_compressed_extensions_case_insensitively() {
     assert!(is_flashable_image("archive.zip"));
     assert!(is_flashable_image("archive.xz"));
     assert!(is_flashable_image("archive.zst"));
-    // Continua reconhecendo as imagens brutas também.
+
     assert!(is_flashable_image("archlinux.iso"));
     assert!(is_flashable_image("card.raw"));
 }
@@ -110,10 +97,6 @@ fn is_pickable_for_restricts_compressed_images_to_the_flasher_purpose() {
     assert!(is_pickable_for(&multiboot, "archlinux.iso"));
 }
 
-// ---------------------------------------------------------------------------
-// Navegação real em diretório temporário.
-// ---------------------------------------------------------------------------
-
 fn unique_temp_dir(tag: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -142,7 +125,7 @@ fn navigating_into_a_directory_resets_selection_and_reloads() {
     std::fs::write(root.join("aaa_first.iso"), b"x").unwrap();
 
     let mut s = FilePickerState::open(root.clone(), flasher_purpose());
-    // "subdir" (diretório) deve vir antes de "aaa_first.iso" (arquivo).
+
     assert_eq!(s.entries.first().map(|e| e.name.as_str()), Some("subdir"));
     s.selected = 0;
 
@@ -193,7 +176,7 @@ fn go_up_does_not_panic_at_filesystem_root() {
     let mut s = FilePickerState::open(PathBuf::from("/"), flasher_purpose());
     assert_eq!(s.cwd, PathBuf::from("/"));
     s.go_up();
-    // Sem pai para `/`: permanece na raiz, sem pânico.
+
     assert_eq!(s.cwd, PathBuf::from("/"));
 }
 
@@ -205,7 +188,7 @@ fn jump_to_nonexistent_directory_surfaces_error_instead_of_panicking() {
 
     s.jump_to(root.join("does-not-exist-at-all"));
     assert!(s.error.is_some());
-    // O diretório de trabalho não deve ter mudado para um caminho inválido.
+
     assert_eq!(s.cwd, root);
 
     std::fs::remove_dir_all(&root).ok();

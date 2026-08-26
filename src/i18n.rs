@@ -1,23 +1,17 @@
-//! Sistema de internacionalização (i18n) em tempo de compilação para o HAL-9001.
-//!
-//! Catálogo tipado e estático em Rust puro, garantindo zero overhead de runtime
-//! e zero dependências de arquivos externos (.po/.mo), preservando o binário
-//! 100% autocontido.
 
-/// Idiomas suportados pelo HAL-9001.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
-    /// Português do Brasil (Padrão)
+
     #[default]
     PtBr,
-    /// English (US)
+
     EnUs,
-    /// Español
+
     EsEs,
 }
 
 impl Language {
-    /// Parseia uma string de idioma (ex: `"pt-BR"`, `"pt"`, `"en-US"`, `"en"`, `"es"`).
+
     pub fn parse(raw: &str) -> Option<Self> {
         let clean = raw.trim().to_lowercase().replace('_', "-");
         if clean.starts_with("pt") {
@@ -31,7 +25,6 @@ impl Language {
         }
     }
 
-    /// Detecta o idioma preferido a partir das variáveis de ambiente ($LC_ALL, $LC_MESSAGES, $LANG).
     pub fn detect() -> Self {
         for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
             if let Ok(val) = std::env::var(var) {
@@ -43,7 +36,6 @@ impl Language {
         Language::PtBr
     }
 
-    /// Código ISO padrão do idioma (`"pt-BR"`, `"en-US"`, `"es-ES"`).
     pub const fn code(self) -> &'static str {
         match self {
             Language::PtBr => "pt-BR",
@@ -52,7 +44,6 @@ impl Language {
         }
     }
 
-    /// Nome amigável do idioma.
     pub const fn name(self) -> &'static str {
         match self {
             Language::PtBr => "Português (Brasil)",
@@ -61,7 +52,6 @@ impl Language {
         }
     }
 
-    /// Retorna a tabela de mensagens estáticas traduzidas.
     pub const fn messages(self) -> &'static Messages {
         match self {
             Language::PtBr => &MESSAGES_PT_BR,
@@ -71,16 +61,14 @@ impl Language {
     }
 }
 
-/// Tabela completa de mensagens da interface do HAL-9001.
 #[derive(Debug, Clone, Copy)]
 pub struct Messages {
-    // Cabeçalho e Título
+
     pub app_title_suffix: &'static str,
     pub splash_title: &'static str,
     pub splash_loading: &'static str,
     pub splash_welcome: &'static str,
 
-    // Abas
     pub tab_overview: &'static str,
     pub tab_network: &'static str,
     pub tab_bluetooth: &'static str,
@@ -88,13 +76,11 @@ pub struct Messages {
     pub tab_audio: &'static str,
     pub tab_displays: &'static str,
 
-    // Seções do Overview
     pub sec_compute: &'static str,
     pub sec_system: &'static str,
     pub sec_peripherals: &'static str,
     pub sec_palette: &'static str,
 
-    // Rótulos de Métricas
     pub label_host: &'static str,
     pub label_os: &'static str,
     pub label_kernel: &'static str,
@@ -110,7 +96,6 @@ pub struct Messages {
     pub label_cpu_usage: &'static str,
     pub label_power_profile: &'static str,
 
-    // Modo Detalhado
     pub label_board: &'static str,
     pub label_bios: &'static str,
     pub label_gpu: &'static str,
@@ -119,19 +104,16 @@ pub struct Messages {
     pub label_temperature: &'static str,
     pub label_desktop: &'static str,
 
-    // Perfis de Energia
     pub profile_power_saver: &'static str,
     pub profile_balanced: &'static str,
     pub profile_performance: &'static str,
 
-    // Bateria
     pub battery_charging: &'static str,
     pub battery_discharging: &'static str,
     pub battery_full: &'static str,
     pub battery_not_charging: &'static str,
     pub battery_unknown: &'static str,
 
-    // Rodapé / Dicas de Teclado
     pub hint_mode_detailed: &'static str,
     pub hint_mode_normal: &'static str,
     pub hint_profile: &'static str,
@@ -142,7 +124,6 @@ pub struct Messages {
     pub hint_quit: &'static str,
     pub hint_help: &'static str,
 
-    // Notificações (Toasts)
     pub toast_profile_prefix: &'static str,
     pub toast_brightness_prefix: &'static str,
     pub toast_volume_prefix: &'static str,
@@ -150,7 +131,6 @@ pub struct Messages {
     pub toast_unmuted: &'static str,
     pub toast_unavailable: &'static str,
 
-    // Aba 4 — Discos & Armazenamento (Módulo 4)
     pub storage_col_tree: &'static str,
     pub storage_col_details: &'static str,
     pub storage_empty: &'static str,
@@ -179,26 +159,24 @@ pub struct Messages {
     pub storage_err_system: &'static str,
     pub storage_safe_to_remove_sd: &'static str,
     pub storage_safe_to_remove: &'static str,
-    /// Fallback ASCII do rótulo "disco de sistema" quando `icons = false`
-    /// (Zero Emojis Policy: sem emoji, apenas texto).
+
     pub storage_tag_system_ascii: &'static str,
     pub storage_tag_ventoy: &'static str,
-    /// Fallback ASCII do rótulo "pendrive Ventoy" quando `icons = false`.
+
     pub storage_tag_ventoy_ascii: &'static str,
     pub storage_ventoy_is_multiboot: &'static str,
     pub storage_hint_iso_manager: &'static str,
-    /// Tecla `B`: prepara o drive selecionado para o multi-boot leve.
+
     pub storage_hint_multiboot_prepare: &'static str,
     pub storage_label_multiboot: &'static str,
-    /// "Ativo" — sufixado em runtime com "(N ISOs)".
+
     pub storage_multiboot_active: &'static str,
     pub storage_multiboot_not_installed: &'static str,
     pub storage_multiboot_unknown: &'static str,
     pub storage_multiboot_no_partition: &'static str,
-    /// Conector usado no medidor de capacidade: "<livre> {conector} <total> (<pct>%)".
+
     pub storage_free_of: &'static str,
 
-    // Modal de formatação (Épico G)
     pub storage_format_title: &'static str,
     pub storage_format_target: &'static str,
     pub storage_format_fs_label: &'static str,
@@ -206,14 +184,11 @@ pub struct Messages {
     pub storage_format_confirm: &'static str,
     pub storage_format_warning: &'static str,
     pub storage_format_hint: &'static str,
-    /// Prefixo do toast emitido ao pressionar `Enter` no modal de
-    /// formatação (dispara `Action::StorageFormat` imediatamente).
+
     pub storage_format_started: &'static str,
 
-    // Modal de instalação do Ventoy (Gadget/Script)
     pub storage_multiboot_target_label: &'static str,
 
-    // Modal do ISO Flasher (Épico H)
     pub storage_flash_title: &'static str,
     pub storage_flash_target_label: &'static str,
     pub storage_flash_path_prompt: &'static str,
@@ -235,7 +210,6 @@ pub struct Messages {
     pub storage_flash_hint_cancel: &'static str,
     pub storage_flash_hint_continue: &'static str,
 
-    // Seletor de arquivos estilo Yazi (ISO Flasher / gerenciador de ISOs do Ventoy)
     pub filepicker_title: &'static str,
     pub filepicker_hint_nav: &'static str,
     pub filepicker_hint_pick: &'static str,
@@ -250,7 +224,6 @@ pub struct Messages {
     pub filepicker_label_size: &'static str,
     pub filepicker_label_modified: &'static str,
 
-    // Gerenciador de ISOs do Ventoy
     pub multiboot_iso_mgr_title: &'static str,
     pub multiboot_iso_mgr_empty: &'static str,
     pub multiboot_iso_mgr_free_space: &'static str,
@@ -265,9 +238,6 @@ pub struct Messages {
     pub multiboot_iso_mgr_remove_failed: &'static str,
 }
 
-// ---------------------------------------------------------------------------
-// pt-BR — Português do Brasil (Padrão)
-// ---------------------------------------------------------------------------
 pub static MESSAGES_PT_BR: Messages = Messages {
     app_title_suffix: "Assistente de Sistema",
     splash_title: "HAL-9001 · Assistente de Sistema",
@@ -437,9 +407,6 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     multiboot_iso_mgr_remove_failed: "Falha ao remover a ISO",
 };
 
-// ---------------------------------------------------------------------------
-// en-US — English (US)
-// ---------------------------------------------------------------------------
 pub static MESSAGES_EN_US: Messages = Messages {
     app_title_suffix: "System Assistant",
     splash_title: "HAL-9001 · System Assistant",
@@ -610,9 +577,6 @@ pub static MESSAGES_EN_US: Messages = Messages {
     multiboot_iso_mgr_remove_failed: "Failed to remove the ISO",
 };
 
-// ---------------------------------------------------------------------------
-// es-ES — Español
-// ---------------------------------------------------------------------------
 pub static MESSAGES_ES_ES: Messages = Messages {
     app_title_suffix: "Asistente de Sistema",
     splash_title: "HAL-9001 · Asistente de Sistema",

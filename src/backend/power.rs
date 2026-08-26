@@ -1,5 +1,3 @@
-//! Backend de Energia & Bateria via UPower (D-Bus / `zbus`).
-//! Stub do Módulo 0 — implementação no Módulo 5.
 
 use tokio::sync::broadcast;
 

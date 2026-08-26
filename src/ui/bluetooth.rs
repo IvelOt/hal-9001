@@ -1,4 +1,3 @@
-//! Aba 3 — Bluetooth (BlueZ D-Bus). Render do Módulo 3.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -46,9 +45,9 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header de status
-            Constraint::Min(8),    // Tabela de dispositivos
-            Constraint::Length(4), // Telemetria & Atalhos
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(4),
         ])
         .split(area);
 

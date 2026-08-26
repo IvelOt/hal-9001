@@ -1,9 +1,3 @@
-//! Backend de Armazenamento & Discos via UDisks2 (D-Bus / `zbus`).
-//!
-//! Constrói um [`StorageSnapshot`] periódico (drives → partições) a partir do
-//! `org.freedesktop.DBus.ObjectManager` do UDisks2, enriquece com uso de disco
-//! via `sysinfo`/`/proc/mounts`, e aplica a trava de segurança [`is_system_disk`]
-//! que impede que discos de sistema virem alvo de operações destrutivas.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -24,16 +18,13 @@ use crate::events::{
     Action, AppEvent, DeviceId, EventTx, SudoPasswordRequest, SudoPasswordTx, Toast,
 };
 
-/// Tamanho do buffer de I/O para checksum e gravação de blocos (4 MiB),
-/// conforme especificado no Épico H.
 const IO_BUFFER_SIZE: usize = 4 * 1024 * 1024;
-/// Intervalo mínimo entre emissões de progresso (evita inundar o canal).
+
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
 
 const UDISKS_SERVICE: &str = "org.freedesktop.UDisks2";
 const UDISKS_ROOT: &str = "/org/freedesktop/UDisks2";
 
-/// Sistema de arquivos reportado por `Block.IdType`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsKind {
     Ext4,
@@ -62,7 +53,6 @@ impl FsKind {
         }
     }
 
-    /// Rótulo curto exibido na árvore/detalhes.
     pub fn label(&self) -> &str {
         match self {
             FsKind::Ext4 => "ext4",
@@ -78,7 +68,6 @@ impl FsKind {
     }
 }
 
-/// Barramento de conexão do drive (`Drive.ConnectionBus`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusType {
     Usb,
@@ -113,7 +102,6 @@ impl BusType {
     }
 }
 
-/// Uma partição (ou o filesystem bruto de um disco não particionado).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartitionInfo {
     pub id: DeviceId,
@@ -121,13 +109,12 @@ pub struct PartitionInfo {
     pub label: String,
     pub fs: FsKind,
     pub size: u64,
-    /// Bytes usados na montagem, quando disponível (via `sysinfo`).
+
     pub used: Option<u64>,
     pub mount_points: Vec<String>,
-    /// `true` quando o nó de dispositivo aparece em `/proc/swaps` como ativo.
+
     pub is_swap: bool,
-    /// Trava de segurança: `true` quando esta partição NUNCA pode ser alvo de
-    /// operação destrutiva (ver [`is_system_disk`]).
+
     pub is_system: bool,
 }
 
@@ -145,44 +132,31 @@ impl PartitionInfo {
     }
 }
 
-/// Um disco físico/lógico (`Drive`) e suas partições.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriveInfo {
     pub id: DeviceId,
     pub dev_node: String,
-    /// Caminho de objeto D-Bus (`/org/freedesktop/UDisks2/block_devices/sdX`)
-    /// do bloco "raiz" (disco inteiro) deste drive, quando conhecido. Só a
-    /// interface `Block` deste objeto existe — a interface `Block` nunca
-    /// existe no caminho de objeto do `Drive` em si (ver
-    /// [`resolve_block_object_path`]).
+
     pub block_path: Option<String>,
     pub model: String,
     pub vendor: String,
     pub size: u64,
     pub removable: bool,
     pub ejectable: bool,
-    /// `Drive.CanPowerOff` do UDisks2 — `false` em cartões SD/MMC (geridos
-    /// pelo `sdhci`/`mmc_core` do kernel, sem controlador USB para desligar),
-    /// gatilho para pular `Drive.PowerOff` no fluxo de ejeção segura.
+
     pub can_power_off: bool,
     pub bus: BusType,
-    /// `true` para HDD (mídia rotacional); `false` para SSD/NVMe.
+
     pub rotational: bool,
-    /// Trava de segurança: `true` quando o drive hospeda qualquer partição de
-    /// sistema, ou é um disco fixo interno (ver [`is_system_disk`]).
+
     pub is_system: bool,
-    /// `true` quando o drive é um pendrive Ventoy (layout de duas partições
-    /// com uma pequena `VTOYEFI` + a partição de dados onde ficam as ISOs).
-    /// Ver [`detect_ventoy`].
+
     pub is_ventoy: bool,
     pub partitions: Vec<PartitionInfo>,
 }
 
 impl DriveInfo {
-    /// Rótulo amigável do drive para a lista/detalhes da aba Storage: o
-    /// rótulo (`IdLabel`) da partição primária quando presente e não-vazio
-    /// (ex.: `MEUPENDRIVE`), senão `"<vendor> <model>"`, senão o nó de
-    /// dispositivo bruto (`/dev/sdX`) como último recurso.
+
     pub fn friendly_label(&self) -> String {
         if let Some(p) = primary_partition(self) {
             if !p.label.trim().is_empty() {
@@ -191,10 +165,7 @@ impl DriveInfo {
         }
         let vm = format!("{} {}", self.vendor, self.model).trim().to_string();
         if !vm.is_empty() {
-            // Cartões SD/MicroSD/MMC costumam reportar apenas um modelo
-            // genérico (ex.: `SD16G`), sem rótulo de partição formatado —
-            // anexa o nó de dispositivo para dar contexto imediato de qual
-            // slot/leitor é esse (ex.: `SD16G (/dev/mmcblk0)`).
+
             if self.bus == BusType::Mmc {
                 return format!("{vm} ({})", self.dev_node);
             }
@@ -204,7 +175,6 @@ impl DriveInfo {
     }
 }
 
-/// Snapshot completo da árvore de discos, emitido a cada refresh do backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageSnapshot {
     pub udisks_available: bool,
@@ -220,10 +190,6 @@ impl StorageSnapshot {
         self.drives.get(drive_idx)?.partitions.get(part_idx)
     }
 
-    /// Busca uma partição em qualquer drive pelo seu `DeviceId` (caminho de
-    /// objeto D-Bus do bloco) — usado pelo gerenciador de ISOs multi-boot e
-    /// pela preparação de multi-boot, que recebem o `device_id` da partição
-    /// primária já resolvida pela UI, não mais o `device_id` do drive.
     pub fn partition_by_id(&self, id: &DeviceId) -> Option<&PartitionInfo> {
         self.drives
             .iter()
@@ -231,9 +197,6 @@ impl StorageSnapshot {
             .find(|p| &p.id == id)
     }
 
-    /// `true` quando `id` identifica um drive ou partição marcados como
-    /// disco de sistema — usado como camada 2/3 da trava de segurança em
-    /// `App::dispatch` e em `handle_action` (revalidação TOCTOU).
     pub fn is_system_target(&self, id: &DeviceId) -> bool {
         self.drives.iter().any(|d| &d.id == id && d.is_system)
             || self
@@ -243,8 +206,6 @@ impl StorageSnapshot {
                 .any(|p| &p.id == id && p.is_system)
     }
 
-    /// Nó de dispositivo (`/dev/sdX`) do drive identificado, usado para abrir
-    /// o dispositivo de bloco na gravação de ISO.
     pub fn drive_dev_node(&self, id: &DeviceId) -> Option<String> {
         self.drives
             .iter()
@@ -252,20 +213,14 @@ impl StorageSnapshot {
             .map(|d| d.dev_node.clone())
     }
 
-    /// Capacidade total (bytes) do drive identificado.
     pub fn drive_size(&self, id: &DeviceId) -> Option<u64> {
         self.drives.iter().find(|d| &d.id == id).map(|d| d.size)
     }
 
-    /// Busca um drive pelo `DeviceId` (caminho do objeto D-Bus).
     pub fn drive_by_id<'a>(&'a self, id: &DeviceId) -> Option<&'a DriveInfo> {
         self.drives.iter().find(|d| &d.id == id)
     }
 
-    /// Nó de dispositivo (`/dev/sdX`) do bloco no caminho de objeto
-    /// `block_path` (o disco inteiro de um drive, ou uma de suas partições)
-    /// — usado para abrir o dispositivo diretamente no formatador FAT32 em
-    /// Rust puro, que não passa pelo `Block.Format` do UDisks2.
     pub fn dev_node_for_block_path(&self, block_path: &str) -> Option<String> {
         for drive in &self.drives {
             if drive.block_path.as_deref() == Some(block_path) {
@@ -279,23 +234,10 @@ impl StorageSnapshot {
     }
 }
 
-/// Prefixo de caminho de objeto D-Bus de um dispositivo de bloco do UDisks2 —
-/// a única localização onde a interface `org.freedesktop.UDisks2.Block`
-/// realmente existe.
 const BLOCK_DEVICE_PREFIX: &str = "/org/freedesktop/UDisks2/block_devices/";
-/// Prefixo de caminho de objeto D-Bus de um `Drive` do UDisks2 — a interface
-/// `Block` NUNCA existe neste caminho.
+
 const DRIVE_PREFIX: &str = "/org/freedesktop/UDisks2/drives/";
 
-/// Resolve `target_id` (que pode ser o caminho de objeto de um `Drive` ou já
-/// de um `block_device`) para o caminho de objeto de bloco correto onde a
-/// interface `org.freedesktop.UDisks2.Block` existe de fato.
-///
-/// Esta é a correção central do bug de formatação: `Block.Format` só pode ser
-/// chamado num caminho de `block_devices/...`. Quando o usuário seleciona um
-/// `Drive` (`/org/freedesktop/UDisks2/drives/...`), é preciso localizar o
-/// bloco "raiz" correspondente (o disco inteiro, sem entrada de partição) via
-/// [`DriveInfo::block_path`].
 pub fn resolve_block_object_path(
     snapshot: &StorageSnapshot,
     target_id: &DeviceId,
@@ -313,10 +255,6 @@ pub fn resolve_block_object_path(
     None
 }
 
-/// Lista os caminhos de objeto de todas as partições atualmente montadas que
-/// precisam ser desmontadas antes de formatar `target_id`: todas as
-/// partições montadas do drive (quando `target_id` é um `Drive`), ou apenas a
-/// própria partição (quando `target_id` já é uma partição montada).
 fn mounted_partition_paths(snapshot: &StorageSnapshot, target_id: &DeviceId) -> Vec<String> {
     if let Some(drive) = snapshot.drive_by_id(target_id) {
         return drive
@@ -336,9 +274,6 @@ fn mounted_partition_paths(snapshot: &StorageSnapshot, target_id: &DeviceId) -> 
     Vec::new()
 }
 
-/// Binário `mkfs.*` e pacote que o fornece, por tipo de sistema de arquivos —
-/// usado para transformar um erro genérico do UDisks2 ("comando não
-/// encontrado") numa instrução acionável para o usuário.
 fn mkfs_hint(fs_type: &str) -> Option<(&'static str, &'static str)> {
     match fs_type.trim().to_ascii_lowercase().as_str() {
         "vfat" | "fat32" | "fat" => Some(("mkfs.vfat", "dosfstools")),
@@ -352,9 +287,6 @@ fn mkfs_hint(fs_type: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// `true` quando o erro cru do `Block.Format` (D-Bus) indica que o `mkfs.*`
-/// correspondente não está instalado no host (executável ausente do PATH do
-/// UDisks2/`udisksd`).
 fn is_missing_mkfs_error(err: &anyhow::Error) -> bool {
     let lower = err.to_string().to_ascii_lowercase();
     lower.contains("not found")
@@ -363,9 +295,6 @@ fn is_missing_mkfs_error(err: &anyhow::Error) -> bool {
         || lower.contains("failed to execute")
 }
 
-/// Traduz o erro cru do `Block.Format` (D-Bus) numa mensagem de toast clara.
-/// Quando o erro indica que o `mkfs.*` correspondente não está instalado no
-/// host, devolve uma instrução acionável em vez do erro D-Bus bruto.
 fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
     if is_missing_mkfs_error(err) {
         if let Some((bin, pkg)) = mkfs_hint(fs_type) {
@@ -375,10 +304,6 @@ fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
     format!("Falha ao formatar: {err}")
 }
 
-/// `true` quando o erro cru (D-Bus ou I/O) indica que a operação foi negada
-/// por falta de permissão do processo local (não pertence ao grupo `disk`,
-/// nem é root) — o gatilho para cair para o fluxo de elevação interativa
-/// (`pkexec`/`sudo`) em vez de expor um `Permission denied` cru ao usuário.
 pub fn is_permission_denied_error(err: &anyhow::Error) -> bool {
     if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
         if io_err.kind() == std::io::ErrorKind::PermissionDenied {
@@ -390,12 +315,6 @@ pub fn is_permission_denied_error(err: &anyhow::Error) -> bool {
         .contains("permission denied")
 }
 
-/// `true` quando o erro cru do `Block.Format`/`Block.OpenDevice` (D-Bus)
-/// indica que a chamada foi recusada pelo Polkit por falta de um agente de
-/// autenticação gráfico ativo na sessão (`NotAuthorized` /
-/// "No polkit agent available to authenticate"), tipicamente numa sessão TTY
-/// pura sem `polkit-gnome`/`polkit-kde` rodando — o gatilho para cair para o
-/// fluxo de elevação interativa via `pkexec`/`sudo` num terminal suspenso.
 pub fn is_not_authorized_error(err: &anyhow::Error) -> bool {
     let lower = err.to_string().to_ascii_lowercase();
     lower.contains("notauthorized")
@@ -404,11 +323,6 @@ pub fn is_not_authorized_error(err: &anyhow::Error) -> bool {
         || lower.contains("authentication is required")
 }
 
-/// Monta o binário `mkfs.*` e os argumentos necessários para formatar
-/// `dev_node` como `fs_type` com o rótulo `label`, para uso pelo fallback de
-/// elevação via `sudo -S`/`sudo -n` (ver [`format_via_sudo`]) quando o
-/// `Block.Format` do UDisks2 é recusado por falta de agente Polkit. Devolve
-/// `None` quando `fs_type` não tem um `mkfs.*` mapeado (ver [`mkfs_hint`]).
 pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(String, Vec<String>)> {
     let (bin, _pkg) = mkfs_hint(fs_type)?;
     let mut args = Vec::new();
@@ -454,14 +368,6 @@ pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(Strin
     Some((bin.to_string(), args))
 }
 
-// ---------------------------------------------------------------------------
-// Elevação via `sudo -S` (senha pelo modal nativo da TUI, sem suspender o
-// terminal) — substitui o antigo fluxo de `pkexec`/`sudo` com stdio herdado.
-// ---------------------------------------------------------------------------
-
-/// `true` quando `sudo -n true` passa sem exigir senha — cache de
-/// autenticação válido, `NOPASSWD` no sudoers, ou processo já rodando como
-/// root. Usado para decidir se o modal de senha precisa ser exibido.
 async fn sudo_cached() -> bool {
     tokio::process::Command::new("sudo")
         .args(["-n", "true"])
@@ -474,8 +380,6 @@ async fn sudo_cached() -> bool {
         .unwrap_or(false)
 }
 
-/// Pede a senha de sudo ao usuário via modal nativo da TUI (canal
-/// `sudo_tx`), devolvendo `None` quando o usuário cancela (`Esc`).
 async fn request_sudo_password(
     sudo_tx: &SudoPasswordTx,
     label: &str,
@@ -495,9 +399,6 @@ async fn request_sudo_password(
     respond_rx.await.ok().flatten()
 }
 
-/// `true` quando o texto de stderr do `sudo` indica senha incorreta/recusada
-/// — o gatilho para o `App` reabrir o modal com "Senha incorreta" e permitir
-/// nova tentativa, em vez de tratar como falha definitiva do comando.
 pub fn is_sudo_auth_failure(stderr_text: &str) -> bool {
     let lower = stderr_text.to_ascii_lowercase();
     lower.contains("incorrect password")
@@ -507,18 +408,11 @@ pub fn is_sudo_auth_failure(stderr_text: &str) -> bool {
         || lower.contains("a password is required")
 }
 
-/// Resultado (linhas de progresso + status final) de um comando rodado sob
-/// `sudo` via [`spawn_sudo`].
 struct SudoRun {
     lines: tokio::sync::mpsc::UnboundedReceiver<String>,
     handle: tokio::task::JoinHandle<anyhow::Result<(std::process::ExitStatus, String)>>,
 }
 
-/// Lê `reader` byte a byte, quebrando em "linhas" tanto por `\n` quanto por
-/// `\r` (necessário para acompanhar saídas como `dd status=progress`, que
-/// atualiza a mesma linha via `\r`), encaminhando cada uma para `line_tx` e
-/// devolvendo o texto completo acumulado (usado para detectar falha de
-/// autenticação em stderr).
 async fn read_stream_lines<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     line_tx: tokio::sync::mpsc::UnboundedSender<String>,
@@ -554,15 +448,6 @@ async fn read_stream_lines<R: tokio::io::AsyncRead + Unpin>(
     full
 }
 
-/// Roda `program` com `args` sob `sudo`, devolvendo progresso em streaming
-/// (linha a linha, `\n` ou `\r`) via `SudoRun::lines` e o status final +
-/// texto de stderr (para detecção de senha incorreta) via `SudoRun::handle`.
-///
-/// Quando `password` é `Some`, executa `sudo -S -k -- program args...`,
-/// escrevendo `senha\n` no stdin do processo (nunca herda o stdin/stdout/
-/// stderr do HAL-9001 — a TUI nunca é suspensa). Quando `password` é `None`
-/// (cache de sudo válido, ver [`sudo_cached`]), executa `sudo -n -- program
-/// args...`, que nunca imprime prompt.
 fn spawn_sudo(
     password: Option<String>,
     program: String,
@@ -606,9 +491,6 @@ fn spawn_sudo(
     })
 }
 
-/// Monta os argumentos de invocação do `sudo` para `program`/`args`, de
-/// acordo com a disponibilidade de cache (`cached`) — função pura, usada por
-/// [`spawn_sudo`] e testável isoladamente.
 pub fn sudo_invocation(cached: bool, program: &str, args: &[String]) -> Vec<String> {
     let mut v = Vec::new();
     if cached {
@@ -623,9 +505,6 @@ pub fn sudo_invocation(cached: bool, program: &str, args: &[String]) -> Vec<Stri
     v
 }
 
-/// Extrai o total de bytes já copiados de uma linha de progresso do `dd`
-/// (`status=progress`), ex.: `"104857600 bytes (105 MB, 100 MiB) copied, 1 s,
-/// 100 MB/s"` → `Some(104857600)`. Função pura, testável sem I/O real.
 pub fn parse_dd_bytes_copied(line: &str) -> Option<u64> {
     let trimmed = line.trim_start();
     let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -639,11 +518,6 @@ pub fn parse_dd_bytes_copied(line: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Pede a senha (a menos que o cache de `sudo -n true` já seja válido na
-/// primeira tentativa) e devolve `Some(senha)`/`None` (cache válido) para a
-/// próxima chamada de [`spawn_sudo`], ou `Err` quando o usuário cancela
-/// (`Esc`) — propagada pelos laços de repetição de `format_via_sudo`/
-/// `flash_elevated`/`format_via_sudo` como falha definitiva da operação.
 async fn next_sudo_attempt(
     sudo_tx: &SudoPasswordTx,
     label: &str,
@@ -658,9 +532,6 @@ async fn next_sudo_attempt(
     }
 }
 
-/// `true` quando `fs_type` (como enviado ao `Block.Format`) identifica um
-/// sistema de arquivos FAT — o único formato para o qual o HAL-9001 tem um
-/// formatador 100% Rust puro (`fatfs`) como fallback ao `mkfs.vfat` do host.
 fn is_fat_fs_type(fs_type: &str) -> bool {
     matches!(
         fs_type.trim().to_ascii_lowercase().as_str(),
@@ -668,9 +539,6 @@ fn is_fat_fs_type(fs_type: &str) -> bool {
     )
 }
 
-/// Converte um rótulo arbitrário no formato de 11 bytes exigido pelo campo
-/// `VolumeLabel` da BPB do FAT: maiúsculas ASCII, truncado/preenchido com
-/// espaços.
 fn fat_volume_label(label: &str) -> [u8; 11] {
     let mut buf = [b' '; 11];
     for (i, b) in label.bytes().take(11).enumerate() {
@@ -679,11 +547,6 @@ fn fat_volume_label(label: &str) -> [u8; 11] {
     buf
 }
 
-/// Executa `fatfs::format_volume` sobre um arquivo/descritor já aberto para
-/// leitura+escrita, sincronizando o conteúdo em disco (`sync_all`) antes de
-/// devolver o controle — núcleo compartilhado por [`format_fat32_pure_rust`]
-/// (testes, abre o caminho diretamente) e pelo fluxo de produção, que abre o
-/// descritor via `Block.OpenDevice` do UDisks2 (ver `open_device_fd`).
 fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<()> {
     let options = fatfs::FormatVolumeOptions::new()
         .fat_type(fatfs::FatType::Fat32)
@@ -693,20 +556,6 @@ fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<
     Ok(())
 }
 
-/// Formata `dev_node` (nó de bloco, ex.: `/dev/sdz` ou `/dev/sdz1`) como
-/// FAT32 usando exclusivamente a crate `fatfs` — 100% Rust puro, sem invocar
-/// nenhum binário externo do host (`mkfs.vfat`/`dosfstools`).
-///
-/// Formata o volume diretamente no nó de bloco recebido (disco inteiro ou
-/// partição já existente) em vez de escrever uma tabela de partição MBR
-/// própria: o nó já foi resolvido pelo UDisks2/`resolve_block_object_path`
-/// exatamente como o `mkfs.vfat` do host o receberia, então o mesmo alvo é
-/// reaproveitado aqui sem duplicar a lógica de particionamento.
-///
-/// Abre o caminho diretamente via `std::fs::OpenOptions` — usado pelos
-/// testes (que apontam para arquivos regulares). O fluxo de produção usa
-/// [`open_device_fd`] + [`format_fat32_on_file`] para obter permissão via
-/// Polkit/D-Bus em vez de depender do grupo `disk` do processo local.
 pub fn format_fat32_pure_rust(dev_node: &str, label: &str) -> anyhow::Result<()> {
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -715,8 +564,6 @@ pub fn format_fat32_pure_rust(dev_node: &str, label: &str) -> anyhow::Result<()>
     format_fat32_on_file(file, label)
 }
 
-/// Uma entrada `.iso`/`.img` encontrada na raiz da partição de dados de um
-/// pendrive Ventoy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VentoyIsoEntry {
     pub name: String,
@@ -724,19 +571,12 @@ pub struct VentoyIsoEntry {
     pub modified: Option<std::time::SystemTime>,
 }
 
-/// Reconhece o rótulo (`IdLabel`) de qualquer partição criada pelo instalador
-/// do Ventoy — `VTOYEFI` (pequena partição EFI de boot) ou `Ventoy` (partição
-/// de dados). A checagem por rótulo é suficiente e evita heurísticas frágeis
-/// por tipo de filesystem.
 pub fn detect_ventoy(partitions: &[PartitionInfo]) -> bool {
     partitions
         .iter()
         .any(|p| p.label.eq_ignore_ascii_case("ventoy") || p.label.eq_ignore_ascii_case("vtoyefi"))
 }
 
-/// Partição de dados do Ventoy (onde ficam as ISOs) — a partição do drive
-/// rotulada `Ventoy`, ou, na ausência desse rótulo exato, a maior partição
-/// que não seja a `VTOYEFI`. Retorna `None` quando o drive não é Ventoy.
 pub fn ventoy_data_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
     if let Some(p) = drive
         .partitions
@@ -752,12 +592,6 @@ pub fn ventoy_data_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
         .max_by_key(|p| p.size)
 }
 
-/// Partição "primária" de um drive, na visão simplificada (um item por
-/// drive) da aba Storage: a que já está montada, senão a maior partição que
-/// não seja de sistema, senão a partição de dados de um Ventoy/multi-boot
-/// pré-existente (ver [`ventoy_data_partition`]). É esta partição que `[m]`
-/// monta/desmonta, `[f]` formata-alvo (quando aplicável), `[B]` prepara para
-/// multi-boot e `[G]` usa como raiz do gerenciador de ISOs.
 pub fn primary_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
     if let Some(p) = drive
         .partitions
@@ -777,16 +611,11 @@ pub fn primary_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
     ventoy_data_partition(drive)
 }
 
-/// Decide se `name` tem extensão de imagem que o gerenciador de ISOs
-/// multi-boot reconhece (`.iso`/`.img`, sem diferenciar maiúsculas/minúsculas).
 pub fn is_iso_or_img(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".iso") || lower.ends_with(".img")
 }
 
-/// Filtra e ordena (alfabeticamente, sem diferenciar caixa) entradas brutas
-/// de diretório em [`VentoyIsoEntry`]s — função pura, testável sem tocar o
-/// filesystem real.
 pub fn build_ventoy_entries(
     raw: Vec<(String, u64, Option<std::time::SystemTime>)>,
 ) -> Vec<VentoyIsoEntry> {
@@ -803,9 +632,6 @@ pub fn build_ventoy_entries(
     entries
 }
 
-/// Calcula taxa de transferência (MB/s) e ETA (segundos) a partir dos bytes
-/// transferidos numa janela de tempo curta e do total restante. Função pura,
-/// testável sem I/O real.
 pub fn compute_speed_eta(
     window_bytes: u64,
     window_secs: f64,
@@ -823,15 +649,6 @@ pub fn compute_speed_eta(
     (speed_mbps, eta_secs)
 }
 
-/// Trava de segurança inegociável: decide se `partition` (pertencente a
-/// `drive`) é um alvo protegido, isto é, **nunca** pode ser formatado,
-/// particionado, ejetado ou gravado por cima.
-///
-/// Critérios (qualquer um basta):
-/// 1. A partição está montada em `/`, `/boot`, `/boot/efi` ou `/home`.
-/// 2. A partição é uma partição de swap ativa (`/proc/swaps`).
-/// 3. O drive é um disco fixo interno (não removível e não-USB) — heurística
-///    conservadora: discos internos nunca são alvo por padrão.
 pub fn is_system_disk(drive: &DriveInfo, partition: &PartitionInfo) -> bool {
     const PROTECTED_MOUNTS: [&str; 4] = ["/", "/boot", "/boot/efi", "/home"];
 
@@ -846,12 +663,6 @@ pub fn is_system_disk(drive: &DriveInfo, partition: &PartitionInfo) -> bool {
     mounted_protected || partition.is_swap || fixed_internal
 }
 
-// ---------------------------------------------------------------------------
-// Parsers puros (testáveis)
-// ---------------------------------------------------------------------------
-
-/// Parseia `/proc/swaps`, devolvendo os nós de dispositivo (`/dev/...`) de
-/// swaps ativas (ignora a linha de cabeçalho e swaps em arquivo).
 pub fn parse_proc_swaps(text: &str) -> Vec<String> {
     text.lines()
         .skip(1)
@@ -868,8 +679,6 @@ pub fn parse_proc_swaps(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parseia `/proc/mounts`, devolvendo pares `(dispositivo, ponto_de_montagem)`.
-/// Usado como reconciliação/fallback quando UDisks2 não reporta `MountPoints`.
 pub fn parse_proc_mounts(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
@@ -885,7 +694,6 @@ pub fn parse_proc_mounts(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `/proc/mounts` escapa espaços/tabs/etc como `\040` etc.; desfaz o escape.
 fn unescape_mount_octal(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -903,10 +711,6 @@ fn unescape_mount_octal(s: &str) -> String {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Extração de propriedades D-Bus (ObjectManager)
-// ---------------------------------------------------------------------------
 
 type PropMap = HashMap<String, OwnedValue>;
 type IfaceMap = HashMap<String, PropMap>;
@@ -937,8 +741,6 @@ fn prop_object_path(props: &PropMap, key: &str) -> Option<String> {
         .map(|p| p.as_str().to_string())
 }
 
-/// Converte um `ay` (bytes NUL-terminados) num `String`, usado por
-/// `Block.Device` (nó `/dev/...`).
 fn prop_bytes_path(props: &PropMap, key: &str) -> Option<String> {
     let bytes = props
         .get(key)
@@ -951,7 +753,6 @@ fn bytes_to_path(bytes: &[u8]) -> String {
     String::from_utf8_lossy(trimmed).to_string()
 }
 
-/// Converte `aay` (`MountPoints`) numa lista de `String`.
 fn prop_mount_points(props: &PropMap, key: &str) -> Vec<String> {
     props
         .get(key)
@@ -962,17 +763,9 @@ fn prop_mount_points(props: &PropMap, key: &str) -> Vec<String> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Montagem do snapshot a partir de `GetManagedObjects`
-// ---------------------------------------------------------------------------
-
-/// Constrói o [`StorageSnapshot`] a partir dos objetos gerenciados do UDisks2,
-/// enriquecendo com `/proc/swaps` (detecção de swap ativa) e uso de disco via
-/// `sysinfo` para partições montadas.
 fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> StorageSnapshot {
     let active_swaps = parse_proc_swaps(swaps_text);
 
-    // Primeiro passo: monta o esqueleto de cada Drive (sem partições ainda).
     let mut drives: Vec<DriveInfo> = Vec::new();
     let mut drive_path_index: HashMap<String, usize> = HashMap::new();
 
@@ -983,8 +776,8 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         let rotation_rate = prop_i32(drive_props, "RotationRate").unwrap_or(-1);
         let drive = DriveInfo {
             id: DeviceId(path.as_str().to_string()),
-            dev_node: String::new(), // preenchido a partir do bloco raiz, se houver.
-            block_path: None,        // idem.
+            dev_node: String::new(),
+            block_path: None,
             model: prop_string(drive_props, "Model").unwrap_or_default(),
             vendor: prop_string(drive_props, "Vendor").unwrap_or_default(),
             size: prop_u64(drive_props, "Size").unwrap_or(0),
@@ -1001,8 +794,6 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         drives.push(drive);
     }
 
-    // Segundo passo: cada Block pertencente a um Drive vira uma PartitionInfo
-    // (partição de fato, ou o filesystem bruto do disco não particionado).
     for (path, ifaces) in objects.iter() {
         let Some(block_props) = ifaces.get("org.freedesktop.UDisks2.Block") else {
             continue;
@@ -1021,9 +812,6 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         let has_partition_table_entry = ifaces.contains_key("org.freedesktop.UDisks2.Partition");
         let is_whole_disk_block = !has_partition_table_entry;
 
-        // O bloco "raiz" (sem entrada de partição) só descreve o nó /dev do
-        // drive; só vira uma linha de partição se tiver filesystem próprio
-        // (disco não particionado, ex.: pendrive gravado direto com `dd`).
         let id_type = prop_string(block_props, "IdType").unwrap_or_default();
         if is_whole_disk_block {
             drives[drive_idx].dev_node = dev_node.clone();
@@ -1059,8 +847,6 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         drives[drive_idx].partitions.push(partition);
     }
 
-    // Terceiro passo: aplica a trava de segurança (por partição e agregada ao
-    // drive) e ordena partições pelo nó de dispositivo para exibição estável.
     for drive in drives.iter_mut() {
         drive.partitions.sort_by(|a, b| a.dev_node.cmp(&b.dev_node));
         let mut drive_is_system = false;
@@ -1070,17 +856,16 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
             drive.partitions[idx].is_system = system;
             drive_is_system |= system;
         }
-        // Discos fixos internos (heurística #3) são sistema mesmo sem
-        // partições reconhecidas ainda (ex.: sysfs incompleto no boot).
+
         drive_is_system |= !drive.removable && drive.bus != BusType::Usb;
         drive.is_system = drive_is_system;
-        
+
         if drive_is_system {
             for part in &mut drive.partitions {
                 part.is_system = true;
             }
         }
-        
+
         drive.is_ventoy = detect_ventoy(&drive.partitions);
     }
     drives.sort_by(|a, b| a.dev_node.cmp(&b.dev_node));
@@ -1099,9 +884,6 @@ fn disk_usage_for_mount(disks: &Disks, mount_point: &str) -> Option<u64> {
         .map(|d| d.total_space().saturating_sub(d.available_space()))
 }
 
-/// Espaço livre (bytes) no ponto de montagem informado, consultado via
-/// `sysinfo` — usado para exibir o espaço restante no gerenciador de ISOs do
-/// Ventoy antes de copiar uma nova imagem.
 fn free_bytes_for_mount(mount_point: &str) -> Option<u64> {
     let disks = Disks::new_with_refreshed_list();
     disks
@@ -1110,10 +892,6 @@ fn free_bytes_for_mount(mount_point: &str) -> Option<u64> {
         .find(|d| d.mount_point().to_string_lossy() == mount_point)
         .map(|d| d.available_space())
 }
-
-// ---------------------------------------------------------------------------
-// Cliente D-Bus (métodos)
-// ---------------------------------------------------------------------------
 
 async fn get_managed_objects(conn: &Connection) -> anyhow::Result<ManagedObjects> {
     let reply = conn
@@ -1140,10 +918,6 @@ async fn udisks_call(
     Ok(())
 }
 
-/// Monta `path` e devolve o ponto de montagem escolhido pelo UDisks2 (o
-/// método `Filesystem.Mount` retorna a string do caminho). Usado pelo
-/// gerenciador de ISOs do Ventoy, que precisa do caminho real para ler/
-/// escrever arquivos na raiz da partição de dados.
 async fn mount_and_get_path(conn: &Connection, path: &str) -> anyhow::Result<String> {
     let opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     let reply = conn
@@ -1158,9 +932,6 @@ async fn mount_and_get_path(conn: &Connection, path: &str) -> anyhow::Result<Str
     Ok(reply.body().deserialize::<String>()?)
 }
 
-/// Garante que a partição em `part_path` esteja montada, reaproveitando
-/// `existing_mount` (do último snapshot conhecido) quando disponível, ou
-/// montando-a via D-Bus caso contrário.
 async fn ensure_mounted(
     conn: &Connection,
     part_path: &str,
@@ -1178,38 +949,15 @@ async fn unmount(conn: &Connection, path: &str) -> anyhow::Result<()> {
     udisks_call(conn, path, "org.freedesktop.UDisks2.Filesystem", "Unmount").await
 }
 
-/// `true` quando o erro cru do `Drive.PowerOff` (D-Bus) indica que o
-/// UDisks2 recusou o corte de energia por o dispositivo não estar de fato
-/// atrás de um controlador USB (típico de leitores de cartão SD/MMC
-/// embutidos, geridos pelo `sdhci`/`mmc_core` do kernel) — o gatilho para
-/// tratar a falha como sucesso gracioso pós-desmontagem, já que as
-/// partições já foram desmontadas e os buffers já foram sincronizados.
 pub fn is_no_usb_device_error(err: &anyhow::Error) -> bool {
     let lower = err.to_string().to_ascii_lowercase();
     lower.contains("no usb device")
 }
 
-/// `true` quando `drive` NUNCA deve receber `Drive.PowerOff` no fluxo de
-/// ejeção segura: cartões SD/MicroSD/MMC (`BusType::Mmc`, geridos pelo
-/// `sdhci`/`mmc_core` do kernel, sem controlador USB para desligar) e
-/// qualquer outro drive que o UDisks2 reporte sem suporte a corte de
-/// energia (`!can_power_off`). Função pura, testável isoladamente (ver
-/// [`eject`]).
 pub fn skips_power_off(drive: &DriveInfo) -> bool {
     drive.bus == BusType::Mmc || !drive.can_power_off
 }
 
-/// Ejeta com segurança um `drive` cujas partições já foram desmontadas.
-///
-/// Cartões SD/MicroSD/MMC (`BusType::Mmc`) e qualquer drive sem suporte a
-/// `Drive.PowerOff` (`!can_power_off`) nunca chamam `PowerOff` — apenas
-/// `Drive.Eject` (quando `ejectable`), seguido de `libc::sync()` para
-/// garantir o flush físico de todos os buffers do kernel antes de reportar
-/// sucesso. Drives USB normais (`can_power_off == true`) tentam `Eject` e
-/// depois `PowerOff`; se `PowerOff` falhar por o dispositivo não estar
-/// atrás de um controlador USB (ver [`is_no_usb_device_error`]), a falha é
-/// tratada como sucesso gracioso — as partições já desmontadas garantem que
-/// a remoção física é segura mesmo sem o corte de energia.
 async fn eject(conn: &Connection, drive: &DriveInfo) -> anyhow::Result<()> {
     let path = drive.id.0.as_str();
 
@@ -1238,9 +986,6 @@ async fn eject(conn: &Connection, drive: &DriveInfo) -> anyhow::Result<()> {
     }
 }
 
-/// Formata o bloco em `path` (drive ou partição) com `fs_type` (`vfat`,
-/// `exfat`, `ext4`, `ntfs`, `btrfs`) via `Block.Format` do UDisks2, que
-/// encapsula o `mkfs.*` correspondente.
 async fn format_block(
     conn: &Connection,
     path: &str,
@@ -1250,9 +995,7 @@ async fn format_block(
     let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     opts.insert("label", zbus::zvariant::Value::from(label));
     opts.insert("update-partition-type", zbus::zvariant::Value::from(true));
-    // Permite que o UDisks2 limpe tabelas de partição/assinaturas
-    // preexistentes (ex.: imagens Ventoy/ISO gravadas via `dd`) antes de
-    // criar o novo filesystem.
+
     opts.insert("tear-down", zbus::zvariant::Value::from(true));
     conn.call_method(
         Some(UDISKS_SERVICE),
@@ -1265,18 +1008,6 @@ async fn format_block(
     Ok(())
 }
 
-/// Abre `block_path` via `Block.OpenDevice("rw", {"flags": O_SYNC|O_EXCL})`
-/// do UDisks2, devolvendo um `std::fs::File` já construído a partir do
-/// descritor recebido por D-Bus (fd-passing/`SCM_RIGHTS`).
-///
-/// A autorização passa pelo Polkit do UDisks2 (`udisksd` roda como root), o
-/// que garante permissão total de leitura/escrita sobre o nó de bloco sem
-/// depender do processo do HAL-9001 pertencer ao grupo `disk` nem de
-/// heurísticas de userspace — elimina a classe inteira de erros
-/// `Permission denied` ao formatar via `fatfs` em vez do `mkfs.vfat` do host.
-/// `O_SYNC` garante que cada escrita do `fatfs` seja persistida
-/// imediatamente; `O_EXCL` recusa a abertura se outro processo já tiver o
-/// dispositivo aberto em modo exclusivo.
 async fn open_device_fd(conn: &Connection, block_path: &str) -> anyhow::Result<std::fs::File> {
     let mut opts: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     opts.insert(
@@ -1297,13 +1028,6 @@ async fn open_device_fd(conn: &Connection, block_path: &str) -> anyhow::Result<s
     Ok(std::fs::File::from(std_fd))
 }
 
-// ---------------------------------------------------------------------------
-// ISO Flasher — checksum SHA256 e gravação de blocos em streaming (Épico H)
-// ---------------------------------------------------------------------------
-
-/// Lê `iso_path` em blocos de 4 MiB calculando o SHA256, emitindo progresso
-/// throttled a cada ~200ms. Roda inteiramente numa task Tokio — nunca bloqueia
-/// a thread de render.
 async fn checksum_task(iso_path: String, tx: EventTx) {
     let path_buf = std::path::PathBuf::from(&iso_path);
     let file = match tokio::fs::File::open(&path_buf).await {
@@ -1352,12 +1076,8 @@ async fn checksum_task(iso_path: String, tx: EventTx) {
     });
 }
 
-/// Assinatura gzip (`RFC 1952 §2.3.1`, primeiros 2 bytes do arquivo) — usada
-/// para decidir se a fonte precisa de descompressão em streaming antes da
-/// gravação, independente da extensão do nome do arquivo.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-/// `true` quando os dois primeiros bytes de `path` são a assinatura gzip.
 pub fn is_gzip_file(path: &std::path::Path) -> std::io::Result<bool> {
     let mut f = std::fs::File::open(path)?;
     let mut magic = [0u8; 2];
@@ -1368,11 +1088,6 @@ pub fn is_gzip_file(path: &std::path::Path) -> std::io::Result<bool> {
     }
 }
 
-/// Tamanho descomprimido estimado a partir do rodapé gzip (`ISIZE`, RFC 1952
-/// §2.3.1: últimos 4 bytes little-endian, módulo 2^32) — usado apenas como
-/// estimativa de progresso/ETA. Imagens descomprimidas maiores que 4 GiB
-/// fazem a estimativa "dar a volta", mas isso nunca afeta a gravação em si
-/// (o laço de cópia só para quando o descompressor devolve EOF de fato).
 pub fn gzip_uncompressed_size_hint(path: &std::path::Path) -> Option<u64> {
     use std::io::{Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
@@ -1386,9 +1101,6 @@ pub fn gzip_uncompressed_size_hint(path: &std::path::Path) -> Option<u64> {
     Some(u32::from_le_bytes(buf) as u64)
 }
 
-/// Detecta se `path` é gzip e estima o total de bytes a gravar: o tamanho
-/// descomprimido (via rodapé, ver [`gzip_uncompressed_size_hint`]) quando
-/// gzip, senão o tamanho bruto do arquivo.
 fn probe_image_sync(path: &std::path::Path) -> (bool, u64) {
     let compressed = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let is_gzip = is_gzip_file(path).unwrap_or(false);
@@ -1400,9 +1112,6 @@ fn probe_image_sync(path: &std::path::Path) -> (bool, u64) {
     (is_gzip, total)
 }
 
-/// Versão assíncrona de [`probe_image_sync`] — roda numa task blocking já
-/// que inspeciona o arquivo via `std::fs` (leitura de poucos bytes, mas
-/// ainda I/O síncrono).
 async fn probe_image(iso_path: &str) -> (bool, u64) {
     let path = std::path::PathBuf::from(iso_path);
     tokio::task::spawn_blocking(move || probe_image_sync(&path))
@@ -1410,13 +1119,6 @@ async fn probe_image(iso_path: &str) -> (bool, u64) {
         .unwrap_or((false, 0))
 }
 
-/// Núcleo síncrono de gravação (Épico H + streaming decompressor): lê
-/// `iso_path` — bruto, ou gzip via [`GzDecoder`] quando a assinatura for
-/// detectada (ver [`is_gzip_file`]) — em blocos de [`IO_BUFFER_SIZE`],
-/// gravando os bytes já descomprimidos diretamente no nó de bloco `dev_node`.
-/// Roda inteiramente síncrono numa task blocking dedicada (ver
-/// [`flash_inner`]), já que tanto `flate2` quanto a escrita direta no
-/// dispositivo são operações bloqueantes.
 fn flash_sync(
     iso_path: &std::path::Path,
     dev_node: &str,
@@ -1475,19 +1177,13 @@ fn flash_sync(
         }
     }
 
-    // Syncing: fsync do FD + sync() global de kernel — só então o "100%" vira
-    // sucesso de fato (H4).
     dst.flush()?;
     dst.sync_all()?;
-    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
-    // insegura; apenas força o flush de todos os buffers do kernel.
+
     unsafe {
         libc::sync();
     }
 
-    // `written` (bytes reais decodificados) substitui a estimativa de
-    // `total_bytes` no evento final — a estimativa do rodapé gzip pode
-    // divergir ligeiramente do total real (ver [`gzip_uncompressed_size_hint`]).
     let _ = tx.send(AppEvent::StorageFlashProgress {
         bytes_written: written,
         total_bytes: written,
@@ -1497,10 +1193,6 @@ fn flash_sync(
     Ok(())
 }
 
-/// Grava `iso_path` no dispositivo de bloco `dev_node`, delegando o trabalho
-/// síncrono (leitura/descompressão/escrita) a [`flash_sync`] numa task
-/// blocking — nunca trava a thread async enquanto grava blocos de 4 MiB ou
-/// descomprime gzip em streaming.
 async fn flash_inner(
     iso_path: &str,
     dev_node: &str,
@@ -1514,15 +1206,6 @@ async fn flash_inner(
     tokio::task::spawn_blocking(move || flash_sync(&path_buf, &dev_owned, &cancel, &tx)).await?
 }
 
-// ---------------------------------------------------------------------------
-// Multi-boot leve embarcado (substitui o antigo instalador do Ventoy via
-// `scripts/ventoy.sh` — ver `backend::multiboot`).
-// ---------------------------------------------------------------------------
-
-/// Prepara `mount_point` para o multi-boot leve do HAL-9001 (ver
-/// [`crate::backend::multiboot::prepare_multiboot`]), rodando a escrita de
-/// arquivos numa task blocking (I/O de filesystem síncrono) para nunca
-/// travar o executor async.
 async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: EventTx) {
     let mp = std::path::PathBuf::from(&mount_point);
     let result = tokio::task::spawn_blocking(move || crate::backend::multiboot::prepare_multiboot(&mp))
@@ -1540,9 +1223,6 @@ async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: Even
     let _ = tx.send(AppEvent::Toast(toast));
 }
 
-/// Roda `bin` (um `mkfs.*` resolvido por [`mkfs_command`]) sobre `dev_node`
-/// via `sudo -S`/`sudo -n`, pedindo a senha pelo modal nativo da TUI quando
-/// necessário e repetindo em caso de senha incorreta.
 async fn format_via_sudo(
     dev_node: &str,
     bin: &str,
@@ -1554,12 +1234,6 @@ async fn format_via_sudo(
     run_sudo_command(&label, bin, args, sudo_tx, tx).await
 }
 
-/// Núcleo comum de elevação via `sudo -S`/`sudo -n`: roda `program`/`args`
-/// pedindo a senha pelo modal nativo da TUI quando necessário, repetindo em
-/// caso de senha incorreta — usado tanto por [`format_via_sudo`] (roda o
-/// `mkfs.*` inteiro) quanto por [`format_fat32_elevated`] (roda apenas o
-/// `chmod` de elevação temporária, já que a formatação em si é feita em
-/// processo via `fatfs`).
 async fn run_sudo_command(
     label: &str,
     program: &str,
@@ -1594,24 +1268,12 @@ async fn run_sudo_command(
     }
 }
 
-/// `true` quando o binário `mkfs.vfat` existe em algum diretório do `PATH` —
-/// usado pelo fallback de `sudo` para decidir entre invocar `mkfs.vfat`
-/// diretamente ou usar o formatador FAT32 100% Rust puro (`fatfs`) sobre o
-/// nó de dispositivo, já que rodar `sudo mkfs.vfat` num host sem
-/// `dosfstools` instalado sempre falha com "comando não encontrado".
 fn mkfs_vfat_available() -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join("mkfs.vfat").is_file()))
         .unwrap_or(false)
 }
 
-/// Formata `dev_node` como FAT32 sem depender de `mkfs.vfat`/`dosfstools`
-/// instalado no host: eleva via `sudo chmod` a permissão de escrita sobre o
-/// nó de dispositivo, formata diretamente em processo com `fatfs` (sem
-/// invocar nenhum binário externo), e restaura a permissão original do nó
-/// ao final (melhor esforço) — usado como último fallback de formatação
-/// FAT32 quando tanto `mkfs.vfat` quanto `Block.OpenDevice` (via Polkit)
-/// estão indisponíveis.
 async fn format_fat32_elevated(
     dev_node: &str,
     label: &str,
@@ -1645,12 +1307,6 @@ async fn format_fat32_elevated(
     format_result
 }
 
-/// Tenta formatar `block_path` como FAT32 usando o formatador Rust puro
-/// (`fatfs`), abrindo o descritor via `Block.OpenDevice` do UDisks2 — usado
-/// como primeira tentativa quando `mkfs.vfat` não está instalado no host.
-/// Devolve `Err` (sem nunca emitir toast) tanto para falha de
-/// `Block.OpenDevice` (ex.: `NotAuthorized`) quanto para falha do próprio
-/// `fatfs::format_volume`, deixando o chamador decidir o próximo fallback.
 async fn try_pure_rust_fat32(conn: &Connection, block_path: &str, label: &str) -> Result<(), String> {
     let file = open_device_fd(conn, block_path)
         .await
@@ -1662,13 +1318,6 @@ async fn try_pure_rust_fat32(conn: &Connection, block_path: &str, label: &str) -
         .map_err(|e| e.to_string())
 }
 
-/// Fallback final de formatação: eleva via `sudo -S`/`sudo -n` (modal nativo
-/// da TUI) e roda o `mkfs.*` correspondente diretamente sobre o nó de
-/// dispositivo — acionado sempre que `Block.Format`/`Block.OpenDevice` do
-/// UDisks2 são recusados, por qualquer motivo (`NotAuthorized`, permissão
-/// negada, ou qualquer outro erro de D-Bus), **sem** emitir um toast de erro
-/// prematuro antes de tentar a elevação interativa. Ao final, dispara
-/// `Block.Rescan` para que o UDisks2 reconheça o novo filesystem.
 #[allow(clippy::too_many_arguments)]
 async fn format_with_sudo_fallback(
     conn: &Connection,
@@ -1685,10 +1334,7 @@ async fn format_with_sudo_fallback(
         return Toast::error(format_error_message(fs_type, original_err));
     };
     if is_fat_fs_type(fs_type) && !mkfs_vfat_available() {
-        // Host sem `dosfstools`: rodar `sudo mkfs.vfat` falharia sempre com
-        // "comando não encontrado". Formata via `fatfs` (Rust puro) sobre o
-        // nó de dispositivo, elevando a permissão de escrita temporariamente
-        // via `sudo chmod` em vez de depender do `mkfs.vfat` do host.
+
         tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — formatando FAT32 via fatfs com permissão elevada (sudo chmod)");
         return match format_fat32_elevated(&dev_node, label, sudo_tx, tx).await {
             Ok(()) => {
@@ -1712,11 +1358,6 @@ async fn format_with_sudo_fallback(
     }
 }
 
-/// Fallback de gravação de ISO usado quando o processo do HAL-9001 não tem
-/// permissão direta sobre `dev_node` (não é root nem pertence ao grupo
-/// `disk`): roda `dd` sob `sudo -S`/`sudo -n`, com a senha pedida via modal
-/// nativo da TUI quando necessário, convertendo cada linha de
-/// `status=progress` em `AppEvent::StorageFlashProgress`.
 async fn flash_elevated(
     iso_path: &str,
     dev_node: &str,
@@ -1783,23 +1424,13 @@ async fn flash_elevated(
         speed_mbps: 0.0,
         eta_secs: 0,
     });
-    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
-    // insegura; apenas força o flush de todos os buffers do kernel.
+
     unsafe {
         libc::sync();
     }
     Ok(())
 }
 
-/// Núcleo síncrono do fallback elevado para fontes gzip: descomprime
-/// `iso_path` via [`GzDecoder`] em blocos de [`IO_BUFFER_SIZE`] e escreve os
-/// bytes descomprimidos diretamente no `stdin` de um `dd of=<dev_node>`
-/// rodado sob `sudo`. `dd` nunca vê os bytes comprimidos — só recebe a
-/// imagem já decodificada — o que evita gravar um `.img.gz` cru no
-/// dispositivo. A senha (quando necessária) é escrita primeiro, como uma
-/// linha própria, antes do primeiro byte da imagem: `sudo -S` consome só a
-/// linha da senha do `stdin`, repassando o restante do fluxo para o `dd`
-/// filho.
 fn flash_elevated_gzip_sync(
     iso_path: &str,
     dev_node: &str,
@@ -1831,8 +1462,6 @@ fn flash_elevated_gzip_sync(
     }
     drop(child.stdout.take());
 
-    // Lê o `stderr` do `dd` (onde `status=progress` escreve) numa thread à
-    // parte, para nunca travar o laço de escrita da imagem no pipe.
     let mut stderr = child.stderr.take().expect("stderr piped");
     let tx_err = tx.clone();
     let stderr_thread = std::thread::spawn(move || -> String {
@@ -1907,9 +1536,7 @@ fn flash_elevated_gzip_sync(
         }
         Ok(())
     })();
-    // Fecha o `stdin` do `dd` (EOF) para que ele finalize a gravação, mesmo
-    // quando `write_result` for `Err` (ex.: cancelamento) — sem isso o `dd`
-    // ficaria bloqueado esperando mais bytes.
+
     drop(stdin);
 
     if let Err(e) = write_result {
@@ -1924,9 +1551,6 @@ fn flash_elevated_gzip_sync(
     Ok((status, stderr_text))
 }
 
-/// Fallback elevado para fontes gzip (ver [`flash_elevated_gzip_sync`]):
-/// pede a senha pelo modal nativo da TUI quando necessário, repetindo em
-/// caso de senha incorreta — mesma disciplina de retry de [`flash_elevated`].
 async fn flash_elevated_gzip(
     iso_path: &str,
     dev_node: &str,
@@ -1967,8 +1591,7 @@ async fn flash_elevated_gzip(
         speed_mbps: 0.0,
         eta_secs: 0,
     });
-    // SAFETY: `sync(2)` não recebe ponteiros e não pode falhar de forma
-    // insegura; apenas força o flush de todos os buffers do kernel.
+
     unsafe {
         libc::sync();
     }
@@ -2008,20 +1631,10 @@ async fn flash_task(
     let _ = tx.send(AppEvent::StorageFlashDone { device_id, result });
 }
 
-// ---------------------------------------------------------------------------
-// Gerenciador de ISOs multi-boot — listar/adicionar/remover arquivos em
-// `<mount>/ISOs/` de uma partição de dados já preparada (ou preparável).
-// ---------------------------------------------------------------------------
-
-/// Caminho de `<mount>/ISOs`, criado sob demanda por [`multiboot_add_iso_task`]
-/// quando ainda não existir (ex.: drive ainda não preparado via `[B]`, mas o
-/// usuário já quer copiar uma ISO para dentro).
 fn isos_subdir(mount_point: &str) -> String {
     format!("{}/ISOs", mount_point.trim_end_matches('/'))
 }
 
-/// Lê `<mount>/ISOs/`, filtra `.iso`/`.img` e emite a listagem (ordenada)
-/// junto do espaço livre restante na partição inteira.
 async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
     let isos_dir = isos_subdir(mount_point);
     let mut raw = Vec::new();
@@ -2046,9 +1659,6 @@ async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
     });
 }
 
-/// Garante a montagem da partição de dados e publica a listagem atual de
-/// ISOs sob `ISOs/`. Falha graciosamente (lista vazia + toast) se a
-/// montagem falhar — nunca deixa o gerenciador travado em `Loading`.
 async fn multiboot_list_isos_task(
     conn: Connection,
     device_id: String,
@@ -2071,11 +1681,6 @@ async fn multiboot_list_isos_task(
     }
 }
 
-/// Copia `src_path` para dentro de `dst_path` em blocos de 4 MiB, emitindo
-/// progresso throttled — mesma disciplina do `flash_inner`, mas sem `libc::
-/// sync()` global (arquivo regular, não bloco de dispositivo). Garante
-/// `flush`/`sync_all` do destino antes de reportar sucesso: uma ISO truncada
-/// num pendrive de boot é uma falha real, não cosmética.
 async fn copy_iso_inner(
     src_path: &str,
     dst_path: &str,
@@ -2192,12 +1797,6 @@ async fn multiboot_remove_iso_task(
     list_and_emit(&mount_point, device_id, &tx).await;
 }
 
-// ---------------------------------------------------------------------------
-// Task de polling / dispatcher
-// ---------------------------------------------------------------------------
-
-/// Reconecta/consulta o UDisks2 e monta o snapshot, ou devolve o erro de
-/// conexão/consulta para que o chamador degrade graciosamente.
 async fn refresh_snapshot(conn: &Option<Connection>) -> anyhow::Result<StorageSnapshot> {
     let Some(c) = conn else {
         return Err(anyhow::anyhow!("sem conexão D-Bus"));
@@ -2208,10 +1807,6 @@ async fn refresh_snapshot(conn: &Option<Connection>) -> anyhow::Result<StorageSn
     Ok(build_snapshot(&objects, &swaps, &disks))
 }
 
-/// Task raiz do Módulo 4: conecta ao system bus, publica snapshots periódicos
-/// e despacha ações de montagem/desmontagem/ejeção. Degrada graciosamente
-/// (via `AppEvent::ServiceDegraded`) quando o UDisks2 não está disponível,
-/// tentando reconectar a cada tick.
 pub async fn run(
     poll_ms: u64,
     tx: EventTx,
@@ -2223,7 +1818,7 @@ pub async fn run(
 
     let mut conn: Option<Connection> = Connection::system().await.ok();
     let mut last_snapshot: Option<StorageSnapshot> = None;
-    // Tokens de cancelamento das gravações de ISO em curso, por `device_id`.
+
     let mut flash_cancels: HashMap<String, Arc<AtomicBool>> = HashMap::new();
 
     loop {
@@ -2250,8 +1845,7 @@ pub async fn run(
             }
             res = actions.recv() => match res {
                 Ok(Action::StorageAnalyzerScan(path)) => {
-                    // Varredura pura de filesystem — não depende do UDisks2/
-                    // D-Bus, então roda mesmo enquanto `conn` está indisponível.
+
                     tokio::spawn(crate::backend::disk_analyzer::scan(path, tx.clone()));
                 }
                 Ok(action) => {
@@ -2267,8 +1861,6 @@ pub async fn run(
     Ok(())
 }
 
-/// Revalida a trava de segurança e despacha a ação D-Bus correspondente,
-/// emitindo um toast de confirmação/erro.
 async fn handle_action(
     conn: &Connection,
     action: Action,
@@ -2279,12 +1871,7 @@ async fn handle_action(
 ) {
     match action {
         Action::StorageMount(id) => {
-            // `Drive`s do UDisks2 nunca implementam a interface `Filesystem`
-            // (só os `block_devices` de partição/disco não particionado a
-            // implementam) — chamar `Filesystem.Mount` num caminho de
-            // `drives/...` falha sempre. Quando `id` é um drive, monta cada
-            // uma de suas partições ainda não montadas; quando já é uma
-            // partição, monta-a diretamente.
+
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
                 let mut mount_points: Vec<String> = Vec::new();
                 let mut last_err: Option<anyhow::Error> = None;
@@ -2318,7 +1905,7 @@ async fn handle_action(
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageUnmount(id) => {
-            // Mesma correção do braço acima, para o sentido inverso.
+
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
                 let mut unmounted = 0usize;
                 let mut last_err: Option<anyhow::Error> = None;
@@ -2349,8 +1936,7 @@ async fn handle_action(
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageEject(id) => {
-            // Guarda no backend (camada 3, TOCTOU): revalida contra o último
-            // snapshot conhecido antes de tocar o D-Bus.
+
             let Some(drive) = snapshot
                 .as_ref()
                 .and_then(|snap| snap.drives.iter().find(|d| d.id == id))
@@ -2369,10 +1955,6 @@ async fn handle_action(
                 return;
             }
 
-            // Desmonta todas as partições montadas antes de ejetar. Uma
-            // falha aqui (ex.: dispositivo ocupado) aborta a operação sem
-            // tocar `Eject`/`PowerOff` — reportar sucesso com uma partição
-            // ainda montada seria inseguro.
             let mut unmount_err: Option<anyhow::Error> = None;
             for part in &drive.partitions {
                 if part.is_mounted() {
@@ -2396,17 +1978,14 @@ async fn handle_action(
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageRefresh => {
-            // O próximo tick já republica o snapshot; nada a fazer aqui além
-            // de reservar o braço para clareza do fluxo.
+
         }
         Action::StorageFormat {
             device_id,
             fs_type,
             label,
         } => {
-            // Camada 3 (TOCTOU): revalida contra o último snapshot conhecido
-            // imediatamente antes de tocar o D-Bus — o alvo pode ter mudado
-            // entre a UI e a execução da ação.
+
             let id = DeviceId(device_id.clone());
             if snapshot
                 .as_ref()
@@ -2419,18 +1998,14 @@ async fn handle_action(
                 )));
                 return;
             }
-            // `snapshot` está garantidamente `Some` aqui: `is_system_target`
-            // acima já teria bloqueado (fail-closed) se fosse `None`.
+
             let Some(snap) = snapshot.as_ref() else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
                     "árvore de discos indisponível",
                 )));
                 return;
             };
-            // Resolve o alvo (que pode ser um `Drive` ou já um
-            // `block_device`) para o caminho de objeto de bloco correto —
-            // `Block.Format` só existe em caminhos `block_devices/...`,
-            // nunca no caminho de objeto do `Drive`.
+
             let Some(block_path) = resolve_block_object_path(snap, &id) else {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "bloco de dispositivo não encontrado para formatação");
                 let _ = tx.send(AppEvent::Toast(Toast::error(
@@ -2438,9 +2013,7 @@ async fn handle_action(
                 )));
                 return;
             };
-            // Desmonta todas as partições montadas do alvo antes de formatar
-            // — o `Block.Format` falha (ou é destrutivo demais) sobre um
-            // dispositivo com filesystems montados.
+
             for part_path in mounted_partition_paths(snap, &id) {
                 let _ = unmount(conn, &part_path).await;
             }
@@ -2448,18 +2021,11 @@ async fn handle_action(
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info("Formatação concluída"),
                 Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {
-                    // O host não tem `dosfstools` instalado — tenta primeiro
-                    // o formatador FAT32 100% Rust puro (`fatfs`); se também
-                    // falhar (ex.: `Block.OpenDevice` recusado por falta de
-                    // agente Polkit), cai para o fallback de `sudo` sem
-                    // NUNCA expor um erro cru ao usuário nesse meio-tempo.
+
                     tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — tentando formatador FAT32 Rust puro via Block.OpenDevice");
                     match try_pure_rust_fat32(conn, &block_path, &label).await {
                         Ok(()) => {
-                            // Notifica o UDisks2/kernel para rescanear o
-                            // dispositivo — a formatação foi feita
-                            // diretamente no descritor aberto via
-                            // `OpenDevice`, por fora do `Block.Format`.
+
                             let _ = udisks_call(
                                 conn,
                                 &block_path,
@@ -2479,12 +2045,7 @@ async fn handle_action(
                     }
                 }
                 Err(e) => {
-                    // Qualquer outra falha de `Block.Format` (`NotAuthorized`
-                    // por falta de agente Polkit, permissão negada, ou outro
-                    // erro de D-Bus) aciona IMEDIATAMENTE o fallback de
-                    // elevação via `sudo` — nunca expõe o erro cru do
-                    // UDisks2 ao usuário antes de tentar a elevação
-                    // interativa pelo modal nativo da TUI.
+
                     format_with_sudo_fallback(
                         conn, snap, &block_path, &device_id, &fs_type, &label, &e, sudo_tx, tx,
                     )
@@ -2539,8 +2100,7 @@ async fn handle_action(
             }
         }
         Action::StorageMultibootPrepare { device_id } => {
-            // Camada 3 (TOCTOU): revalida a trava de segurança contra o
-            // último snapshot conhecido antes de tocar o filesystem.
+
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(

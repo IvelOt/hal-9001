@@ -1,7 +1,3 @@
-//! Backend do Módulo 5 — Mixer de Áudio & Dispositivos (PipeWire & PulseAudio).
-//!
-//! 100% Pure Rust — Zero dependências de novas crates externas.
-//! Comunica-se com PipeWire/WirePlumber (`wpctl`) com fallback para PulseAudio (`pactl`).
 
 use std::time::Duration;
 
@@ -10,14 +6,13 @@ use tokio::sync::broadcast;
 
 use crate::events::{Action, AppEvent, EventTx};
 
-/// Categoria do nó de áudio no mixer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AudioCategory {
-    /// Dispositivos de Saída (Alto-falantes, Fones, HDMI)
+
     Sink,
-    /// Streams de reprodução por aplicativo (Spotify, Firefox, Discord, Steam)
+
     AppStream,
-    /// Dispositivos de Entrada (Microfone interno, Headsets, Mics USB)
+
     Source,
 }
 
@@ -53,53 +48,51 @@ impl AudioCategory {
     }
 }
 
-/// Nó individual de áudio (um dispositivo ou um stream de aplicativo).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioNode {
-    /// ID numérico no PipeWire/PulseAudio (ex: 57)
+
     pub id: u32,
-    /// Nome amigável de exibição (ex: "Spotify", "Firefox", "Áudio Interno")
+
     pub name: String,
-    /// Descrição detalhada do hardware ou rota
+
     pub description: String,
-    /// Categoria do nó
+
     pub category: AudioCategory,
-    /// Nível de volume normalizado (0.0 = 0%, 1.0 = 100%, 1.5 = 150% overdrive)
+
     pub volume: f32,
-    /// Se o nó está mutado
+
     pub is_muted: bool,
-    /// Se este nó é o dispositivo padrão do sistema
+
     pub is_default: bool,
-    /// Ícone original ou derivado
+
     pub icon_name: Option<String>,
 }
 
 impl AudioNode {
-    /// Porcentagem de volume inteira (ex: 80, 100, 150).
+
     pub fn volume_percent(&self) -> u32 {
         (self.volume * 100.0).round() as u32
     }
 }
 
-/// Snapshot consolidado do subsistema de áudio.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AudioSnapshot {
-    /// Nome do servidor ativo (ex: "PipeWire (WirePlumber)", "PulseAudio")
+
     pub server_name: String,
-    /// Dispositivos de saída
+
     pub sinks: Vec<AudioNode>,
-    /// Streams de reprodução ativos por aplicativo
+
     pub apps: Vec<AudioNode>,
-    /// Dispositivos de entrada (microfones)
+
     pub sources: Vec<AudioNode>,
-    /// ID do sink padrão atual
+
     pub default_sink_id: Option<u32>,
-    /// ID do source padrão atual
+
     pub default_source_id: Option<u32>,
 }
 
 impl AudioSnapshot {
-    /// Obtém a lista de nós para a categoria selecionada.
+
     pub fn nodes_for_category(&self, cat: AudioCategory) -> &[AudioNode] {
         match cat {
             AudioCategory::Sink => &self.sinks,
@@ -109,7 +102,6 @@ impl AudioSnapshot {
     }
 }
 
-/// Loop principal do Worker Tokio para o Mixer de Áudio.
 pub async fn run(
     poll_interval_ms: u64,
     tx: EventTx,
@@ -169,9 +161,8 @@ pub async fn run(
     }
 }
 
-/// Extrai o snapshot de áudio via PipeWire (`wpctl`) ou PulseAudio (`pactl`).
 pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
-    // 1. Tenta PipeWire/WirePlumber via `wpctl status`
+
     if let Ok(output) = tokio::process::Command::new("wpctl")
         .arg("status")
         .output()
@@ -185,7 +176,6 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
         }
     }
 
-    // 2. Fallback para PulseAudio via `pactl`
     if let Ok(output) = tokio::process::Command::new("pactl")
         .args(["list", "sinks"])
         .output()
@@ -220,7 +210,6 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
     })
 }
 
-/// Parser puro da saída de `wpctl status`.
 pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
     let mut sinks = Vec::new();
     let mut apps = Vec::new();
@@ -282,9 +271,6 @@ pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
     })
 }
 
-/// Extrai um `AudioNode` a partir de uma linha de `wpctl status`.
-/// Exemplo: `│  *   57. Áudio interno Estéreo analógico  [vol: 0.80 MUTED]`
-/// Exemplo: `│      66. Firefox                             [vol: 1.00]`
 fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
     let clean = line.replace(['│', '└', '─', '├'], " ");
     let trimmed = clean.trim();
@@ -292,7 +278,6 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
         return None;
     }
 
-    // Ignora links e portas de roteamento de canais (ex: "79. output_FL > thinkplus-LP75:playback_FL [active]")
     if trimmed.contains('>')
         || trimmed.contains("playback_")
         || trimmed.starts_with("output_")
@@ -308,11 +293,9 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
         trimmed
     };
 
-    // Extrai o ID antes do '.'
     let (id_str, rest) = without_star.split_once('.')?;
     let id: u32 = id_str.trim().parse().ok()?;
 
-    // Extrai volume e mute dentro de `[...]`
     let (name_part, vol_part) = match rest.rsplit_once('[') {
         Some((n, v)) => (n.trim(), v.trim_end_matches(']').trim()),
         None => (rest.trim(), ""),
@@ -354,7 +337,6 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
     })
 }
 
-/// Limpa nomes de dispositivos e streams para exibição clara na TUI.
 fn clean_node_name(raw: &str) -> String {
     let s = raw.trim();
     if s.is_empty() {
@@ -363,7 +345,6 @@ fn clean_node_name(raw: &str) -> String {
     s.to_string()
 }
 
-/// Parser de fallback para saídas do `pactl`.
 pub fn parse_pactl_output(sinks_str: &str, apps_str: &str, sources_str: &str) -> AudioSnapshot {
     let sinks = parse_pactl_nodes(sinks_str, AudioCategory::Sink);
     let apps = parse_pactl_nodes(apps_str, AudioCategory::AppStream);
@@ -441,8 +422,6 @@ fn parse_pactl_nodes(output: &str, category: AudioCategory) -> Vec<AudioNode> {
 
     nodes
 }
-
-// Funções de Controle de Volume & Mudo
 
 pub async fn set_volume(node_id: u32, volume: f32) -> anyhow::Result<()> {
     let vol_clamped = volume.clamp(0.0, 1.5);

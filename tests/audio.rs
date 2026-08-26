@@ -1,4 +1,3 @@
-//! Testes unitários e de integração do Módulo 5 (Mixer de Áudio).
 
 use hal9001::app::{App, Tab};
 use hal9001::backend::audio::{
@@ -20,16 +19,16 @@ PipeWire 'pipewire-0' [1.6.8, ivelot@IvelPC, cookie:1213496054]
 Audio
  ├─ Devices:
  │      48. Áudio interno                      [alsa]
- │  
+ │
  ├─ Sinks:
  │  *   57. Áudio interno Estéreo analógico  [vol: 0.80 MUTED]
  │      59. Fone de Ouvido Bluetooth          [vol: 1.00]
- │  
+ │
  ├─ Sources:
  │  *   58. Microfone Interno Estéreo         [vol: 0.38]
- │  
+ │
  ├─ Filters:
- │  
+ │
  └─ Streams:
         66. Firefox                             [vol: 0.95]
         80. Spotify                             [vol: 0.60]
@@ -44,7 +43,6 @@ fn test_parse_wpctl_status_sinks_sources_and_streams() {
     assert_eq!(snap.sources.len(), 1);
     assert_eq!(snap.apps.len(), 2);
 
-    // Default sink
     assert_eq!(snap.default_sink_id, Some(57));
     let sink1 = &snap.sinks[0];
     assert_eq!(sink1.id, 57);
@@ -52,7 +50,6 @@ fn test_parse_wpctl_status_sinks_sources_and_streams() {
     assert!(sink1.is_muted);
     assert_eq!((sink1.volume * 100.0).round() as u32, 80);
 
-    // Apps
     let app1 = &snap.apps[0];
     assert_eq!(app1.id, 66);
     assert_eq!(app1.name, "Firefox");
@@ -64,7 +61,6 @@ fn test_parse_wpctl_status_sinks_sources_and_streams() {
     assert_eq!(app2.name, "Spotify");
     assert_eq!((app2.volume * 100.0).round() as u32, 60);
 
-    // Sources
     assert_eq!(snap.default_source_id, Some(58));
     let src1 = &snap.sources[0];
     assert_eq!(src1.id, 58);
@@ -79,7 +75,7 @@ Audio
  ├─ Sources:
  │  *   58. Áudio interno Estéreo analógico  [vol: 0.38 MUTED]
  └─ Streams:
-        90. Firefox                                                     
+        90. Firefox
              79. output_FL       > 联想thinkplus-LP75:playback_FL	[active]
              81. output_FR       > 联想thinkplus-LP75:playback_FR	[active]
 "#;
@@ -140,48 +136,40 @@ fn test_audio_mixer_navigation_and_actions() {
     assert!(follow_ups.is_empty());
     assert!(app.audio.is_some());
 
-    // 1. Categoria inicial: 0 (Sinks)
     assert_eq!(app.audio_category, 0);
     assert_eq!(app.audio_selected, 0);
 
-    // 2. Navega para baixo no sink
     app.dispatch(Action::Down, &action_tx);
     assert_eq!(app.audio_selected, 1);
 
-    // 3. Enter no sink 59 -> define como default
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::AudioSetDefault(59)
     );
 
-    // 4. Volume Up no sink 59 (+5%)
     app.dispatch(Action::VolumeUp, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::AudioVolumeUp(59, 0.05)
     );
 
-    // 5. Volume Down no sink 59 (-5%)
     app.dispatch(Action::VolumeDown, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::AudioVolumeDown(59, 0.05)
     );
 
-    // 6. Muto no sink 59
     app.dispatch(Action::ToggleMute, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::AudioToggleMute(59)
     );
 
-    // 7. Troca para a aba de Apps (categoria 1)
     app.dispatch(Action::AudioSelectCategory(1), &action_tx);
     assert_eq!(app.audio_category, 1);
     assert_eq!(app.audio_selected, 0);
 
-    // Enter no App (Firefox) -> alterna Mudo
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
@@ -211,7 +199,7 @@ fn test_audio_headless_ui_render() {
         name: "Sony WH-1000XM5 (Bluetooth A2DP)".to_string(),
         description: "Bluetooth Headset".to_string(),
         category: AudioCategory::Sink,
-        volume: 1.20, // Overdrive
+        volume: 1.20,
         is_muted: false,
         is_default: false,
         icon_name: Some("audio-headset".to_string()),

@@ -1,7 +1,3 @@
-//! Seletor de arquivos estilo Yazi, usado pelo ISO Flasher e pelo gerenciador
-//! de ISOs do Ventoy para escolher um `.iso`/`.img`/`.vhd` sem digitar o
-//! caminho manualmente. Este módulo é intencionalmente puro (sem async/D-Bus):
-//! apenas listagem de diretório (`std::fs`) e renderização.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -18,7 +14,6 @@ use super::storage::modal_block;
 use super::theme::Palette;
 use super::widgets::human_bytes;
 
-/// Uma entrada da listagem de diretório do seletor (arquivo ou subdiretório).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileEntry {
     pub name: String,
@@ -28,10 +23,6 @@ pub struct FileEntry {
     pub modified: Option<SystemTime>,
 }
 
-/// Extensões de imagem bruta que o seletor reconhece como "escolhíveis"
-/// (`.iso`/`.img`/`.vhd`/`.raw`, sem diferenciar maiúsculas/minúsculas) —
-/// usado pelo gerenciador de ISOs multi-boot/Ventoy, que só lê imagens não
-/// comprimidas diretamente da partição de dados.
 pub fn is_pickable_image(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".iso")
@@ -40,11 +31,6 @@ pub fn is_pickable_image(name: &str) -> bool {
         || lower.ends_with(".raw")
 }
 
-/// Extensões de imagem comprimida reconhecidas pelo ISO Flasher — apenas
-/// gzip (`.gz`/`.img.gz`/`.iso.gz`/`.raw.gz`) tem descompressão em streaming
-/// ativa (via `flate2`, ver `backend::storage::flash_sync`); `.zip`/`.xz`/
-/// `.zst` são reconhecidos para navegação, mas ainda não têm um decodificador
-/// puro Rust integrado.
 fn is_compressed_image(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".img.gz")
@@ -56,17 +42,10 @@ fn is_compressed_image(name: &str) -> bool {
         || lower.ends_with(".zst")
 }
 
-/// Imagem gravável pelo ISO Flasher: bruta (ver [`is_pickable_image`]) ou
-/// comprimida (ver [`is_compressed_image`]).
 pub fn is_flashable_image(name: &str) -> bool {
     is_pickable_image(name) || is_compressed_image(name)
 }
 
-/// Decide se `name` pode ser selecionado no contexto atual do seletor: o
-/// ISO Flasher aceita imagens comprimidas com descompressão em streaming
-/// (ver [`is_flashable_image`]); adicionar ao multi-boot/Ventoy só aceita
-/// imagens brutas, já que o Ventoy sempre lê o arquivo diretamente da
-/// partição de dados, sem descomprimir nada em tempo de boot.
 pub fn is_pickable_for(purpose: &FilePickerPurpose, name: &str) -> bool {
     match purpose {
         FilePickerPurpose::FlasherIso { .. } => is_flashable_image(name),
@@ -74,9 +53,6 @@ pub fn is_pickable_for(purpose: &FilePickerPurpose, name: &str) -> bool {
     }
 }
 
-/// Ordena entradas com diretórios primeiro, depois arquivos, alfabeticamente
-/// (sem diferenciar caixa) dentro de cada grupo — função pura, testável sem
-/// tocar o filesystem real.
 pub fn sort_entries(entries: &mut [FileEntry]) {
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
@@ -85,9 +61,6 @@ pub fn sort_entries(entries: &mut [FileEntry]) {
     });
 }
 
-/// Lista o conteúdo de `path`, já ordenado (ver [`sort_entries`]). Entradas
-/// ilegíveis (permissão negada, symlink quebrado, etc.) são silenciosamente
-/// ignoradas em vez de abortar a listagem inteira.
 pub fn list_dir(path: &Path) -> Result<Vec<FileEntry>, String> {
     let rd = std::fs::read_dir(path).map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
@@ -108,8 +81,6 @@ pub fn list_dir(path: &Path) -> Result<Vec<FileEntry>, String> {
     Ok(entries)
 }
 
-/// Formata um `SystemTime` como `YYYY-MM-DD HH:MM` (UTC), sem depender de
-/// nenhuma crate de data/hora além do que já está no `Cargo.lock`.
 fn format_mtime(t: SystemTime) -> String {
     let Ok(dur) = t.duration_since(SystemTime::UNIX_EPOCH) else {
         return String::new();
@@ -119,8 +90,6 @@ fn format_mtime(t: SystemTime) -> String {
     let rem = secs % 86_400;
     let (h, m) = (rem / 3600, (rem % 3600) / 60);
 
-    // Conversão civil de dias-desde-época para (ano, mês, dia) — algoritmo de
-    // Howard Hinnant (`days_from_civil` invertido), sem dependências extras.
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
@@ -135,8 +104,6 @@ fn format_mtime(t: SystemTime) -> String {
     format!("{y:04}-{m2:02}-{d:02} {h:02}:{m:02}")
 }
 
-/// Modal centralizado (~80% x 70%) com cabeçalho de caminho, lista rolável de
-/// entradas, rodapé de detalhes do item selecionado e dicas de teclado.
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
     let m = app.lang.messages();
     let area = super::centered(80, 70, f.area());
@@ -146,13 +113,13 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
     f.render_widget(block, area);
 
     let rows = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Length(1), // caminho atual
-        ratatui::layout::Constraint::Length(1), // espaço
-        ratatui::layout::Constraint::Min(3),    // lista
-        ratatui::layout::Constraint::Length(1), // espaço
-        ratatui::layout::Constraint::Length(1), // detalhes do item selecionado
-        ratatui::layout::Constraint::Length(1), // dica de navegação
-        ratatui::layout::Constraint::Length(1), // dica de saltos
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Min(3),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
     ])
     .split(inner);
 

@@ -1,36 +1,18 @@
-//! Analisador de Espaço em Disco Nativo (estilo `ncdu`/`dua`), 100% Rust puro
-//! — varredura recursiva via `std::fs::read_dir`, sem nenhuma dependência
-//! externa. Sobe uma linha (arquivo ou subdiretório) por vez, somando o
-//! tamanho recursivo de cada subdiretório para permitir a navegação "entrar/
-//! voltar" da UI (ver `ui::storage::draw_analyzer`).
-//!
-//! A varredura roda em streaming: publica `AppEvent::StorageAnalyzerProgress`
-//! periodicamente (ver [`ScanProgress`]) para que a UI anime um spinner e
-//! mostre contadores em tempo real em árvores grandes, em vez de parecer
-//! travada até um único evento final.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::events::{AppEvent, EventTx};
 
-/// Diretórios de sistema/virtuais nunca escaneados recursivamente — evita
-/// tentar ler pseudo-arquivos como `/proc/kcore` (reporta 128 TB de tamanho)
-/// ou travar em `/sys`/`/dev` ao escanear a raiz `/`.
 const SKIPPED_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run", "/tmp", "/sys/kernel/debug"];
 
 fn is_skipped_dir(path: &Path) -> bool {
     SKIPPED_DIRS.iter().any(|s| path == Path::new(s))
 }
 
-/// Emite no máximo um evento de progresso a cada 500 itens visitados ou a
-/// cada 100ms (o que ocorrer primeiro) — throttling para não inundar o canal
-/// de eventos em árvores com milhões de arquivos.
 const PROGRESS_ITEMS_INTERVAL: usize = 500;
 const PROGRESS_TIME_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Acumulador de progresso de uma varredura em curso, compartilhado por toda
-/// a recursão de [`dir_size_recursive`] via referência mutável.
 struct ScanProgress<'a> {
     tx: &'a EventTx,
     items_scanned: usize,
@@ -48,9 +30,6 @@ impl<'a> ScanProgress<'a> {
         }
     }
 
-    /// Registra `path` como visitado, somando `bytes` ao total acumulado
-    /// (`0` para diretórios, cujo tamanho já foi somado item a item pelos
-    /// arquivos dentro deles) e publica progresso quando o throttle permite.
     fn record(&mut self, path: &Path, bytes: u64) {
         self.items_scanned += 1;
         self.total_bytes += bytes;
@@ -67,34 +46,24 @@ impl<'a> ScanProgress<'a> {
     }
 }
 
-/// Uma linha da listagem do Analisador: um arquivo, ou um subdiretório com o
-/// tamanho de toda a sua árvore já somado.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiskUsageItem {
     pub name: String,
     pub is_dir: bool,
     pub size_bytes: u64,
-    /// Percentual (0.0..=100.0) de `size_bytes` em relação ao maior item da
-    /// listagem — usado para desenhar a barra `[████░░░░]`.
+
     pub percentage: f32,
 }
 
-/// Resultado completo (concluído) de uma varredura de `current_path`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiskUsageSnapshot {
     pub current_path: PathBuf,
-    /// Soma dos tamanhos de todos os itens listados (não o tamanho do
-    /// filesystem inteiro — apenas o que foi possível somar em `current_path`).
+
     pub total_bytes: u64,
     pub items: Vec<DiskUsageItem>,
     pub is_scanning: bool,
 }
 
-/// Soma recursiva do tamanho de `path` (arquivos regulares) — símbolos
-/// (symlinks) contam apenas seu próprio tamanho, sem seguir o alvo, para
-/// nunca entrar em ciclo. Diretórios ilegíveis (permissão negada, etc.)
-/// contribuem com `0` em vez de abortar a varredura inteira. Pula
-/// compulsoriamente [`SKIPPED_DIRS`] (pseudo-filesystems como `/proc`/`/sys`).
 fn dir_size_recursive(path: &Path, progress: &mut ScanProgress) -> u64 {
     if is_skipped_dir(path) {
         return 0;
@@ -119,9 +88,6 @@ fn dir_size_recursive(path: &Path, progress: &mut ScanProgress) -> u64 {
     total
 }
 
-/// Traduz um erro de I/O de varredura numa mensagem clara para a TUI, sem
-/// travar nem expor o texto cru do sistema operacional para os casos comuns
-/// (pasta protegida ou removida entre a navegação e a varredura).
 fn friendly_scan_error(err: &std::io::Error) -> String {
     match err.kind() {
         std::io::ErrorKind::PermissionDenied => {
@@ -132,10 +98,6 @@ fn friendly_scan_error(err: &std::io::Error) -> String {
     }
 }
 
-/// Varre um único nível de `path`, somando recursivamente o tamanho de cada
-/// subdiretório — o núcleo síncrono/bloqueante da varredura, chamado dentro
-/// de `tokio::task::spawn_blocking` por [`scan`]. Publica progresso periódico
-/// via `tx` (ver [`ScanProgress`]) enquanto percorre a árvore.
 pub fn scan_dir(path: &Path, tx: &EventTx) -> std::io::Result<DiskUsageSnapshot> {
     let entries = std::fs::read_dir(path)?;
     let mut progress = ScanProgress::new(tx);
@@ -184,9 +146,6 @@ pub fn scan_dir(path: &Path, tx: &EventTx) -> std::io::Result<DiskUsageSnapshot>
     })
 }
 
-/// Varre `path` numa `spawn_blocking` (a recursão em `std::fs` bloqueia a
-/// thread) e publica o resultado — `StorageAnalyzerSnapshot` em caso de
-/// sucesso, `StorageAnalyzerError` caso `path` não possa ser listado.
 pub async fn scan(path: PathBuf, tx: EventTx) {
     let result = tokio::task::spawn_blocking({
         let tx = tx.clone();
@@ -261,9 +220,6 @@ mod tests {
         std::fs::create_dir(tmp.path().join("proc")).unwrap();
         std::fs::write(tmp.path().join("real.txt"), vec![0u8; 100]).unwrap();
 
-        // `is_skipped_dir` only matches the absolute canonical paths, so a
-        // plain nested "proc" dir here isn't skipped — but the top-level
-        // `/proc` itself must never be traversed.
         assert!(is_skipped_dir(Path::new("/proc")));
         assert!(is_skipped_dir(Path::new("/sys")));
         assert!(is_skipped_dir(Path::new("/dev")));
@@ -283,10 +239,7 @@ mod tests {
             std::fs::write(tmp.path().join(format!("f{i}.txt")), vec![0u8; 10]).unwrap();
         }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        // Force emission regardless of the time/count throttle by draining
-        // whatever progress events happened to fire; absence is also valid
-        // for a scan this small, so just assert the scan itself completes
-        // and any received progress events carry sane data.
+
         let snap = scan_dir(tmp.path(), &tx).unwrap();
         assert_eq!(snap.items.len(), 5);
         while let Ok(AppEvent::StorageAnalyzerProgress { items_scanned, .. }) = rx.try_recv() {

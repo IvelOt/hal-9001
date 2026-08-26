@@ -1,4 +1,3 @@
-//! Testes de fumaça: exercitam lógica pura sem entrar no alt-screen.
 
 use hal9001::app::{App, Phase, Tab};
 use hal9001::config::Config;
@@ -24,7 +23,7 @@ fn next_prev_tab_wraps() {
 
     assert_eq!(app.active, Tab::Overview);
     app.dispatch(hal9001::events::Action::PrevTab, &tx);
-    assert_eq!(app.active, Tab::Displays); // wrap-around
+    assert_eq!(app.active, Tab::Displays);
     app.dispatch(hal9001::events::Action::NextTab, &tx);
     assert_eq!(app.active, Tab::Overview);
 }
@@ -35,7 +34,7 @@ fn splash_promotes_to_running_on_key() {
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
     let mut app = App::new(cfg);
     assert_eq!(app.phase, Phase::Splash);
-    // Qualquer ação durante a splash revela o dashboard.
+
     app.dispatch(hal9001::events::Action::Down, &tx);
     assert_eq!(app.phase, Phase::Running);
 }
@@ -62,10 +61,8 @@ fn render_all_tabs_and_splash_without_panic() {
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
-    // Splash frame.
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 
-    // Feed a system snapshot so the Overview has real data to lay out.
     app.handle_event(hal9001::events::AppEvent::System(Box::new(
         hal9001::backend::system::SystemSnapshot {
             host: "testhost".into(),
@@ -121,9 +118,8 @@ fn render_all_tabs_and_splash_without_panic() {
         },
     )));
 
-    // Promote to running and render every tab + help overlay.
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
-    app.dispatch(hal9001::events::Action::Redraw, &tx); // leaves splash
+    app.dispatch(hal9001::events::Action::Redraw, &tx);
     for i in 0..Tab::ALL.len() {
         app.dispatch(hal9001::events::Action::SelectTab(i), &tx);
         terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
@@ -131,8 +127,7 @@ fn render_all_tabs_and_splash_without_panic() {
     app.dispatch(hal9001::events::Action::ToggleHelp, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 
-    // Modo detalhado do Overview (tecla `.`) também renderiza sem pânico.
-    app.dispatch(hal9001::events::Action::ToggleHelp, &tx); // fecha ajuda
+    app.dispatch(hal9001::events::Action::ToggleHelp, &tx);
     app.dispatch(hal9001::events::Action::SelectTab(0), &tx);
     app.dispatch(hal9001::events::Action::ToggleDetail, &tx);
     assert!(app.detailed_overview);
@@ -141,8 +136,7 @@ fn render_all_tabs_and_splash_without_panic() {
 
 #[test]
 fn render_overview_desktop_degraded_without_panic() {
-    // Máquina "desktop": sem bateria, brilho, volume, disco ou pacotes.
-    // A UI deve renderizar "N/A" sem entrar em pânico.
+
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -178,7 +172,6 @@ fn render_overview_desktop_degraded_without_panic() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
 
-    // Também no modo detalhado (degradado: sem swap/bateria/DMI).
     let (tx, _rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(hal9001::events::Action::ToggleDetail, &tx);
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
@@ -193,22 +186,19 @@ fn human_helpers_format() {
 
 #[test]
 fn truncate_str_adds_ellipsis_and_respects_width() {
-    // Cabe: devolvido sem alteração.
+
     assert_eq!(truncate_str("curto", 10), "curto");
     assert_eq!(truncate_str("exato", 5), "exato");
-    // Não cabe: corta e anexa reticência (largura final == max).
+
     let t = truncate_str("Intel Corporation Raptor Lake-P", 12);
     assert_eq!(t.chars().count(), 12);
     assert!(t.ends_with('…'));
     assert!(t.starts_with("Intel"));
-    // Degradação em larguras minúsculas.
+
     assert_eq!(truncate_str("qualquer", 1), "…");
     assert_eq!(truncate_str("qualquer", 0), "");
 }
 
-/// Coluna (0-based) onde a barra de progresso `[` começa numa `metric_line`,
-/// somando a largura de todos os spans anteriores ao span do colchete de abertura
-/// da barra (o único span cujo conteúdo é exatamente `"["`).
 fn gauge_col(line: &Line) -> usize {
     let mut col = 0usize;
     for span in &line.spans {
@@ -222,9 +212,7 @@ fn gauge_col(line: &Line) -> usize {
 
 #[test]
 fn metric_bars_align_regardless_of_status_suffix() {
-    // Requisito do briefing: o status ([CHARGING +25W], [MUTED]) fica ENTRE o
-    // rótulo/valor e a barra, e as barras ficam alinhadas verticalmente entre
-    // linhas com valores/status de larguras diferentes.
+
     let pal = Palette::from_config(&Config::default());
     let bateria = metric_line("Bateria", "", 18, 0.65, 12, &pal, Some("[CHARGING +25W]"));
     let volume = metric_line("Volume", "", 18, 0.80, 12, &pal, Some("[MUTED]"));
@@ -240,7 +228,6 @@ fn metric_bars_align_regardless_of_status_suffix() {
         assert_eq!(gauge_col(line), base, "barra desalinhada em {name}");
     }
 
-    // O status aparece antes da barra (coluna do status < coluna da barra).
     let text: String = bateria.spans.iter().map(|s| s.content.as_ref()).collect();
     let status_at = text.find("[CHARGING").unwrap();
     let bar_at = text.rfind('[').unwrap();
@@ -256,8 +243,6 @@ fn brightness_and_volume_actions_dispatch_without_panic() {
     let (tx, mut rx) = tokio::sync::broadcast::channel(16);
     let mut app = App::new(cfg);
 
-    // As ações de controle são repassadas aos backends (broadcast), sem mutar
-    // o estado da UI diretamente.
     for action in [
         Action::BrightnessUp,
         Action::BrightnessDown,
@@ -269,7 +254,6 @@ fn brightness_and_volume_actions_dispatch_without_panic() {
         app.dispatch(action, &tx);
     }
 
-    // Seis ações devem ter sido difundidas.
     let mut count = 0;
     while rx.try_recv().is_ok() {
         count += 1;
@@ -320,41 +304,33 @@ fn config_modal_navigation_and_theme_cycling() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let mut app = App::new(cfg);
 
-    // Abre o modal de configurações
     app.dispatch(Action::ToggleConfig, &tx);
     assert!(app.show_config);
     assert_eq!(app.config_cursor, 0);
 
-    // Navega para baixo -> Campo 1 (Tema)
     app.dispatch(Action::Down, &tx);
     assert_eq!(app.config_cursor, 1);
 
-    // Cicla tema para a direita: hal -> catppuccin -> tokyo-night -> etc.
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.theme.name, "catppuccin");
 
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.theme.name, "tokyo-night");
 
-    // Cicla para trás
     app.dispatch(Action::Left, &tx);
     assert_eq!(app.config.theme.name, "catppuccin");
 
-    // Navega para o campo 6 (Polling)
     app.dispatch(Action::Up, &tx);
-    assert_eq!(app.config_cursor, 0); // de 1 para 0
+    assert_eq!(app.config_cursor, 0);
     app.dispatch(Action::Up, &tx);
-    assert_eq!(app.config_cursor, 6); // wrap para 6
+    assert_eq!(app.config_cursor, 6);
 
-    // Cicla perfil de polling para a direita (Fast)
     app.dispatch(Action::Right, &tx);
     assert_eq!(app.config.polling.system_ms, 750);
 
-    // Salva configuração
     app.dispatch(Action::SaveConfig, &tx);
     assert!(app.toast.is_some());
 
-    // Renderiza frame com o modal aberto para screenshot
     let backend = TestBackend::new(100, 26);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
@@ -369,8 +345,6 @@ fn config_modal_navigation_and_theme_cycling() {
     }
     let _ = std::fs::write("/tmp/hall9001_config_modal.ansi", ansi_out);
 
-    // Fecha o modal
     app.dispatch(Action::ToggleConfig, &tx);
     assert!(!app.show_config);
 }
-

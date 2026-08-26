@@ -11,7 +11,6 @@ fn test_battery_toasts() {
     let config = Config::default();
     let mut app = App::new(config);
 
-    // Initial state: 20% discharging
     let mut snap = SystemSnapshot {
         host: "test".into(),
         user: "test".into(),
@@ -43,23 +42,19 @@ fn test_battery_toasts() {
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
     assert!(app.toast.is_none());
 
-    // Drops to 14% -> warning toast
     snap.battery.as_mut().unwrap().percent = 14.0;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
     assert!(app.toast.as_ref().unwrap().0.text.contains("Nível crítico: 14%"));
 
-    // Drops to 13% -> NO new toast (debounce)
     app.toast = None;
     snap.battery.as_mut().unwrap().percent = 13.0;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
     assert!(app.toast.is_none());
 
-    // Connect charger
     snap.battery.as_mut().unwrap().status = BatteryStatus::Charging;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
     assert!(app.toast.as_ref().unwrap().0.text.contains("Carregador conectado"));
 
-    // Disconnect charger
     snap.battery.as_mut().unwrap().percent = 20.0;
     snap.battery.as_mut().unwrap().status = BatteryStatus::Discharging;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
@@ -78,7 +73,6 @@ fn test_storage_toasts() {
     app.handle_event(AppEvent::Storage(Box::new(snap.clone())));
     assert!(app.toast.is_none());
 
-    // Add removable drive
     snap.drives.push(DriveInfo {
         id: hal9001::events::DeviceId("test".into()),
         dev_node: "/dev/sdb".into(),
@@ -117,7 +111,6 @@ fn test_network_toasts() {
     app.handle_event(AppEvent::Network(Box::new(snap.clone())));
     assert!(app.toast.is_none());
 
-    // Connect
     snap.active = Some(ActiveConnectionInfo {
         id: hal9001::events::DeviceId("test".into()),
         ssid: "MyNet".into(),
@@ -128,7 +121,6 @@ fn test_network_toasts() {
     app.handle_event(AppEvent::Network(Box::new(snap.clone())));
     assert!(app.toast.as_ref().unwrap().0.text.contains("Conectado em 'MyNet' (IP: 192.168.0.2)"));
 
-    // Disconnect
     snap.active = None;
     snap.telemetry.ipv4 = None;
     app.handle_event(AppEvent::Network(Box::new(snap.clone())));
@@ -163,14 +155,12 @@ fn test_bluetooth_toasts() {
     app.handle_event(AppEvent::Bluetooth(Box::new(snap.clone())));
     assert!(app.toast.is_none());
 
-    // Connect
     dev.connected = true;
     dev.battery_percentage = Some(80);
     snap.devices = vec![dev.clone()];
     app.handle_event(AppEvent::Bluetooth(Box::new(snap.clone())));
     assert!(app.toast.as_ref().unwrap().0.text.contains("Conectado: MyHeadset (Bateria: 80%)"));
 
-    // Disconnect
     dev.connected = false;
     snap.devices = vec![dev.clone()];
     app.handle_event(AppEvent::Bluetooth(Box::new(snap.clone())));

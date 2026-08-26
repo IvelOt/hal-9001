@@ -1,4 +1,3 @@
-//! Testes unitários do sistema de internacionalização (i18n).
 
 use hal9001::app::{App, Tab};
 use hal9001::backend::system::PowerProfile;
@@ -28,19 +27,17 @@ fn language_parsing_variants() {
 
 #[test]
 fn tab_titles_in_all_languages() {
-    // pt-BR
+
     assert_eq!(Tab::Overview.title_in(Language::PtBr), "Overview");
     assert_eq!(Tab::Network.title_in(Language::PtBr), "Rede");
     assert_eq!(Tab::Audio.title_in(Language::PtBr), "Áudio");
     assert_eq!(Tab::Displays.title_in(Language::PtBr), "Telas");
 
-    // en-US
     assert_eq!(Tab::Overview.title_in(Language::EnUs), "Overview");
     assert_eq!(Tab::Network.title_in(Language::EnUs), "Network");
     assert_eq!(Tab::Audio.title_in(Language::EnUs), "Audio");
     assert_eq!(Tab::Displays.title_in(Language::EnUs), "Displays");
 
-    // es-ES
     assert_eq!(Tab::Overview.title_in(Language::EsEs), "Visión General");
     assert_eq!(Tab::Network.title_in(Language::EsEs), "Red");
     assert_eq!(Tab::Audio.title_in(Language::EsEs), "Audio");

@@ -1,6 +1,3 @@
-//! Testes da logo das engrenagens com o olho do HAL-9000 (`src/ascii.rs`):
-//! invariantes de dimensão, seleção por orçamento e colorização multi-span
-//! (engrenagens em bronze/cinza/âmbar/ouro; olho em vermelho).
 
 use hal9001::ascii::{self, LogoSize};
 use ratatui::style::Color;
@@ -8,7 +5,6 @@ use unicode_width::UnicodeWidthStr;
 
 const ALL: [LogoSize; 3] = [LogoSize::Main, LogoSize::Medium, LogoSize::Compact];
 
-/// Reconstrói o texto cru de uma logo a partir dos spans coloridos.
 fn logo_text(size: LogoSize) -> Vec<String> {
     ascii::logo_lines(size)
         .into_iter()
@@ -28,8 +24,7 @@ fn arts_have_uniform_line_width_and_ascii_only() {
         let w = size.width() as usize;
         assert!(w > 0 && !lines.is_empty(), "logo vazia");
         for (i, l) in lines.iter().enumerate() {
-            // Largura uniforme mantém o olho central alinhado (colorização
-            // radial simétrica) e o layout de duas colunas estável.
+
             assert_eq!(
                 UnicodeWidthStr::width(l.as_str()),
                 w,
@@ -53,17 +48,16 @@ fn sizes_are_ordered_main_medium_compact() {
 fn eye_and_gears_are_present() {
     for size in ALL {
         let joined = logo_text(size).join("\n");
-        // Olho do HAL: núcleo incandescente 'O'.
+
         assert!(joined.contains('O'), "olho do HAL ausente em {size:?}");
-        // Engrenagem: dentes '#' (anel externo).
+
         assert!(joined.contains('#'), "engrenagem ausente em {size:?}");
     }
 }
 
 #[test]
 fn eye_core_is_red_and_gears_are_not() {
-    // O núcleo 'O' recebe vermelho vivo; os dentes '#' recebem bronze (nunca
-    // vermelho). Garante a colorização multi-span exigida pelo briefing.
+
     let red = Color::Rgb(255, 50, 50);
     let bronze = Color::Rgb(180, 140, 60);
 
@@ -92,8 +86,7 @@ fn eye_core_is_red_and_gears_are_not() {
 
 #[test]
 fn eye_pulse_phase0_matches_static_logo() {
-    // A fase 0 do pulso reproduz exatamente a logo estática (`logo_lines`),
-    // preservando a paleta histórica do olho.
+
     for size in ALL {
         let stat = ascii::logo_lines(size);
         let ph0 = ascii::logo_lines_phase(size, 0);
@@ -108,8 +101,7 @@ fn eye_pulse_phase0_matches_static_logo() {
 
 #[test]
 fn eye_pulses_across_phases_but_gears_stay_fixed() {
-    // O núcleo do olho ('O') muda de tom entre fases (pulso de respiração),
-    // enquanto os dentes da engrenagem ('#') permanecem em bronze fixo.
+
     let bronze = Color::Rgb(180, 140, 60);
     let core_color = |size, phase| -> Option<Color> {
         ascii::logo_lines_phase(size, phase)
@@ -145,14 +137,14 @@ fn select_respects_forced_preference() {
 
 #[test]
 fn select_auto_picks_largest_that_fits() {
-    // Orçamento generoso → maior logo.
+
     assert_eq!(ascii::select("auto", 999), Some(LogoSize::Main));
-    // Logo intermediária cabe, principal não.
+
     let budget = LogoSize::Medium.width();
     assert_eq!(ascii::select("auto", budget), Some(LogoSize::Medium));
-    // Só a compacta cabe.
+
     let budget = LogoSize::Compact.width();
     assert_eq!(ascii::select("auto", budget), Some(LogoSize::Compact));
-    // Nem a compacta cabe → sem logo.
+
     assert_eq!(ascii::select("auto", LogoSize::Compact.width() - 1), None);
 }

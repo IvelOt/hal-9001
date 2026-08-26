@@ -1,8 +1,3 @@
-//! Backend de Wi-Fi & Rede via NetworkManager (D-Bus / `zbus`).
-//!
-//! Implementação 100% Pure Rust sobre a interface `org.freedesktop.NetworkManager`.
-//! Consulta o adaptador wireless, enumera e decodifica Access Points, gerencia
-//! conexões/desconexões, calcula sinal dBm/% e telemetria de tráfego (RX/TX).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -27,14 +22,12 @@ const NM_IP4_IFACE: &str = "org.freedesktop.NetworkManager.IP4Config";
 
 const NM_DEVICE_TYPE_WIFI: u32 = 2;
 
-// Security flags
 const NM_802_11_AP_FLAGS_PRIVACY: u32 = 0x1;
 const NM_SEC_KEY_MGMT_PSK: u32 = 0x100;
 const NM_SEC_KEY_MGMT_8021X: u32 = 0x200;
 const NM_SEC_KEY_MGMT_SAE: u32 = 0x400;
 const NM_SEC_KEY_MGMT_OWE: u32 = 0x800;
 
-/// Nível / tipo de segurança da rede sem fio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Security {
     Open,
@@ -97,7 +90,6 @@ pub fn derive_security(flags: u32, wpa: u32, rsn: u32) -> Security {
     Security::Open
 }
 
-/// Banda de frequência do Access Point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiBand {
     Ghz24,
@@ -126,7 +118,6 @@ pub fn band_of(freq_mhz: u32) -> WifiBand {
     }
 }
 
-/// Snapshot completo do estado da rede e Wi-Fi.
 #[derive(Debug, Clone)]
 pub struct NetworkSnapshot {
     pub nm_available: bool,
@@ -221,7 +212,6 @@ impl ThroughputTracker {
     }
 }
 
-/// Loop principal do worker de rede (Módulo 2).
 pub async fn run(
     polling_ms: u64,
     tx: EventTx,
@@ -361,7 +351,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
     let mut active_conn_info: Option<ActiveConnectionInfo> = None;
     let mut telemetry = NetTelemetry::default();
 
-    // Map saved connection profiles
     let saved_profiles = list_saved_profiles(&conn).await.unwrap_or_default();
 
     for dev_path in devices {
@@ -381,7 +370,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 .await
                 .unwrap_or_else(|_| OwnedObjectPath::try_from("/").unwrap());
 
-            // Wireless specifics
             let wifi_proxy =
                 zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_WIRELESS_IFACE).await?;
             let bitrate: u32 = wifi_proxy.get_property("Bitrate").await.unwrap_or(0);
@@ -407,7 +395,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 last_scan_ms: last_scan,
             });
 
-            // Enumerate APs
             let ap_paths: Vec<OwnedObjectPath> =
                 wifi_proxy.call("GetAllAccessPoints", &()).await.unwrap_or_default();
 
@@ -417,7 +404,7 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 let ssid_raw: Vec<u8> = ap_proxy.get_property("Ssid").await.unwrap_or_default();
                 let ssid = String::from_utf8_lossy(&ssid_raw).to_string();
                 if ssid.is_empty() {
-                    continue; // Skip hidden networks in basic overview
+                    continue;
                 }
 
                 let strength: u8 = ap_proxy.get_property("Strength").await.unwrap_or(0);
@@ -451,7 +438,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 });
             }
 
-            // Read IP4 Config if available
             if ip4_config_path.as_str() != "/" {
                 let ip_proxy =
                     zbus::Proxy::new(&conn, NM_SERVICE, ip4_config_path.as_str(), NM_IP4_IFACE).await?;
@@ -460,7 +446,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                     telemetry.gateway = Some(gateway);
                 }
 
-                // Read AddressData
                 if let Ok(addr_data) = ip_proxy
                     .get_property::<Vec<HashMap<String, OwnedValue>>>("AddressData")
                     .await
@@ -475,7 +460,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 }
             }
 
-            // Telemetry from sysfs
             let (rx, tx_b) = read_sysfs_stats(&iface);
             let (rx_rate, tx_rate) = throughput.update(rx, tx_b);
             telemetry.rx_rate_kbps = rx_rate;
@@ -483,7 +467,6 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
             telemetry.total_rx_bytes = rx;
             telemetry.total_tx_bytes = tx_b;
 
-            // Active connection info
             if active_conn_path.as_str() != "/" {
                 let act_proxy = zbus::Proxy::new(
                     &conn,
@@ -511,11 +494,10 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 });
             }
 
-            break; // Found primary Wi-Fi device
+            break;
         }
     }
 
-    // Deduplicate APs by SSID (prefer active AP, then strongest signal)
     let mut deduplicated: HashMap<String, AccessPoint> = HashMap::new();
     for ap in raw_aps {
         match deduplicated.get(&ap.ssid) {
@@ -656,11 +638,10 @@ async fn connect_network(
     let nm_proxy = zbus::Proxy::new(&conn, NM_SERVICE, NM_PATH, NM_IFACE).await?;
     let ap_obj = ObjectPath::try_from(ap_path)?;
 
-    // 1. Check if we have an existing saved profile for this SSID
     let saved = list_saved_profiles(&conn).await.unwrap_or_default();
     if let Some(saved_path) = saved.get(ssid) {
         let conn_obj = ObjectPath::try_from(saved_path.as_str())?;
-        // Find wifi device
+
         let devices: Vec<OwnedObjectPath> = nm_proxy.call("GetDevices", &()).await?;
         for dev_path in devices {
             let dev_proxy = zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
@@ -674,7 +655,6 @@ async fn connect_network(
         }
     }
 
-    // 2. Otherwise, construct connection settings and AddAndActivateConnection
     let mut connection_settings: HashMap<&str, HashMap<&str, Value>> = HashMap::new();
 
     let mut conn_sec: HashMap<&str, Value> = HashMap::new();

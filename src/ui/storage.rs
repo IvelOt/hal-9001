@@ -1,9 +1,3 @@
-//! Aba 4 — Discos & Armazenamento (UDisks2). Render do Módulo 4.
-//!
-//! Redesenho: lista simples com um item por drive físico/removível (sem a
-//! árvore drive→partição de antes) + painel de detalhes com status de
-//! montagem, medidor de capacidade, sistema de arquivos e status do
-//! multi-boot leve embarcado.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -66,9 +60,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     draw_details(app, pal, f, cols[1]);
 }
 
-/// Analisador de Espaço em Disco Nativo (tecla `a`) — lista de itens do
-/// diretório atual, ordenada por tamanho decrescente, com barra de
-/// progresso visual e navegação estilo `ncdu`/`dua`.
 fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -81,9 +72,9 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
     f.render_widget(block, area);
 
     let rows = Layout::vertical([
-        Constraint::Length(2), // breadcrumb + total
-        Constraint::Min(0),    // listagem
-        Constraint::Length(1), // hints
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(1),
     ])
     .split(inner);
 
@@ -189,9 +180,6 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
     f.render_widget(Paragraph::new(hints), rows[2]);
 }
 
-/// Frames do spinner ASCII retro (glifos Braille) exibido durante a
-/// varredura — avança um frame por tick de render (~250ms, ver
-/// `App::on_tick`).
 const SPINNER_FRAMES: [&str; 10] = [
     "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
     "\u{2807}", "\u{280f}",
@@ -201,8 +189,6 @@ fn spinner_glyph(frame: usize) -> &'static str {
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
 }
 
-/// Formata uma contagem de itens com separador de milhar `.` (padrão
-/// pt-BR), ex.: `1420` -> `"1.420"`.
 fn format_item_count(count: usize) -> String {
     let digits = count.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -223,17 +209,10 @@ fn icon(app: &App, nerd: &str, ascii: &str) -> String {
     }
 }
 
-/// `true` quando `drive` é um cartão SD/MicroSD/MMC — pelo barramento
-/// reportado pelo UDisks2 (`BusType::Mmc`) ou, na ausência dessa informação,
-/// pelo nó de dispositivo (`/dev/mmcblk*`).
 fn is_sd_card(drive: &DriveInfo) -> bool {
     drive.bus == BusType::Mmc || drive.dev_node.starts_with("/dev/mmcblk")
 }
 
-/// Ícone do drive — Nerd Font `\u{f7c0}` (cartão SD) / `\u{f287}` (USB) /
-/// `\u{f0a0}` (Disco/SSD/HDD) quando `icons = true`, fallback ASCII limpo
-/// caso contrário (Zero Emojis Policy: nenhum emoji é usado em toda a base
-/// de código).
 fn drive_icon(app: &App, drive: &DriveInfo) -> String {
     if is_sd_card(drive) {
         icon(app, "\u{f7c0}", "[SD]")
@@ -246,9 +225,6 @@ fn drive_icon(app: &App, drive: &DriveInfo) -> String {
     }
 }
 
-/// Tag "disco de sistema" — Nerd Font de cadeado `\u{f023}` + palavra
-/// traduzida quando `icons = true`, ou o token ASCII `[SISTEMA]`/`[SYSTEM]`
-/// quando `icons = false`.
 fn system_tag(app: &App) -> String {
     let m = app.lang.messages();
     if app.config.ui.icons {
@@ -258,10 +234,6 @@ fn system_tag(app: &App) -> String {
     }
 }
 
-/// Tag "pendrive Ventoy" (detecção somente-leitura por rótulo — ver
-/// `backend::storage::detect_ventoy`) — Nerd Font de disco de boot
-/// `\u{f17c}` + palavra traduzida quando `icons = true`, ou o token ASCII
-/// `[VENTOY]` caso contrário (Zero Emojis Policy).
 fn ventoy_tag(app: &App) -> String {
     let m = app.lang.messages();
     if app.config.ui.icons {
@@ -271,8 +243,6 @@ fn ventoy_tag(app: &App) -> String {
     }
 }
 
-/// Ícone de multi-boot ativo — Nerd Font de disco de boot `\u{f17c}` quando
-/// `icons = true`, ou `[MB]` caso contrário.
 fn multiboot_tag(app: &App, n_isos: usize) -> String {
     let m = app.lang.messages();
     let base = if app.config.ui.icons {
@@ -323,9 +293,6 @@ fn row_style(pal: &Palette, selected: bool) -> Style {
     }
 }
 
-/// Uma linha da lista: ` <rótulo amigável> (<tamanho>)  [tags]`. O rótulo
-/// prefere o `IdLabel` da partição primária (ex.: `MEUPENDRIVE`) ao nome
-/// genérico `<vendor> <model>` — ver [`DriveInfo::friendly_label`].
 fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -> Line<'a> {
     let m = app.lang.messages();
     let style = row_style(pal, selected);
@@ -370,9 +337,6 @@ fn drive_line<'a>(app: &App, pal: &Palette, drive: &DriveInfo, selected: bool) -
     Line::from(spans)
 }
 
-/// Medidor de capacidade "<livre> livres de <total> (<pct>%)" com barra —
-/// baseado no espaço usado/total da partição primária (quando montada e com
-/// uso conhecido via `sysinfo`).
 fn capacity_bar<'a>(pal: &Palette, m: &crate::i18n::Messages, p: &PartitionInfo) -> Vec<Line<'a>> {
     let mut out = Vec::new();
     let Some(used) = p.used else {
@@ -530,13 +494,6 @@ pub(crate) fn kv<'a>(label: &'a str, value: impl Into<String>, pal: &Palette) ->
     ])
 }
 
-// ---------------------------------------------------------------------------
-// Modais interativos: Formatação (Épico G), ISO Flasher (Épico H) e
-// gerenciador de ISOs multi-boot.
-// ---------------------------------------------------------------------------
-
-/// Ponto de entrada dos modais de storage — despachado por `ui::draw` quando
-/// `App::storage_modal_open()` é `true` e a aba ativa é Storage.
 pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     match &app.storage_modal {
         StorageModal::Format(s) => draw_format_modal(app, pal, f, s),
@@ -547,9 +504,6 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     }
 }
 
-/// Modal nativo (senha mascarada com `•`) de autenticação sudo — desenhado
-/// por cima de qualquer outra tela/modal (ver `ui::draw`). Substitui o
-/// antigo prompt real de `pkexec`/`sudo` herdado do terminal.
 pub fn draw_sudo_prompt(_app: &App, pal: &Palette, f: &mut Frame, s: &SudoPromptState) {
     let area = super::centered(56, 30, f.area());
     f.render_widget(Clear, area);
@@ -848,10 +802,6 @@ pub(crate) fn progress_line<'a>(pct: f32, pal: &Palette) -> Line<'a> {
     ])
 }
 
-// ---------------------------------------------------------------------------
-// Gerenciador de ISOs multi-boot (`<mount>/ISOs/`).
-// ---------------------------------------------------------------------------
-
 fn draw_multiboot_iso_manager_modal(
     app: &App,
     pal: &Palette,
@@ -873,7 +823,7 @@ fn draw_multiboot_iso_manager_modal(
     match &s.stage {
         MultibootIsoManagerStage::Loading => {
             lines.push(Line::from(Span::styled(
-                m.storage_flash_checksumming, // reaproveita "Calculando..." como placeholder de "Carregando..."
+                m.storage_flash_checksumming,
                 Style::default().fg(pal.dim),
             )));
         }

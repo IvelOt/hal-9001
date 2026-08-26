@@ -1,4 +1,3 @@
-//! Aba 2 — Wi-Fi / Rede (NetworkManager). Render do Módulo 2.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -47,9 +46,9 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header de status
-            Constraint::Min(8),    // Lista de APs
-            Constraint::Length(4), // Telemetria & Rodapé
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(4),
         ])
         .split(area);
 
