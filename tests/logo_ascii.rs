@@ -1,4 +1,3 @@
-
 use hal9001::ascii::{self, LogoSize};
 use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
@@ -24,7 +23,6 @@ fn arts_have_uniform_line_width_and_ascii_only() {
         let w = size.width() as usize;
         assert!(w > 0 && !lines.is_empty(), "logo vazia");
         for (i, l) in lines.iter().enumerate() {
-
             assert_eq!(
                 UnicodeWidthStr::width(l.as_str()),
                 w,
@@ -57,7 +55,6 @@ fn eye_and_gears_are_present() {
 
 #[test]
 fn eye_core_is_red_and_gears_are_not() {
-
     let red = Color::Rgb(255, 50, 50);
     let bronze = Color::Rgb(180, 140, 60);
 
@@ -80,20 +77,30 @@ fn eye_core_is_red_and_gears_are_not() {
                 }
             }
         }
-        assert!(saw_red_eye && saw_bronze_gear, "spans esperados ausentes em {size:?}");
+        assert!(
+            saw_red_eye && saw_bronze_gear,
+            "spans esperados ausentes em {size:?}"
+        );
     }
 }
 
 #[test]
 fn eye_pulse_phase0_matches_static_logo() {
-
     for size in ALL {
         let stat = ascii::logo_lines(size);
         let ph0 = ascii::logo_lines_phase(size, 0);
         assert_eq!(stat.len(), ph0.len());
         for (a, b) in stat.iter().zip(ph0.iter()) {
-            let sa: Vec<_> = a.spans.iter().map(|s| (s.content.clone(), s.style.fg)).collect();
-            let sb: Vec<_> = b.spans.iter().map(|s| (s.content.clone(), s.style.fg)).collect();
+            let sa: Vec<_> = a
+                .spans
+                .iter()
+                .map(|s| (s.content.clone(), s.style.fg))
+                .collect();
+            let sb: Vec<_> = b
+                .spans
+                .iter()
+                .map(|s| (s.content.clone(), s.style.fg))
+                .collect();
             assert_eq!(sa, sb, "fase 0 diverge da logo estática em {size:?}");
         }
     }
@@ -101,7 +108,6 @@ fn eye_pulse_phase0_matches_static_logo() {
 
 #[test]
 fn eye_pulses_across_phases_but_gears_stay_fixed() {
-
     let bronze = Color::Rgb(180, 140, 60);
     let core_color = |size, phase| -> Option<Color> {
         ascii::logo_lines_phase(size, phase)
@@ -118,7 +124,11 @@ fn eye_pulses_across_phases_but_gears_stay_fixed() {
         for line in ascii::logo_lines_phase(LogoSize::Main, phase) {
             for span in &line.spans {
                 if span.content.contains('#') {
-                    assert_eq!(span.style.fg, Some(bronze), "engrenagem mudou na fase {phase}");
+                    assert_eq!(
+                        span.style.fg,
+                        Some(bronze),
+                        "engrenagem mudou na fase {phase}"
+                    );
                 }
             }
         }
@@ -137,7 +147,6 @@ fn select_respects_forced_preference() {
 
 #[test]
 fn select_auto_picks_largest_that_fits() {
-
     assert_eq!(ascii::select("auto", 999), Some(LogoSize::Main));
 
     let budget = LogoSize::Medium.width();

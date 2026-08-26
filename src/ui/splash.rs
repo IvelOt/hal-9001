@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -46,7 +45,10 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     }
     lines.push(headline);
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(bar, Style::default().fg(pal.accent))));
+    lines.push(Line::from(Span::styled(
+        bar,
+        Style::default().fg(pal.accent),
+    )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         m.splash_title,

@@ -1,13 +1,12 @@
-
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use super::theme::Palette;
 use crate::app::App;
 use crate::i18n::Language;
-use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     let area = centered(68, 62, f.area());
@@ -74,9 +73,27 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     };
 
     let polling_display = match app.config.polling.system_ms {
-        750 => if app.lang == Language::EnUs { "Performance (0.7s)" } else { "Desempenho (0.7s)" },
-        3000 => if app.lang == Language::EnUs { "Eco / Battery (3.0s)" } else { "Econômico (3.0s)" },
-        _ => if app.lang == Language::EnUs { "Balanced (1.5s)" } else { "Equilibrado (1.5s)" },
+        750 => {
+            if app.lang == Language::EnUs {
+                "Performance (0.7s)"
+            } else {
+                "Desempenho (0.7s)"
+            }
+        }
+        3000 => {
+            if app.lang == Language::EnUs {
+                "Eco / Battery (3.0s)"
+            } else {
+                "Econômico (3.0s)"
+            }
+        }
+        _ => {
+            if app.lang == Language::EnUs {
+                "Balanced (1.5s)"
+            } else {
+                "Equilibrado (1.5s)"
+            }
+        }
     };
 
     let labels = match app.lang {
@@ -137,7 +154,10 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         };
 
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                prefix,
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("{label:<22} "), style_label),
             Span::styled(format!("◄ {val} ►"), style_val),
         ]));
@@ -146,10 +166,22 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
 
     lines.push(Line::from(vec![
         Span::styled(" Amostra da Paleta: ", Style::default().fg(pal.dim)),
-        Span::styled(" [● ACCENT] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(" [● OK] ", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD)),
-        Span::styled(" [● WARN] ", Style::default().fg(pal.warn).add_modifier(Modifier::BOLD)),
-        Span::styled(" [● ERR] ", Style::default().fg(pal.err).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [● ACCENT] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " [● OK] ",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " [● WARN] ",
+            Style::default().fg(pal.warn).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " [● ERR] ",
+            Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(""));
 

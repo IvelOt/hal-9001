@@ -1,4 +1,3 @@
-
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 
@@ -39,7 +38,6 @@ impl InputStream {
                     ) {
                         return Some(action);
                     }
-
                 }
                 Some(Ok(Event::Resize(_, _))) => return Some(Action::Redraw),
                 Some(Ok(_)) => continue,
@@ -128,7 +126,11 @@ fn map_key(
         match key.code {
             KeyCode::Char('r') => return Some(Action::NetworkRescan),
             KeyCode::Char('t') => return Some(Action::NetworkToggleRadio),
-            KeyCode::Char('d') => return Some(Action::NetworkDisconnect(crate::events::DeviceId(String::new()))),
+            KeyCode::Char('d') => {
+                return Some(Action::NetworkDisconnect(crate::events::DeviceId(
+                    String::new(),
+                )))
+            }
             KeyCode::Char('f') => return Some(Action::NetworkForget(String::new())),
             _ => {}
         }
@@ -147,9 +149,21 @@ fn map_key(
         match key.code {
             KeyCode::Char('r') => return Some(Action::BluetoothRescan),
             KeyCode::Char('t') => return Some(Action::BluetoothToggleRadio),
-            KeyCode::Char('p') => return Some(Action::BluetoothPair(crate::events::DeviceId(String::new()))),
-            KeyCode::Char('f') => return Some(Action::BluetoothForget(crate::events::DeviceId(String::new()))),
-            KeyCode::Char('b') => return Some(Action::BluetoothToggleBlock(crate::events::DeviceId(String::new()))),
+            KeyCode::Char('p') => {
+                return Some(Action::BluetoothPair(
+                    crate::events::DeviceId(String::new()),
+                ))
+            }
+            KeyCode::Char('f') => {
+                return Some(Action::BluetoothForget(crate::events::DeviceId(
+                    String::new(),
+                )))
+            }
+            KeyCode::Char('b') => {
+                return Some(Action::BluetoothToggleBlock(crate::events::DeviceId(
+                    String::new(),
+                )))
+            }
             _ => {}
         }
     }
@@ -172,19 +186,29 @@ fn map_key(
     if active == Tab::Displays {
         match key.code {
             KeyCode::Char('e') => {
-                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendRight));
+                return Some(Action::DisplaySetLayout(
+                    crate::backend::display::DisplayLayoutMode::ExtendRight,
+                ));
             }
             KeyCode::Char('E') => {
-                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExtendLeft));
+                return Some(Action::DisplaySetLayout(
+                    crate::backend::display::DisplayLayoutMode::ExtendLeft,
+                ));
             }
             KeyCode::Char('m') => {
-                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::Mirror));
+                return Some(Action::DisplaySetLayout(
+                    crate::backend::display::DisplayLayoutMode::Mirror,
+                ));
             }
             KeyCode::Char('x') => {
-                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::ExternalOnly));
+                return Some(Action::DisplaySetLayout(
+                    crate::backend::display::DisplayLayoutMode::ExternalOnly,
+                ));
             }
             KeyCode::Char('i') => {
-                return Some(Action::DisplaySetLayout(crate::backend::display::DisplayLayoutMode::InternalOnly));
+                return Some(Action::DisplaySetLayout(
+                    crate::backend::display::DisplayLayoutMode::InternalOnly,
+                ));
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 return Some(Action::DisplaySetPrimary(String::new()));

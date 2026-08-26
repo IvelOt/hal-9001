@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, Phase, Tab};
 use hal9001::config::Config;
 use hal9001::ui::theme::Palette;
@@ -136,7 +135,6 @@ fn render_all_tabs_and_splash_without_panic() {
 
 #[test]
 fn render_overview_desktop_degraded_without_panic() {
-
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -186,7 +184,6 @@ fn human_helpers_format() {
 
 #[test]
 fn truncate_str_adds_ellipsis_and_respects_width() {
-
     assert_eq!(truncate_str("curto", 10), "curto");
     assert_eq!(truncate_str("exato", 5), "exato");
 
@@ -212,7 +209,6 @@ fn gauge_col(line: &Line) -> usize {
 
 #[test]
 fn metric_bars_align_regardless_of_status_suffix() {
-
     let pal = Palette::from_config(&Config::default());
     let bateria = metric_line("Bateria", "", 18, 0.65, 12, &pal, Some("[CHARGING +25W]"));
     let volume = metric_line("Volume", "", 18, 0.80, 12, &pal, Some("[MUTED]"));
@@ -220,11 +216,7 @@ fn metric_bars_align_regardless_of_status_suffix() {
     let ram = metric_line("RAM", "6.0 / 15.3 GiB", 18, 0.39, 12, &pal, None);
 
     let base = gauge_col(&bateria);
-    for (name, line) in [
-        ("Volume", &volume),
-        ("Brilho", &brilho),
-        ("RAM", &ram),
-    ] {
+    for (name, line) in [("Volume", &volume), ("Brilho", &brilho), ("RAM", &ram)] {
         assert_eq!(gauge_col(line), base, "barra desalinhada em {name}");
     }
 

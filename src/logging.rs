@@ -1,4 +1,3 @@
-
 pub fn init() {
     let Ok(path) = std::env::var("HAL9001_LOG") else {
         return;

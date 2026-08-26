@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -80,7 +79,10 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
         .unwrap_or("nenhum");
 
     let scanning_badge = if app.network_scanning {
-        Span::styled(" [BUSCANDO...] ", Style::default().fg(pal.warn).add_modifier(Modifier::BOLD))
+        Span::styled(
+            " [BUSCANDO...] ",
+            Style::default().fg(pal.warn).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::raw("")
     };
@@ -96,7 +98,10 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
 
     let header_line = Line::from(vec![
         Span::styled(" Adaptador: ", Style::default().fg(pal.dim)),
-        Span::styled(iface, Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            iface,
+            Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  Rádio Wi-Fi: ", Style::default().fg(pal.dim)),
         Span::styled(radio_text, radio_style),
         Span::raw("  "),
@@ -118,11 +123,26 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
 fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("SSID", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Sinal", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Banda", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Segurança", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Status", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "SSID",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Sinal",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Banda",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Segurança",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Status",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
     ])
     .style(Style::default().fg(pal.accent))
     .bottom_margin(1);
@@ -133,18 +153,23 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
         } else {
             "Nenhuma rede sem fio encontrada. Pressione [r] para escanear."
         };
-        let p = Paragraph::new(Line::from(Span::styled(empty_msg, Style::default().fg(pal.dim))))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(pal.dim))
-                    .title(" Redes Disponíveis "),
-            );
+        let p = Paragraph::new(Line::from(Span::styled(
+            empty_msg,
+            Style::default().fg(pal.dim),
+        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(pal.dim))
+                .title(" Redes Disponíveis "),
+        );
         f.render_widget(p, area);
         return;
     }
 
-    let selected_idx = app.network_selected.min(snap.access_points.len().saturating_sub(1));
+    let selected_idx = app
+        .network_selected
+        .min(snap.access_points.len().saturating_sub(1));
 
     let rows: Vec<Row> = snap
         .access_points
@@ -165,26 +190,30 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
         Constraint::Percentage(14),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(pal.accent))
-                .title(Span::styled(
-                    format!(" Redes Disponíveis ({}) ", snap.access_points.len()),
-                    Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
-                )),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(pal.accent))
+            .title(Span::styled(
+                format!(" Redes Disponíveis ({}) ", snap.access_points.len()),
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )),
+    );
 
     f.render_widget(table, area);
 }
 
 fn format_ap_row<'a>(ap: &AccessPoint, is_sel: bool, pal: &Palette) -> Row<'a> {
     let bullet = if ap.is_active {
-        Span::styled("● ", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "● ",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else if is_sel {
-        Span::styled("▶ ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "▶ ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::raw("  ")
     };
@@ -213,7 +242,10 @@ fn format_ap_row<'a>(ap: &AccessPoint, is_sel: bool, pal: &Palette) -> Row<'a> {
     let sec_badge = Span::styled(ap.security.label(), sec_style);
 
     let status_badge = if ap.is_active {
-        Span::styled("Conectado", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "Conectado",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else if ap.is_saved {
         Span::styled("Salva", Style::default().fg(pal.accent))
     } else {
@@ -221,7 +253,9 @@ fn format_ap_row<'a>(ap: &AccessPoint, is_sel: bool, pal: &Palette) -> Row<'a> {
     };
 
     let row_style = if is_sel {
-        Style::default().fg(pal.accent).add_modifier(Modifier::REVERSED)
+        Style::default()
+            .fg(pal.accent)
+            .add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
@@ -274,21 +308,42 @@ fn draw_footer(snap: &NetworkSnapshot, pal: &Palette, f: &mut Frame, area: Rect)
         Span::styled("   Gateway: ", Style::default().fg(pal.dim)),
         Span::styled(gw, Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
         Span::styled("   Taxa: ", Style::default().fg(pal.dim)),
-        Span::styled(format!("↓ {rx_str}"), Style::default().fg(pal.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("↓ {rx_str}"),
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
-        Span::styled(format!("↑ {tx_str}"), Style::default().fg(pal.warn).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("↑ {tx_str}"),
+            Style::default().fg(pal.warn).add_modifier(Modifier::BOLD),
+        ),
     ]);
 
     let line2 = Line::from(vec![
-        Span::styled(" [Enter] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [Enter] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Conectar   ", Style::default().fg(pal.dim)),
-        Span::styled("[d] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[d] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Desconectar   ", Style::default().fg(pal.dim)),
-        Span::styled("[f] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[f] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Esquecer   ", Style::default().fg(pal.dim)),
-        Span::styled("[r] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[r] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Escanear   ", Style::default().fg(pal.dim)),
-        Span::styled("[t] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[t] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Ligar/Desligar Wi-Fi", Style::default().fg(pal.dim)),
     ]);
 
@@ -319,7 +374,10 @@ pub fn draw_wifi_prompt(pal: &Palette, f: &mut Frame, prompt: &WifiPasswordPromp
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
         Span::styled("Rede: ", Style::default().fg(pal.dim)),
-        Span::styled(&prompt.ssid, Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &prompt.ssid,
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(""));
 

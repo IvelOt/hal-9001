@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -75,7 +74,10 @@ fn draw_header(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut Frame
     let mac = adapter.map(|a| a.address.as_str()).unwrap_or("—");
 
     let scanning_badge = if app.bluetooth_scanning {
-        Span::styled(" [BUSCANDO...] ", Style::default().fg(pal.warn).add_modifier(Modifier::BOLD))
+        Span::styled(
+            " [BUSCANDO...] ",
+            Style::default().fg(pal.warn).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::raw("")
     };
@@ -92,7 +94,10 @@ fn draw_header(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut Frame
 
     let header_line = Line::from(vec![
         Span::styled(" Adaptador: ", Style::default().fg(pal.dim)),
-        Span::styled(name, Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            name,
+            Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" (", Style::default().fg(pal.dim)),
         Span::styled(mac, Style::default().fg(pal.dim)),
         Span::styled(")  Rádio: ", Style::default().fg(pal.dim)),
@@ -116,12 +121,30 @@ fn draw_header(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut Frame
 fn draw_device_list(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("Tipo", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Dispositivo / Alias", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("MAC / ID", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Sinal", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Bateria", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Status", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Tipo",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Dispositivo / Alias",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "MAC / ID",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Sinal",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Bateria",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Status",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
     ])
     .style(Style::default().fg(pal.accent))
     .bottom_margin(1);
@@ -133,18 +156,23 @@ fn draw_device_list(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut 
         } else {
             "Nenhum dispositivo encontrado. Pressione [r] para escanear dispositivos próximos."
         };
-        let p = Paragraph::new(Line::from(Span::styled(empty_msg, Style::default().fg(pal.dim))))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(pal.dim))
-                    .title(" Dispositivos "),
-            );
+        let p = Paragraph::new(Line::from(Span::styled(
+            empty_msg,
+            Style::default().fg(pal.dim),
+        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(pal.dim))
+                .title(" Dispositivos "),
+        );
         f.render_widget(p, area);
         return;
     }
 
-    let selected_idx = app.bluetooth_selected.min(snap.devices.len().saturating_sub(1));
+    let selected_idx = app
+        .bluetooth_selected
+        .min(snap.devices.len().saturating_sub(1));
 
     let rows: Vec<Row> = snap
         .devices
@@ -166,26 +194,30 @@ fn draw_device_list(snap: &BluetoothSnapshot, app: &App, pal: &Palette, f: &mut 
         Constraint::Percentage(15),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(pal.accent))
-                .title(Span::styled(
-                    format!(" Dispositivos ({}) ", snap.devices.len()),
-                    Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
-                )),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(pal.accent))
+            .title(Span::styled(
+                format!(" Dispositivos ({}) ", snap.devices.len()),
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )),
+    );
 
     f.render_widget(table, area);
 }
 
 fn format_device_row<'a>(dev: &BluetoothDevice, is_sel: bool, pal: &Palette) -> Row<'a> {
     let bullet = if dev.connected {
-        Span::styled("● ", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "● ",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else if is_sel {
-        Span::styled("▶ ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "▶ ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::raw("  ")
     };
@@ -213,15 +245,24 @@ fn format_device_row<'a>(dev: &BluetoothDevice, is_sel: bool, pal: &Palette) -> 
         } else {
             pal.err
         };
-        Span::styled(format!("{pct:>3}%"), Style::default().fg(color).add_modifier(Modifier::BOLD))
+        Span::styled(
+            format!("{pct:>3}%"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::styled("—", Style::default().fg(pal.dim))
     };
 
     let status_badge = if dev.blocked {
-        Span::styled("Bloqueado", Style::default().fg(pal.err).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "Bloqueado",
+            Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+        )
     } else if dev.connected {
-        Span::styled("Conectado", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "Conectado",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else if dev.paired {
         Span::styled("Pareado", Style::default().fg(pal.accent))
     } else {
@@ -229,7 +270,9 @@ fn format_device_row<'a>(dev: &BluetoothDevice, is_sel: bool, pal: &Palette) -> 
     };
 
     let row_style = if is_sel {
-        Style::default().fg(pal.accent).add_modifier(Modifier::REVERSED)
+        Style::default()
+            .fg(pal.accent)
+            .add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
@@ -277,31 +320,58 @@ fn draw_footer(snap: &BluetoothSnapshot, pal: &Palette, f: &mut Frame, area: Rec
             if i > 0 {
                 spans.push(Span::styled(" | ", Style::default().fg(pal.dim)));
             }
-            spans.push(Span::styled(&d.alias, Style::default().fg(pal.ok).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                &d.alias,
+                Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+            ));
             if let Some(pct) = d.battery_percentage {
-                spans.push(Span::styled(format!(" ({pct}%)"), Style::default().fg(pal.accent)));
+                spans.push(Span::styled(
+                    format!(" ({pct}%)"),
+                    Style::default().fg(pal.accent),
+                ));
             }
         }
         Line::from(spans)
     } else {
         Line::from(vec![
             Span::styled(" Status: ", Style::default().fg(pal.dim)),
-            Span::styled("Nenhum dispositivo conectado no momento", Style::default().fg(pal.dim)),
+            Span::styled(
+                "Nenhum dispositivo conectado no momento",
+                Style::default().fg(pal.dim),
+            ),
         ])
     };
 
     let line2 = Line::from(vec![
-        Span::styled(" [Enter] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [Enter] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Conectar/Desconectar   ", Style::default().fg(pal.dim)),
-        Span::styled("[p] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[p] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Parear   ", Style::default().fg(pal.dim)),
-        Span::styled("[r] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[r] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Escanear   ", Style::default().fg(pal.dim)),
-        Span::styled("[f] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[f] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Esquecer   ", Style::default().fg(pal.dim)),
-        Span::styled("[t] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[t] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Ligar/Desligar   ", Style::default().fg(pal.dim)),
-        Span::styled("[b] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[b] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Bloquear", Style::default().fg(pal.dim)),
     ]);
 

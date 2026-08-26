@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 
 const MARKER_FILE: &str = ".hal9001-multiboot";

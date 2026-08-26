@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -52,7 +51,6 @@ fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 }
 
 fn pick_size(pref: &str, area: Rect) -> Option<LogoSize> {
-
     if area.height > area.width || area.width < 72 {
         return None;
     }
@@ -145,7 +143,10 @@ fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Fram
     let title_pad = (info_w as usize).saturating_sub(8) / 2;
     lines.push(Line::from(vec![
         Span::raw(" ".repeat(title_pad)),
-        Span::styled("HAL-9001", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "HAL-9001",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(""));
 
@@ -192,18 +193,15 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
     if area.width < 50 {
-
         spans.extend(hint(".", "Det"));
         spans.extend(hint("p", "Perfil"));
         spans.extend(hint("c", "Config"));
     } else if area.width < 68 {
-
         spans.extend(hint(".", "Detalhe"));
         spans.extend(hint("p", m.label_power_profile));
         spans.extend(hint("b/v", "Brilho/Vol"));
         spans.extend(hint("c", "Config"));
     } else {
-
         let details_label = if app.lang == crate::i18n::Language::EnUs {
             "Details:"
         } else if app.lang == crate::i18n::Language::EsEs {
@@ -212,7 +210,10 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             "Detalhes:"
         };
         spans.extend(hint(".", details_label));
-        spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
+        spans.push(Span::styled(
+            format!("{mode} "),
+            Style::default().fg(pal.fg),
+        ));
         let mute_label = match app.lang {
             crate::i18n::Language::EnUs => "Mute",
             crate::i18n::Language::EsEs => "Mudo",
@@ -284,7 +285,6 @@ fn meta_line<'a>(label: &'a str, value: String, pal: &Palette) -> Line<'a> {
 
 #[derive(Clone, Copy)]
 struct Cols {
-
     width: usize,
 
     bar_w: usize,
@@ -296,7 +296,6 @@ const MAX_INFO_W: usize = 48;
 
 impl Cols {
     fn new(width: u16) -> Self {
-
         let width = (width as usize).min(MAX_INFO_W);
         let bar_w = (width / 4).clamp(6, 14);
 
@@ -346,8 +345,23 @@ fn section_top_processes<'a>(
         5
     };
 
-    let header = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", "PID", "PROCESSO", "CPU%", "RAM", pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
-    out.push(Line::from(vec![Span::styled(header, ratatui::style::Style::default().fg(pal.dim).add_modifier(ratatui::style::Modifier::BOLD))]));
+    let header = format!(
+        "{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}",
+        "PID",
+        "PROCESSO",
+        "CPU%",
+        "RAM",
+        pid_w = pid_w,
+        proc_w = proc_w,
+        cpu_w = cpu_w,
+        ram_w = ram_w
+    );
+    out.push(Line::from(vec![Span::styled(
+        header,
+        ratatui::style::Style::default()
+            .fg(pal.dim)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )]));
 
     for p in &s.detail.top_processes {
         let pid_str = p.pid.to_string();
@@ -355,8 +369,21 @@ fn section_top_processes<'a>(
         let ram_str = human_bytes(p.mem_bytes);
 
         let name_trunc = truncate_str(&p.name, proc_w);
-        let row = format!("{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}", pid_str, name_trunc, cpu_str, ram_str, pid_w=pid_w, proc_w=proc_w, cpu_w=cpu_w, ram_w=ram_w);
-        out.push(Line::from(vec![Span::styled(row, ratatui::style::Style::default().fg(pal.fg))]));
+        let row = format!(
+            "{:<pid_w$} {:<proc_w$} {:>cpu_w$} {:>ram_w$}",
+            pid_str,
+            name_trunc,
+            cpu_str,
+            ram_str,
+            pid_w = pid_w,
+            proc_w = proc_w,
+            cpu_w = cpu_w,
+            ram_w = ram_w
+        );
+        out.push(Line::from(vec![Span::styled(
+            row,
+            ratatui::style::Style::default().fg(pal.fg),
+        )]));
     }
 }
 
@@ -397,7 +424,6 @@ fn section_hardware(
     ));
 
     if detailed {
-
         if d.swap_total > 0 {
             out.push(metric_line(
                 m.label_swap,
@@ -453,7 +479,12 @@ fn section_platform(
 
     if detailed {
         match (&d.bios_version, &d.bios_date) {
-            (Some(v), Some(dt)) => out.push(kv_line(m.label_bios, format!("{v} ({dt})"), cols.width, pal)),
+            (Some(v), Some(dt)) => out.push(kv_line(
+                m.label_bios,
+                format!("{v} ({dt})"),
+                cols.width,
+                pal,
+            )),
             (Some(v), None) => out.push(kv_line(m.label_bios, v.clone(), cols.width, pal)),
             _ => {}
         }
@@ -528,12 +559,23 @@ fn section_power(
                 }
             }
         }
-        None => out.push(kv_line(m.label_battery, "N/A (Desktop)".into(), cols.width, pal)),
+        None => out.push(kv_line(
+            m.label_battery,
+            "N/A (Desktop)".into(),
+            cols.width,
+            pal,
+        )),
     }
 
     match s.brightness {
         Some(r) => out.push(metric_line(
-            m.label_brightness, "", cols.val_w, r, cols.bar_w, pal, None,
+            m.label_brightness,
+            "",
+            cols.val_w,
+            r,
+            cols.bar_w,
+            pal,
+            None,
         )),
         None => out.push(kv_line(m.label_brightness, "N/A".into(), cols.width, pal)),
     }
@@ -561,7 +603,12 @@ fn section_power(
             cols.width,
             pal,
         )),
-        None => out.push(kv_line(m.label_power_profile, "N/A".into(), cols.width, pal)),
+        None => out.push(kv_line(
+            m.label_power_profile,
+            "N/A".into(),
+            cols.width,
+            pal,
+        )),
     }
 }
 

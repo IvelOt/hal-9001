@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -79,10 +78,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 }
 
 fn default_node_name(nodes: &[AudioNode]) -> Option<&str> {
-    nodes
-        .iter()
-        .find(|n| n.is_default)
-        .map(|n| n.name.as_str())
+    nodes.iter().find(|n| n.is_default).map(|n| n.name.as_str())
 }
 
 fn draw_header(snap: &AudioSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
@@ -187,7 +183,9 @@ fn draw_card_panel(
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             panel_title(icon, cat.title(), nodes.len(), start, end),
-            Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
         ));
 
     if nodes.is_empty() {
@@ -222,7 +220,9 @@ fn name_line<'a>(node: &AudioNode, is_sel: bool, width: usize, pal: &Palette) ->
         "  "
     };
     let name_style = if node.is_muted {
-        Style::default().fg(pal.dim).add_modifier(Modifier::CROSSED_OUT)
+        Style::default()
+            .fg(pal.dim)
+            .add_modifier(Modifier::CROSSED_OUT)
     } else if is_sel {
         Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)
     } else {
@@ -274,7 +274,10 @@ fn bar_status_line<'a>(node: &AudioNode, width: usize, pal: &Palette) -> Line<'a
         Span::raw("  "),
         bar_span,
         Span::raw(" "),
-        Span::styled(truncate_str(status, status_w), Style::default().fg(status_color)),
+        Span::styled(
+            truncate_str(status, status_w),
+            Style::default().fg(status_color),
+        ),
     ])
 }
 
@@ -328,8 +331,16 @@ fn draw_source_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
-            panel_title(icon, "Dispositivos de Entrada / Microfones", nodes.len(), start, end),
-            Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+            panel_title(
+                icon,
+                "Dispositivos de Entrada / Microfones",
+                nodes.len(),
+                start,
+                end,
+            ),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
         ));
 
     if nodes.is_empty() {
@@ -344,9 +355,18 @@ fn draw_source_panel(
 
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("Dispositivo", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Nível", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled("Status", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Dispositivo",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Nível",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Status",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
     ])
     .style(Style::default().fg(pal.accent))
     .bottom_margin(1);
@@ -376,15 +396,23 @@ fn draw_source_panel(
 
 fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Palette) -> Row<'a> {
     let bullet = if is_sel {
-        Span::styled("▶ ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "▶ ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        )
     } else if node.is_default {
-        Span::styled("● ", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "● ",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::raw("  ")
     };
 
     let name_style = if node.is_muted {
-        Style::default().fg(pal.dim).add_modifier(Modifier::CROSSED_OUT)
+        Style::default()
+            .fg(pal.dim)
+            .add_modifier(Modifier::CROSSED_OUT)
     } else if is_sel {
         Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)
     } else {
@@ -394,17 +422,28 @@ fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Pa
     let volume_span = format_volume_bar(node.volume, node.is_muted, pal, 20);
 
     let status_span = if node.is_muted && node.is_default {
-        Span::styled("[MUDO] [PADRÃO]", Style::default().fg(pal.err).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "[MUDO] [PADRÃO]",
+            Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+        )
     } else if node.is_muted {
-        Span::styled("[MUDO]", Style::default().fg(pal.err).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "[MUDO]",
+            Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
+        )
     } else if node.is_default {
-        Span::styled("[PADRÃO]", Style::default().fg(pal.ok).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "[PADRÃO]",
+            Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::styled("Ativo", Style::default().fg(pal.dim))
     };
 
     let row_style = if is_sel {
-        Style::default().fg(pal.accent).add_modifier(Modifier::REVERSED)
+        Style::default()
+            .fg(pal.accent)
+            .add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
@@ -420,17 +459,35 @@ fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Pa
 
 fn draw_footer(pal: &Palette, f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
-        Span::styled(" [Tab/⇧Tab] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [Tab/⇧Tab] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Foco   ", Style::default().fg(pal.dim)),
-        Span::styled("[j/k] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[j/k] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Navegar   ", Style::default().fg(pal.dim)),
-        Span::styled("[+/- h/l] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[+/- h/l] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Volume (±5%)   ", Style::default().fg(pal.dim)),
-        Span::styled("[m] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[m] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Mudo   ", Style::default().fg(pal.dim)),
-        Span::styled("[Enter] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Enter] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Padrão/Mudo   ", Style::default().fg(pal.dim)),
-        Span::styled("[r] ", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[r] ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Atualizar", Style::default().fg(pal.dim)),
     ]);
 

@@ -1,4 +1,3 @@
-
 use tokio::sync::broadcast;
 
 use crate::events::{Action, EventTx};
@@ -11,7 +10,6 @@ pub enum Distro {
 }
 
 impl Distro {
-
     pub fn detect() -> Distro {
         let Ok(text) = std::fs::read_to_string("/etc/os-release") else {
             return Distro::Unknown;

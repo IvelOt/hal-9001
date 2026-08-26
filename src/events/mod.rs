@@ -1,4 +1,3 @@
-
 pub mod input;
 
 use std::path::PathBuf;
@@ -58,7 +57,6 @@ impl Toast {
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
-
     System(Box<SystemSnapshot>),
 
     Storage(Box<StorageSnapshot>),
@@ -77,11 +75,20 @@ pub enum AppEvent {
 
     Toast(Toast),
 
-    ServiceDegraded { name: &'static str, reason: String },
+    ServiceDegraded {
+        name: &'static str,
+        reason: String,
+    },
 
-    StorageChecksumProgress { path: PathBuf, pct: f32 },
+    StorageChecksumProgress {
+        path: PathBuf,
+        pct: f32,
+    },
 
-    StorageChecksumDone { path: PathBuf, sha256: String },
+    StorageChecksumDone {
+        path: PathBuf,
+        sha256: String,
+    },
 
     StorageFlashProgress {
         bytes_written: u64,
@@ -119,7 +126,10 @@ pub enum AppEvent {
 
     StorageAnalyzerSnapshot(Box<crate::backend::disk_analyzer::DiskUsageSnapshot>),
 
-    StorageAnalyzerError { path: PathBuf, message: String },
+    StorageAnalyzerError {
+        path: PathBuf,
+        message: String,
+    },
 
     StorageAnalyzerProgress {
         current_item: String,
@@ -129,7 +139,6 @@ pub enum AppEvent {
 }
 
 pub struct SudoPasswordRequest {
-
     pub label: String,
 
     pub retry_error: Option<String>,
@@ -276,7 +285,10 @@ pub enum Action {
     BluetoothForget(DeviceId),
     BluetoothToggleBlock(DeviceId),
 
-    AudioSetVolume { node_id: u32, volume: f32 },
+    AudioSetVolume {
+        node_id: u32,
+        volume: f32,
+    },
     AudioVolumeUp(u32, f32),
     AudioVolumeDown(u32, f32),
     AudioToggleMute(u32),
@@ -284,6 +296,10 @@ pub enum Action {
     AudioSelectCategory(usize),
 
     DisplaySetLayout(crate::backend::display::DisplayLayoutMode),
-    DisplaySetResolution { display: String, mode: String, rate: Option<f32> },
+    DisplaySetResolution {
+        display: String,
+        mode: String,
+        rate: Option<f32>,
+    },
     DisplaySetPrimary(String),
 }

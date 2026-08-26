@@ -1,11 +1,9 @@
-
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogoSize {
-
     Main,
 
     Medium,
@@ -62,7 +60,6 @@ const COMPACT: &[&str] = &[
 ];
 
 impl LogoSize {
-
     fn art(self) -> &'static [&'static str] {
         match self {
             LogoSize::Main => MAIN,
@@ -91,7 +88,6 @@ const HUB_GAP: Color = Color::Yellow;
 
 fn eye_colors(phase: u8) -> (Color, Color, Color) {
     match phase % 4 {
-
         0 => (Color::LightRed, Color::Red, Color::Rgb(255, 50, 50)),
         1 => (
             Color::Rgb(255, 130, 110),
@@ -137,16 +133,17 @@ pub fn logo_lines_phase(size: LogoSize, phase: u8) -> Vec<Line<'static>> {
             let mut cur: Option<Color> = None;
             let mut start = 0;
 
-            let flush = |spans: &mut Vec<Span<'static>>, start: usize, end: usize, cur: Option<Color>| {
-                if start == end {
-                    return;
-                }
-                let style = match cur {
-                    Some(c) => Style::default().fg(c),
-                    None => Style::default(),
+            let flush =
+                |spans: &mut Vec<Span<'static>>, start: usize, end: usize, cur: Option<Color>| {
+                    if start == end {
+                        return;
+                    }
+                    let style = match cur {
+                        Some(c) => Style::default().fg(c),
+                        None => Style::default(),
+                    };
+                    spans.push(Span::styled(&raw[start..end], style));
                 };
-                spans.push(Span::styled(&raw[start..end], style));
-            };
 
             for (i, c) in raw.char_indices() {
                 let color = glyph_color(c, eye);

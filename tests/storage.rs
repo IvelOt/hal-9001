@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
@@ -46,7 +45,6 @@ fn partition(mount_points: Vec<&str>, is_swap: bool) -> PartitionInfo {
 
 #[test]
 fn root_mount_is_always_system() {
-
     let d = drive(true, BusType::Usb);
     let p = partition(vec!["/"], false);
     assert!(is_system_disk(&d, &p));
@@ -80,7 +78,6 @@ fn active_swap_partition_is_system() {
 
 #[test]
 fn fixed_internal_drive_is_system_even_without_protected_mount() {
-
     let d = drive(false, BusType::Sata);
     let p = partition(vec![], false);
     assert!(is_system_disk(&d, &p));
@@ -150,7 +147,6 @@ fn mock_snapshot() -> StorageSnapshot {
 
 #[test]
 fn drive_only_list_has_one_row_per_drive() {
-
     let snap = mock_snapshot();
     assert_eq!(snap.drives.len(), 2);
 }
@@ -165,7 +161,6 @@ fn primary_partition_prefers_mounted_non_system() {
 
 #[test]
 fn system_disk_never_reachable_for_eject_via_app_dispatch() {
-
     let mut cfg = Config::default();
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
@@ -286,7 +281,6 @@ fn compute_speed_eta_reports_zero_when_no_bytes_transferred() {
 
 #[test]
 fn compute_speed_eta_computes_rate_and_remaining_time() {
-
     let window_bytes = 4 * 1024 * 1024;
     let total = 20 * 1024 * 1024;
     let written = 4 * 1024 * 1024;
@@ -300,7 +294,6 @@ fn compute_speed_eta_computes_rate_and_remaining_time() {
 
 #[test]
 fn compute_speed_eta_never_divides_by_a_zero_window() {
-
     let (speed, _eta) = compute_speed_eta(1024, 0.0, 0, 1024 * 1024);
     assert!(speed.is_finite());
 }
@@ -390,7 +383,6 @@ fn resolve_block_object_path_returns_none_for_a_drive_with_unknown_block_path() 
 
 #[test]
 fn resolve_block_object_path_never_resolves_a_drive_id_to_itself() {
-
     let mut d = drive(true, BusType::Usb);
     d.id = DeviceId("/org/freedesktop/UDisks2/drives/anything".into());
     d.block_path = Some("/org/freedesktop/UDisks2/block_devices/sdq".into());
@@ -664,7 +656,6 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
 
 #[test]
 fn format_modal_enter_on_fs_field_formats_immediately() {
-
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageFormatOpen, &tx);
@@ -986,9 +977,9 @@ fn app_with_usb_target_partitioned(dev_node: &str, size: u64) -> App {
     cfg.splash.enabled = false;
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
-    app.handle_event(AppEvent::Storage(Box::new(usb_target_snapshot_with_partition(
-        dev_node, size,
-    ))));
+    app.handle_event(AppEvent::Storage(Box::new(
+        usb_target_snapshot_with_partition(dev_node, size),
+    )));
     app.storage_selected = 0;
     app
 }
@@ -1025,7 +1016,6 @@ fn multiboot_prepare_open_sends_action_with_primary_partition_id() {
 
 #[test]
 fn multiboot_prepare_open_toasts_when_no_partition_available() {
-
     let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     app.dispatch(Action::StorageMultibootPrepareOpen, &tx);
@@ -1036,7 +1026,6 @@ fn multiboot_prepare_open_toasts_when_no_partition_available() {
 
 #[test]
 fn multiboot_prepare_action_is_blocked_by_is_system_target() {
-
     let snap = mock_snapshot();
     let system_partition_id = snap.drives[0].partitions[0].id.clone();
     assert!(snap.is_system_target(&system_partition_id));
@@ -1112,7 +1101,11 @@ fn friendly_label_appends_dev_node_for_mmc_drives_without_a_partition_label() {
     d.model = "SD16G".into();
     d.vendor = "".into();
     d.dev_node = "/dev/mmcblk0".into();
-    d.partitions = vec![labeled_partition("", "/dev/mmcblk0p1", 16 * 1024 * 1024 * 1024)];
+    d.partitions = vec![labeled_partition(
+        "",
+        "/dev/mmcblk0p1",
+        16 * 1024 * 1024 * 1024,
+    )];
     assert_eq!(d.friendly_label(), "SD16G (/dev/mmcblk0)");
 }
 
@@ -1177,8 +1170,7 @@ fn is_iso_or_img_is_case_insensitive_and_rejects_other_extensions() {
 fn write_gzip_fixture(dir: &std::path::Path, name: &str, payload: &[u8]) -> std::path::PathBuf {
     use std::io::Write;
     let path = dir.join(name);
-    let mut encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(payload).expect("write payload");
     let compressed = encoder.finish().expect("finish gzip stream");
     std::fs::write(&path, compressed).expect("write gzip fixture");
@@ -1304,7 +1296,6 @@ fn render_multiboot_iso_manager_modal_in_every_stage_without_panic() {
 
 #[test]
 fn format_fat32_pure_rust_produces_a_mountable_fat32_volume_with_label() {
-
     let file = tempfile::NamedTempFile::new().unwrap();
     file.as_file().set_len(64 * 1024 * 1024).unwrap();
     let path = file.path().to_str().unwrap();
@@ -1487,7 +1478,9 @@ fn render_disk_analyzer_scanning_panel_without_panic() {
     let mut app = App::new(cfg);
     app.active = Tab::Storage;
     app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
-    app.storage_analyzer = Some(DiskAnalyzerState::opening("/home/user/some/deep/path".into()));
+    app.storage_analyzer = Some(DiskAnalyzerState::opening(
+        "/home/user/some/deep/path".into(),
+    ));
     app.handle_event(AppEvent::StorageAnalyzerProgress {
         current_item: "/home/user/some/deep/path/big_file.bin".to_string(),
         items_scanned: 1420,

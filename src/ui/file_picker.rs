@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -57,7 +56,10 @@ pub fn sort_entries(entries: &mut [FileEntry]) {
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()),
+        _ => a
+            .name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase()),
     });
 }
 
@@ -195,8 +197,11 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
         m.filepicker_jump_root,
     );
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(jumps, Style::default().fg(pal.dim))))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(Line::from(Span::styled(
+            jumps,
+            Style::default().fg(pal.dim),
+        )))
+        .wrap(Wrap { trim: false }),
         rows[6],
     );
 }

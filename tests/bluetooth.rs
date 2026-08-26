@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, Tab};
 use hal9001::backend::bluetooth::{
     derive_device_type, BluetoothAdapter, BluetoothDevice, BluetoothDeviceType, BluetoothSnapshot,
@@ -11,7 +10,6 @@ use tokio::sync::broadcast;
 
 #[test]
 fn test_derive_device_type_icon_and_cod() {
-
     assert_eq!(
         derive_device_type(Some("audio-headset"), None, None, &[]),
         BluetoothDeviceType::Audio
@@ -55,7 +53,6 @@ fn test_derive_device_type_icon_and_cod() {
 
 #[test]
 fn test_derive_device_type_ble_appearance_and_uuids() {
-
     assert_eq!(
         derive_device_type(None, None, Some(960), &[]),
         BluetoothDeviceType::Gamepad
@@ -147,14 +144,18 @@ fn test_bluetooth_snapshot_navigation_and_actions() {
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
-        Action::BluetoothDisconnect(DeviceId("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_11".to_string()))
+        Action::BluetoothDisconnect(DeviceId(
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_11".to_string()
+        ))
     );
 
     app.bluetooth_selected = 1;
     app.dispatch(Action::Enter, &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
-        Action::BluetoothConnect(DeviceId("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_22".to_string()))
+        Action::BluetoothConnect(DeviceId(
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_22".to_string()
+        ))
     );
 
     app.dispatch(Action::BluetoothRescan, &action_tx);
@@ -166,7 +167,9 @@ fn test_bluetooth_snapshot_navigation_and_actions() {
     app.dispatch(Action::BluetoothPair(DeviceId(String::new())), &action_tx);
     assert_eq!(
         action_rx.try_recv().unwrap(),
-        Action::BluetoothPair(DeviceId("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_22".to_string()))
+        Action::BluetoothPair(DeviceId(
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_22".to_string()
+        ))
     );
 }
 

@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -53,7 +52,10 @@ impl Security {
     }
 
     pub fn needs_password(self) -> bool {
-        matches!(self, Security::Wep | Security::Wpa | Security::Wpa2 | Security::Wpa3)
+        matches!(
+            self,
+            Security::Wep | Security::Wpa | Security::Wpa2 | Security::Wpa3
+        )
     }
 
     pub fn key_mgmt(self) -> Option<&'static str> {
@@ -334,7 +336,10 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
 
     let nm_proxy = zbus::Proxy::new(&conn, NM_SERVICE, NM_PATH, NM_IFACE).await?;
 
-    let wireless_enabled: bool = nm_proxy.get_property("WirelessEnabled").await.unwrap_or(false);
+    let wireless_enabled: bool = nm_proxy
+        .get_property("WirelessEnabled")
+        .await
+        .unwrap_or(false);
     let wireless_hw_enabled: bool = nm_proxy
         .get_property("WirelessHardwareEnabled")
         .await
@@ -354,12 +359,19 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
     let saved_profiles = list_saved_profiles(&conn).await.unwrap_or_default();
 
     for dev_path in devices {
-        let dev_proxy = zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
+        let dev_proxy =
+            zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
         let dev_type: u32 = dev_proxy.get_property("DeviceType").await.unwrap_or(0);
 
         if dev_type == NM_DEVICE_TYPE_WIFI {
-            let iface: String = dev_proxy.get_property("Interface").await.unwrap_or_default();
-            let hw_address: String = dev_proxy.get_property("HwAddress").await.unwrap_or_default();
+            let iface: String = dev_proxy
+                .get_property("Interface")
+                .await
+                .unwrap_or_default();
+            let hw_address: String = dev_proxy
+                .get_property("HwAddress")
+                .await
+                .unwrap_or_default();
             let state: u32 = dev_proxy.get_property("State").await.unwrap_or(0);
             let active_conn_path: OwnedObjectPath = dev_proxy
                 .get_property("ActiveConnection")
@@ -395,8 +407,10 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
                 last_scan_ms: last_scan,
             });
 
-            let ap_paths: Vec<OwnedObjectPath> =
-                wifi_proxy.call("GetAllAccessPoints", &()).await.unwrap_or_default();
+            let ap_paths: Vec<OwnedObjectPath> = wifi_proxy
+                .call("GetAllAccessPoints", &())
+                .await
+                .unwrap_or_default();
 
             for ap_path in ap_paths {
                 let ap_proxy =
@@ -440,7 +454,8 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
 
             if ip4_config_path.as_str() != "/" {
                 let ip_proxy =
-                    zbus::Proxy::new(&conn, NM_SERVICE, ip4_config_path.as_str(), NM_IP4_IFACE).await?;
+                    zbus::Proxy::new(&conn, NM_SERVICE, ip4_config_path.as_str(), NM_IP4_IFACE)
+                        .await?;
                 let gateway: String = ip_proxy.get_property("Gateway").await.unwrap_or_default();
                 if !gateway.is_empty() {
                     telemetry.gateway = Some(gateway);
@@ -519,7 +534,9 @@ async fn collect_snapshot(throughput: &mut ThroughputTracker) -> anyhow::Result<
         } else if a.is_saved != b.is_saved {
             b.is_saved.cmp(&a.is_saved)
         } else {
-            b.strength.cmp(&a.strength).then_with(|| a.ssid.cmp(&b.ssid))
+            b.strength
+                .cmp(&a.strength)
+                .then_with(|| a.ssid.cmp(&b.ssid))
         }
     });
 
@@ -593,7 +610,8 @@ async fn trigger_rescan() -> anyhow::Result<()> {
     let devices: Vec<OwnedObjectPath> = nm_proxy.call("GetDevices", &()).await?;
 
     for dev_path in devices {
-        let dev_proxy = zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
+        let dev_proxy =
+            zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
         let dev_type: u32 = dev_proxy.get_property("DeviceType").await.unwrap_or(0);
         if dev_type == NM_DEVICE_TYPE_WIFI {
             let wifi_proxy =
@@ -629,11 +647,7 @@ async fn forget_network(conn_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn connect_network(
-    ap_path: &str,
-    ssid: &str,
-    password: Option<&str>,
-) -> anyhow::Result<()> {
+async fn connect_network(ap_path: &str, ssid: &str, password: Option<&str>) -> anyhow::Result<()> {
     let conn = Connection::system().await?;
     let nm_proxy = zbus::Proxy::new(&conn, NM_SERVICE, NM_PATH, NM_IFACE).await?;
     let ap_obj = ObjectPath::try_from(ap_path)?;
@@ -644,7 +658,8 @@ async fn connect_network(
 
         let devices: Vec<OwnedObjectPath> = nm_proxy.call("GetDevices", &()).await?;
         for dev_path in devices {
-            let dev_proxy = zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
+            let dev_proxy =
+                zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
             let dev_type: u32 = dev_proxy.get_property("DeviceType").await.unwrap_or(0);
             if dev_type == NM_DEVICE_TYPE_WIFI {
                 let _: (OwnedObjectPath, OwnedObjectPath) = nm_proxy
@@ -676,7 +691,8 @@ async fn connect_network(
 
     let devices: Vec<OwnedObjectPath> = nm_proxy.call("GetDevices", &()).await?;
     for dev_path in devices {
-        let dev_proxy = zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
+        let dev_proxy =
+            zbus::Proxy::new(&conn, NM_SERVICE, dev_path.as_str(), NM_DEVICE_IFACE).await?;
         let dev_type: u32 = dev_proxy.get_property("DeviceType").await.unwrap_or(0);
         if dev_type == NM_DEVICE_TYPE_WIFI {
             let _: (OwnedObjectPath, OwnedObjectPath) = nm_proxy

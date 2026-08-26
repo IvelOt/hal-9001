@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -19,7 +18,6 @@ pub const DBUS_PROPERTIES_IFACE: &str = "org.freedesktop.DBus.Properties";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BluetoothDeviceType {
-
     Audio,
 
     Gamepad,
@@ -38,7 +36,6 @@ pub enum BluetoothDeviceType {
 }
 
 impl BluetoothDeviceType {
-
     pub fn ascii_label(&self) -> &'static str {
         match self {
             Self::Audio => "[FONE]",
@@ -68,7 +65,6 @@ impl BluetoothDeviceType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BluetoothDevice {
-
     pub id: DeviceId,
 
     pub address: String,
@@ -96,7 +92,6 @@ pub struct BluetoothDevice {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BluetoothAdapter {
-
     pub id: DeviceId,
 
     pub address: String,
@@ -114,7 +109,6 @@ pub struct BluetoothAdapter {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BluetoothSnapshot {
-
     pub bluez_available: bool,
 
     pub adapter: Option<BluetoothAdapter>,
@@ -128,7 +122,6 @@ pub fn derive_device_type(
     appearance: Option<u16>,
     uuids: &[String],
 ) -> BluetoothDeviceType {
-
     if let Some(ic) = icon {
         let ic_lower = ic.to_lowercase();
         if ic_lower.contains("headset")
@@ -138,7 +131,10 @@ pub fn derive_device_type(
         {
             return BluetoothDeviceType::Audio;
         }
-        if ic_lower.contains("gamepad") || ic_lower.contains("joystick") || ic_lower.contains("gaming") {
+        if ic_lower.contains("gamepad")
+            || ic_lower.contains("joystick")
+            || ic_lower.contains("gaming")
+        {
             return BluetoothDeviceType::Gamepad;
         }
         if ic_lower.contains("keyboard") {
@@ -207,11 +203,7 @@ pub fn derive_device_type(
     BluetoothDeviceType::Other
 }
 
-pub async fn run(
-    poll_interval_ms: u64,
-    tx: EventTx,
-    mut action_rx: broadcast::Receiver<Action>,
-) {
+pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(500)));
     let mut scan_start_time: Option<Instant> = None;
 
@@ -389,12 +381,8 @@ pub async fn fetch_bluetooth_snapshot() -> anyhow::Result<BluetoothSnapshot> {
             let appearance = prop_u16(dev_props, "Appearance");
             let uuids = prop_string_vec(dev_props, "UUIDs");
 
-            let device_type = derive_device_type(
-                icon.as_deref(),
-                class_of_device,
-                appearance,
-                &uuids,
-            );
+            let device_type =
+                derive_device_type(icon.as_deref(), class_of_device, appearance, &uuids);
 
             devices_map.insert(
                 path_str.to_string(),
@@ -454,8 +442,13 @@ pub async fn stop_discovery(conn: &Connection) -> anyhow::Result<()> {
 }
 
 pub async fn toggle_radio(conn: &Connection) -> anyhow::Result<()> {
-    let prop_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, "/org/bluez/hci0", DBUS_PROPERTIES_IFACE).await?;
+    let prop_proxy = zbus::Proxy::new(
+        conn,
+        BLUEZ_SERVICE,
+        "/org/bluez/hci0",
+        DBUS_PROPERTIES_IFACE,
+    )
+    .await?;
     let current_powered_val: OwnedValue = prop_proxy
         .call("Get", &(BLUEZ_ADAPTER_IFACE, "Powered"))
         .await?;
@@ -468,26 +461,22 @@ pub async fn toggle_radio(conn: &Connection) -> anyhow::Result<()> {
 }
 
 pub async fn connect_device(conn: &Connection, dev_path: &str) -> anyhow::Result<()> {
-    let dev_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
+    let dev_proxy = zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
     let _: () = dev_proxy.call("Connect", &()).await?;
     Ok(())
 }
 
 pub async fn disconnect_device(conn: &Connection, dev_path: &str) -> anyhow::Result<()> {
-    let dev_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
+    let dev_proxy = zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
     let _: () = dev_proxy.call("Disconnect", &()).await?;
     Ok(())
 }
 
 pub async fn pair_device(conn: &Connection, dev_path: &str) -> anyhow::Result<()> {
-    let dev_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
+    let dev_proxy = zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, BLUEZ_DEVICE_IFACE).await?;
     let _: () = dev_proxy.call("Pair", &()).await?;
 
-    let prop_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, DBUS_PROPERTIES_IFACE).await?;
+    let prop_proxy = zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, DBUS_PROPERTIES_IFACE).await?;
     let _: () = prop_proxy
         .call("Set", &(BLUEZ_DEVICE_IFACE, "Trusted", Value::from(true)))
         .await?;
@@ -503,8 +492,7 @@ pub async fn forget_device(conn: &Connection, dev_path: &str) -> anyhow::Result<
 }
 
 pub async fn toggle_block_device(conn: &Connection, dev_path: &str) -> anyhow::Result<()> {
-    let prop_proxy =
-        zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, DBUS_PROPERTIES_IFACE).await?;
+    let prop_proxy = zbus::Proxy::new(conn, BLUEZ_SERVICE, dev_path, DBUS_PROPERTIES_IFACE).await?;
     let current_blocked_val: OwnedValue = prop_proxy
         .call("Get", &(BLUEZ_DEVICE_IFACE, "Blocked"))
         .await?;
@@ -523,33 +511,23 @@ fn prop_string(props: &HashMap<String, OwnedValue>, key: &str) -> Option<String>
 }
 
 fn prop_bool(props: &HashMap<String, OwnedValue>, key: &str) -> Option<bool> {
-    props
-        .get(key)
-        .and_then(|v| bool::try_from(v.clone()).ok())
+    props.get(key).and_then(|v| bool::try_from(v.clone()).ok())
 }
 
 fn prop_u8(props: &HashMap<String, OwnedValue>, key: &str) -> Option<u8> {
-    props
-        .get(key)
-        .and_then(|v| u8::try_from(v.clone()).ok())
+    props.get(key).and_then(|v| u8::try_from(v.clone()).ok())
 }
 
 fn prop_u16(props: &HashMap<String, OwnedValue>, key: &str) -> Option<u16> {
-    props
-        .get(key)
-        .and_then(|v| u16::try_from(v.clone()).ok())
+    props.get(key).and_then(|v| u16::try_from(v.clone()).ok())
 }
 
 fn prop_i16(props: &HashMap<String, OwnedValue>, key: &str) -> Option<i16> {
-    props
-        .get(key)
-        .and_then(|v| i16::try_from(v.clone()).ok())
+    props.get(key).and_then(|v| i16::try_from(v.clone()).ok())
 }
 
 fn prop_u32(props: &HashMap<String, OwnedValue>, key: &str) -> Option<u32> {
-    props
-        .get(key)
-        .and_then(|v| u32::try_from(v.clone()).ok())
+    props.get(key).and_then(|v| u32::try_from(v.clone()).ok())
 }
 
 fn prop_string_vec(props: &HashMap<String, OwnedValue>, key: &str) -> Vec<String> {

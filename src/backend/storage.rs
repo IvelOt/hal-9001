@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -156,7 +155,6 @@ pub struct DriveInfo {
 }
 
 impl DriveInfo {
-
     pub fn friendly_label(&self) -> String {
         if let Some(p) = primary_partition(self) {
             if !p.label.trim().is_empty() {
@@ -165,7 +163,6 @@ impl DriveInfo {
         }
         let vm = format!("{} {}", self.vendor, self.model).trim().to_string();
         if !vm.is_empty() {
-
             if self.bus == BusType::Mmc {
                 return format!("{vm} ({})", self.dev_node);
             }
@@ -1128,7 +1125,10 @@ fn flash_sync(
     let (is_gzip, total_bytes) = probe_image_sync(iso_path);
     let raw_file = std::fs::File::open(iso_path)?;
     let mut reader: Box<dyn Read> = if is_gzip {
-        Box::new(std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file)))
+        Box::new(std::io::BufReader::with_capacity(
+            IO_BUFFER_SIZE,
+            GzDecoder::new(raw_file),
+        ))
     } else {
         Box::new(raw_file)
     };
@@ -1208,10 +1208,11 @@ async fn flash_inner(
 
 async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: EventTx) {
     let mp = std::path::PathBuf::from(&mount_point);
-    let result = tokio::task::spawn_blocking(move || crate::backend::multiboot::prepare_multiboot(&mp))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.map_err(|e| e.to_string()));
+    let result =
+        tokio::task::spawn_blocking(move || crate::backend::multiboot::prepare_multiboot(&mp))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
     let toast = match &result {
         Ok(()) => {
             let n = crate::backend::multiboot::count_isos(&mount_point);
@@ -1247,8 +1248,8 @@ async fn run_sudo_command(
             Ok(pw) => pw,
             Err(msg) => return Err(msg),
         };
-        let mut run = spawn_sudo(password, program.to_string(), args.to_vec())
-            .map_err(|e| e.to_string())?;
+        let mut run =
+            spawn_sudo(password, program.to_string(), args.to_vec()).map_err(|e| e.to_string())?;
         while let Some(line) = run.lines.recv().await {
             let _ = tx.send(AppEvent::Toast(Toast::info(line)));
         }
@@ -1307,7 +1308,11 @@ async fn format_fat32_elevated(
     format_result
 }
 
-async fn try_pure_rust_fat32(conn: &Connection, block_path: &str, label: &str) -> Result<(), String> {
+async fn try_pure_rust_fat32(
+    conn: &Connection,
+    block_path: &str,
+    label: &str,
+) -> Result<(), String> {
     let file = open_device_fd(conn, block_path)
         .await
         .map_err(|e| e.to_string())?;
@@ -1334,12 +1339,11 @@ async fn format_with_sudo_fallback(
         return Toast::error(format_error_message(fs_type, original_err));
     };
     if is_fat_fs_type(fs_type) && !mkfs_vfat_available() {
-
         tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — formatando FAT32 via fatfs com permissão elevada (sudo chmod)");
         return match format_fat32_elevated(&dev_node, label, sudo_tx, tx).await {
             Ok(()) => {
-                let _ = udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan")
-                    .await;
+                let _ =
+                    udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
                 Toast::info("Formatação concluída (FAT32 Rust puro, sudo)")
             }
             Err(msg) => Toast::error(format!("Falha ao formatar FAT32: {msg}")),
@@ -1492,7 +1496,8 @@ fn flash_elevated_gzip_sync(
 
     let write_result: anyhow::Result<()> = (|| {
         let raw_file = std::fs::File::open(iso_path)?;
-        let mut decoder = std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file));
+        let mut decoder =
+            std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file));
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
         let mut written: u64 = 0;
         let mut window_started = std::time::Instant::now();
@@ -1572,7 +1577,14 @@ async fn flash_elevated_gzip(
         let cancel_owned = Arc::clone(cancel);
         let tx_owned = tx.clone();
         let (status, stderr_text) = tokio::task::spawn_blocking(move || {
-            flash_elevated_gzip_sync(&iso_owned, &dev_owned, password, &cancel_owned, &tx_owned, total_bytes)
+            flash_elevated_gzip_sync(
+                &iso_owned,
+                &dev_owned,
+                password,
+                &cancel_owned,
+                &tx_owned,
+                total_bytes,
+            )
         })
         .await??;
         if status.success() {
@@ -1871,7 +1883,6 @@ async fn handle_action(
 ) {
     match action {
         Action::StorageMount(id) => {
-
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
                 let mut mount_points: Vec<String> = Vec::new();
                 let mut last_err: Option<anyhow::Error> = None;
@@ -1886,9 +1897,9 @@ async fn handle_action(
                 }
                 match (mount_points.as_slice(), last_err) {
                     ([], Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
-                    ([], None) => Toast::error(
-                        "Dispositivo sem partição montável — formate com [f] primeiro",
-                    ),
+                    ([], None) => {
+                        Toast::error("Dispositivo sem partição montável — formate com [f] primeiro")
+                    }
                     ([mp], _) => Toast::info(format!("Partição montada em {mp}")),
                     (mps, _) => Toast::info(format!(
                         "{} partição(ões) montada(s) em: {}",
@@ -1905,7 +1916,6 @@ async fn handle_action(
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageUnmount(id) => {
-
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
                 let mut unmounted = 0usize;
                 let mut last_err: Option<anyhow::Error> = None;
@@ -1936,7 +1946,6 @@ async fn handle_action(
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageEject(id) => {
-
             let Some(drive) = snapshot
                 .as_ref()
                 .and_then(|snap| snap.drives.iter().find(|d| d.id == id))
@@ -1977,15 +1986,12 @@ async fn handle_action(
             tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de dispositivo executada");
             let _ = tx.send(AppEvent::Toast(toast));
         }
-        Action::StorageRefresh => {
-
-        }
+        Action::StorageRefresh => {}
         Action::StorageFormat {
             device_id,
             fs_type,
             label,
         } => {
-
             let id = DeviceId(device_id.clone());
             if snapshot
                 .as_ref()
@@ -2021,11 +2027,9 @@ async fn handle_action(
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info("Formatação concluída"),
                 Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {
-
                     tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — tentando formatador FAT32 Rust puro via Block.OpenDevice");
                     match try_pure_rust_fat32(conn, &block_path, &label).await {
                         Ok(()) => {
-
                             let _ = udisks_call(
                                 conn,
                                 &block_path,
@@ -2037,17 +2041,31 @@ async fn handle_action(
                         }
                         Err(_) => {
                             format_with_sudo_fallback(
-                                conn, snap, &block_path, &device_id, &fs_type, &label, &e,
-                                sudo_tx, tx,
+                                conn,
+                                snap,
+                                &block_path,
+                                &device_id,
+                                &fs_type,
+                                &label,
+                                &e,
+                                sudo_tx,
+                                tx,
                             )
                             .await
                         }
                     }
                 }
                 Err(e) => {
-
                     format_with_sudo_fallback(
-                        conn, snap, &block_path, &device_id, &fs_type, &label, &e, sudo_tx, tx,
+                        conn,
+                        snap,
+                        &block_path,
+                        &device_id,
+                        &fs_type,
+                        &label,
+                        &e,
+                        sudo_tx,
+                        tx,
                     )
                     .await
                 }
@@ -2100,7 +2118,6 @@ async fn handle_action(
             }
         }
         Action::StorageMultibootPrepare { device_id } => {
-
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(

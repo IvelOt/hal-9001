@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, Tab};
 use hal9001::backend::audio::{
     parse_pactl_output, parse_wpctl_status, AudioCategory, AudioNode, AudioSnapshot,
@@ -143,10 +142,7 @@ fn test_audio_mixer_navigation_and_actions() {
     assert_eq!(app.audio_selected, 1);
 
     app.dispatch(Action::Enter, &action_tx);
-    assert_eq!(
-        action_rx.try_recv().unwrap(),
-        Action::AudioSetDefault(59)
-    );
+    assert_eq!(action_rx.try_recv().unwrap(), Action::AudioSetDefault(59));
 
     app.dispatch(Action::VolumeUp, &action_tx);
     assert_eq!(
@@ -161,20 +157,14 @@ fn test_audio_mixer_navigation_and_actions() {
     );
 
     app.dispatch(Action::ToggleMute, &action_tx);
-    assert_eq!(
-        action_rx.try_recv().unwrap(),
-        Action::AudioToggleMute(59)
-    );
+    assert_eq!(action_rx.try_recv().unwrap(), Action::AudioToggleMute(59));
 
     app.dispatch(Action::AudioSelectCategory(1), &action_tx);
     assert_eq!(app.audio_category, 1);
     assert_eq!(app.audio_selected, 0);
 
     app.dispatch(Action::Enter, &action_tx);
-    assert_eq!(
-        action_rx.try_recv().unwrap(),
-        Action::AudioToggleMute(66)
-    );
+    assert_eq!(action_rx.try_recv().unwrap(), Action::AudioToggleMute(66));
 }
 
 #[test]

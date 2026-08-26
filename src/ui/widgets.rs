@@ -1,4 +1,3 @@
-
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -69,9 +68,7 @@ pub fn section_title<'a>(text: &str, pal: &Palette) -> Line<'a> {
         Span::styled("▍ ", Style::default().fg(pal.accent)),
         Span::styled(
             text.to_uppercase(),
-            Style::default()
-                .fg(pal.accent)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
     ])
 }

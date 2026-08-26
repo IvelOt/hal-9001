@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +7,6 @@ use crate::events::{Action, AppEvent, EventTx, Toast};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DisplayLayoutMode {
-
     ExtendRight,
 
     ExtendLeft,
@@ -71,7 +69,6 @@ impl DisplayMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DisplayNode {
-
     pub name: String,
 
     pub is_connected: bool,
@@ -107,7 +104,6 @@ impl DisplayNode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DisplaySnapshot {
-
     pub displays: Vec<DisplayNode>,
 
     pub primary_name: Option<String>,
@@ -120,11 +116,15 @@ pub struct DisplaySnapshot {
 
 impl DisplaySnapshot {
     pub fn internal_display(&self) -> Option<&DisplayNode> {
-        self.displays.iter().find(|d| d.is_internal && d.is_connected)
+        self.displays
+            .iter()
+            .find(|d| d.is_internal && d.is_connected)
     }
 
     pub fn external_display(&self) -> Option<&DisplayNode> {
-        self.displays.iter().find(|d| !d.is_internal && d.is_connected)
+        self.displays
+            .iter()
+            .find(|d| !d.is_internal && d.is_connected)
     }
 
     pub fn connected_displays(&self) -> Vec<&DisplayNode> {
@@ -132,11 +132,7 @@ impl DisplaySnapshot {
     }
 }
 
-pub async fn run(
-    poll_interval_ms: u64,
-    tx: EventTx,
-    mut action_rx: broadcast::Receiver<Action>,
-) {
+pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(1000)));
     let mut last_connected_names: Vec<String> = Vec::new();
     let mut is_first_run = true;
@@ -276,7 +272,11 @@ pub async fn fetch_display_snapshot() -> anyhow::Result<DisplaySnapshot> {
         || std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland";
 
     if wayland {
-        if let Ok(output) = tokio::process::Command::new("hyprctl").args(["monitors", "all"]).output().await {
+        if let Ok(output) = tokio::process::Command::new("hyprctl")
+            .args(["monitors", "all"])
+            .output()
+            .await
+        {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if let Ok(mut snap) = parse_hyprctl_monitors(&stdout) {
@@ -322,7 +322,10 @@ pub fn parse_xrandr_query(output: &str) -> anyhow::Result<DisplaySnapshot> {
             continue;
         }
 
-        if !line.starts_with("   ") && !line.starts_with('\t') && (line.contains("connected") || line.contains("disconnected")) {
+        if !line.starts_with("   ")
+            && !line.starts_with('\t')
+            && (line.contains("connected") || line.contains("disconnected"))
+        {
             if let Some(d) = current_display.take() {
                 if d.is_primary {
                     primary_name = Some(d.name.clone());
@@ -334,7 +337,6 @@ pub fn parse_xrandr_query(output: &str) -> anyhow::Result<DisplaySnapshot> {
                 current_display = Some(node);
             }
         } else if let Some(d) = &mut current_display {
-
             if let Some(mode) = parse_display_mode_line(line) {
                 if mode.is_current {
                     d.current_mode = Some(mode.clone());
@@ -372,7 +374,8 @@ fn parse_display_header_line(line: &str) -> Option<DisplayNode> {
     let name = tokens[0].to_string();
     let is_connected = tokens[1] == "connected";
     let is_primary = line.contains("primary");
-    let is_internal = name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
+    let is_internal =
+        name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
 
     let mut pos_x = 0;
     let mut pos_y = 0;
@@ -431,7 +434,10 @@ fn parse_display_mode_line(line: &str) -> Option<DisplayMode> {
         if rate_str.contains('+') {
             is_preferred = true;
         }
-        let clean_rate: String = rate_str.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+        let clean_rate: String = rate_str
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
         if let Ok(r) = clean_rate.parse::<f32>() {
             rate = r;
         }
@@ -447,7 +453,10 @@ fn parse_display_mode_line(line: &str) -> Option<DisplayMode> {
 }
 
 fn infer_layout(displays: &[DisplayNode]) -> Option<DisplayLayoutMode> {
-    let connected: Vec<&DisplayNode> = displays.iter().filter(|d| d.is_connected && d.is_active).collect();
+    let connected: Vec<&DisplayNode> = displays
+        .iter()
+        .filter(|d| d.is_connected && d.is_active)
+        .collect();
     if connected.len() < 2 {
         if let Some(d) = connected.first() {
             return if d.is_internal {
@@ -479,7 +488,10 @@ fn infer_layout(displays: &[DisplayNode]) -> Option<DisplayLayoutMode> {
 }
 
 async fn run_cmd(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
-    let out = tokio::process::Command::new(cmd).args(args).output().await?;
+    let out = tokio::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .await?;
     if !out.status.success() {
         anyhow::bail!("Comando {} falhou: {:?}", cmd, out.status);
     }
@@ -494,41 +506,207 @@ pub async fn apply_layout(
 ) -> anyhow::Result<()> {
     if server_type.contains("wlr-randr") {
         match layout {
-            DisplayLayoutMode::ExtendRight => run_cmd("wlr-randr", &["--output", internal, "--on", "--output", external, "--on", "--right-of", internal]).await?,
-            DisplayLayoutMode::ExtendLeft => run_cmd("wlr-randr", &["--output", internal, "--on", "--output", external, "--on", "--left-of", internal]).await?,
-            DisplayLayoutMode::Mirror => run_cmd("wlr-randr", &["--output", internal, "--on", "--output", external, "--on"]).await?,
-            DisplayLayoutMode::ExternalOnly => run_cmd("wlr-randr", &["--output", external, "--on", "--output", internal, "--off"]).await?,
-            DisplayLayoutMode::InternalOnly => run_cmd("wlr-randr", &["--output", internal, "--on", "--output", external, "--off"]).await?,
+            DisplayLayoutMode::ExtendRight => {
+                run_cmd(
+                    "wlr-randr",
+                    &[
+                        "--output",
+                        internal,
+                        "--on",
+                        "--output",
+                        external,
+                        "--on",
+                        "--right-of",
+                        internal,
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::ExtendLeft => {
+                run_cmd(
+                    "wlr-randr",
+                    &[
+                        "--output",
+                        internal,
+                        "--on",
+                        "--output",
+                        external,
+                        "--on",
+                        "--left-of",
+                        internal,
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::Mirror => {
+                run_cmd(
+                    "wlr-randr",
+                    &["--output", internal, "--on", "--output", external, "--on"],
+                )
+                .await?
+            }
+            DisplayLayoutMode::ExternalOnly => {
+                run_cmd(
+                    "wlr-randr",
+                    &["--output", external, "--on", "--output", internal, "--off"],
+                )
+                .await?
+            }
+            DisplayLayoutMode::InternalOnly => {
+                run_cmd(
+                    "wlr-randr",
+                    &["--output", internal, "--on", "--output", external, "--off"],
+                )
+                .await?
+            }
             DisplayLayoutMode::Custom => {}
         }
     } else if server_type.contains("Hyprland") {
         match layout {
             DisplayLayoutMode::ExtendRight => {
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", internal)]).await?;
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", external)]).await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", internal)],
+                )
+                .await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", external)],
+                )
+                .await?;
             }
             DisplayLayoutMode::ExtendLeft => {
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", internal)]).await?;
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", external)]).await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", internal)],
+                )
+                .await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", external)],
+                )
+                .await?;
             }
-            DisplayLayoutMode::Mirror => run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1,mirror,{}", external, internal)]).await?,
+            DisplayLayoutMode::Mirror => {
+                run_cmd(
+                    "hyprctl",
+                    &[
+                        "keyword",
+                        "monitor",
+                        &format!("{},auto,auto,1,mirror,{}", external, internal),
+                    ],
+                )
+                .await?
+            }
             DisplayLayoutMode::ExternalOnly => {
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},disable", internal)]).await?;
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", external)]).await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},disable", internal)],
+                )
+                .await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", external)],
+                )
+                .await?;
             }
             DisplayLayoutMode::InternalOnly => {
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},disable", external)]).await?;
-                run_cmd("hyprctl", &["keyword", "monitor", &format!("{},auto,auto,1", internal)]).await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},disable", external)],
+                )
+                .await?;
+                run_cmd(
+                    "hyprctl",
+                    &["keyword", "monitor", &format!("{},auto,auto,1", internal)],
+                )
+                .await?;
             }
             DisplayLayoutMode::Custom => {}
         }
     } else {
         match layout {
-            DisplayLayoutMode::ExtendRight => run_cmd("xrandr", &["--output", internal, "--auto", "--primary", "--output", external, "--auto", "--right-of", internal]).await?,
-            DisplayLayoutMode::ExtendLeft => run_cmd("xrandr", &["--output", internal, "--auto", "--primary", "--output", external, "--auto", "--left-of", internal]).await?,
-            DisplayLayoutMode::Mirror => run_cmd("xrandr", &["--output", internal, "--auto", "--primary", "--output", external, "--auto", "--same-as", internal]).await?,
-            DisplayLayoutMode::ExternalOnly => run_cmd("xrandr", &["--output", external, "--auto", "--primary", "--output", internal, "--off"]).await?,
-            DisplayLayoutMode::InternalOnly => run_cmd("xrandr", &["--output", internal, "--auto", "--primary", "--output", external, "--off"]).await?,
+            DisplayLayoutMode::ExtendRight => {
+                run_cmd(
+                    "xrandr",
+                    &[
+                        "--output",
+                        internal,
+                        "--auto",
+                        "--primary",
+                        "--output",
+                        external,
+                        "--auto",
+                        "--right-of",
+                        internal,
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::ExtendLeft => {
+                run_cmd(
+                    "xrandr",
+                    &[
+                        "--output",
+                        internal,
+                        "--auto",
+                        "--primary",
+                        "--output",
+                        external,
+                        "--auto",
+                        "--left-of",
+                        internal,
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::Mirror => {
+                run_cmd(
+                    "xrandr",
+                    &[
+                        "--output",
+                        internal,
+                        "--auto",
+                        "--primary",
+                        "--output",
+                        external,
+                        "--auto",
+                        "--same-as",
+                        internal,
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::ExternalOnly => {
+                run_cmd(
+                    "xrandr",
+                    &[
+                        "--output",
+                        external,
+                        "--auto",
+                        "--primary",
+                        "--output",
+                        internal,
+                        "--off",
+                    ],
+                )
+                .await?
+            }
+            DisplayLayoutMode::InternalOnly => {
+                run_cmd(
+                    "xrandr",
+                    &[
+                        "--output",
+                        internal,
+                        "--auto",
+                        "--primary",
+                        "--output",
+                        external,
+                        "--off",
+                    ],
+                )
+                .await?
+            }
             DisplayLayoutMode::Custom => {}
         }
     }
@@ -547,7 +725,8 @@ pub fn parse_wlr_randr(output: &str) -> anyhow::Result<DisplaySnapshot> {
             }
             let tokens: Vec<&str> = line.split_whitespace().collect();
             let name = tokens[0].to_string();
-            let is_internal = name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
+            let is_internal =
+                name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
             current_display = Some(DisplayNode {
                 name,
                 is_connected: true,
@@ -565,13 +744,21 @@ pub fn parse_wlr_randr(output: &str) -> anyhow::Result<DisplaySnapshot> {
             if trimmed.starts_with("Enabled: yes") {
                 d.is_active = true;
             } else if trimmed.starts_with("Position:") {
-                let parts: Vec<&str> = trimmed.strip_prefix("Position:").unwrap_or_default().split(',').collect();
+                let parts: Vec<&str> = trimmed
+                    .strip_prefix("Position:")
+                    .unwrap_or_default()
+                    .split(',')
+                    .collect();
                 if parts.len() == 2 {
                     d.pos_x = parts[0].trim().parse().unwrap_or(0);
                     d.pos_y = parts[1].trim().parse().unwrap_or(0);
                 }
             } else if trimmed.starts_with("Transform:") {
-                d.rotation = trimmed.strip_prefix("Transform:").unwrap_or_default().trim().to_string();
+                d.rotation = trimmed
+                    .strip_prefix("Transform:")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
             } else if trimmed.ends_with("Hz") || trimmed.contains("Hz (") {
                 let t: Vec<&str> = trimmed.split("px,").collect();
                 if t.len() == 2 {
@@ -632,7 +819,8 @@ pub fn parse_hyprctl_monitors(output: &str) -> anyhow::Result<DisplaySnapshot> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
             if tokens.len() >= 2 {
                 let name = tokens[1].to_string();
-                let is_internal = name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
+                let is_internal =
+                    name.starts_with("eDP") || name.starts_with("LVDS") || name.starts_with("DSI");
                 current_display = Some(DisplayNode {
                     name,
                     is_connected: true,
@@ -671,7 +859,10 @@ pub fn parse_hyprctl_monitors(output: &str) -> anyhow::Result<DisplaySnapshot> {
                     }
                 }
             } else if trimmed.starts_with("availableModes:") {
-                let modes_str = trimmed.strip_prefix("availableModes:").unwrap_or_default().trim();
+                let modes_str = trimmed
+                    .strip_prefix("availableModes:")
+                    .unwrap_or_default()
+                    .trim();
                 for m_str in modes_str.split_whitespace() {
                     if let Some((res_str, rate_str)) = m_str.split_once('@') {
                         if let Some((w_str, h_str)) = res_str.split_once('x') {
@@ -679,7 +870,9 @@ pub fn parse_hyprctl_monitors(output: &str) -> anyhow::Result<DisplaySnapshot> {
                             let h: u32 = h_str.parse().unwrap_or(0);
                             let rate: f32 = rate_str.parse().unwrap_or(60.0);
 
-                            if !d.supported_modes.iter().any(|m| m.width == w && m.height == h && (m.rate - rate).abs() < 0.1) {
+                            if !d.supported_modes.iter().any(|m| {
+                                m.width == w && m.height == h && (m.rate - rate).abs() < 0.1
+                            }) {
                                 d.supported_modes.push(DisplayMode {
                                     width: w,
                                     height: h,
@@ -691,16 +884,21 @@ pub fn parse_hyprctl_monitors(output: &str) -> anyhow::Result<DisplaySnapshot> {
                         }
                     }
                 }
-            } else if trimmed.starts_with("disabled: true") || trimmed.starts_with("disabled: yes") {
+            } else if trimmed.starts_with("disabled: true") || trimmed.starts_with("disabled: yes")
+            {
                 d.is_active = false;
             } else if trimmed.starts_with("transform:") {
-                let t = trimmed.strip_prefix("transform:").unwrap_or_default().trim();
+                let t = trimmed
+                    .strip_prefix("transform:")
+                    .unwrap_or_default()
+                    .trim();
                 d.rotation = match t {
                     "1" => "left",
                     "2" => "inverted",
                     "3" => "right",
                     _ => "normal",
-                }.to_string();
+                }
+                .to_string();
             }
         }
     }

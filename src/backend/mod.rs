@@ -1,4 +1,3 @@
-
 pub mod audio;
 pub mod bluetooth;
 pub mod disk_analyzer;
@@ -21,7 +20,6 @@ pub fn spawn_all(
     action_tx: &broadcast::Sender<Action>,
     sudo_tx: SudoPasswordTx,
 ) {
-
     tokio::spawn(system::run(
         config.polling.system_ms,
         tx.clone(),

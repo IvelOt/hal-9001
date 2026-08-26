@@ -1,4 +1,3 @@
-
 use ratatui::style::Color;
 
 use crate::config::Config;
@@ -15,7 +14,6 @@ pub struct Palette {
 }
 
 impl Palette {
-
     pub fn from_config(config: &Config) -> Palette {
         match config.theme.name.to_lowercase().as_str() {
             "catppuccin" | "mocha" => Palette {

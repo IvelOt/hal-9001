@@ -1,4 +1,3 @@
-
 use std::path::Path;
 use std::time::Duration;
 
@@ -9,7 +8,6 @@ use crate::events::{Action, AppEvent, EventTx, Toast};
 
 #[derive(Debug, Clone, Default)]
 pub struct Packages {
-
     pub total: u64,
 
     pub by_manager: Vec<(&'static str, u64)>,
@@ -18,7 +16,6 @@ pub struct Packages {
 }
 
 impl Packages {
-
     pub fn summary(&self) -> String {
         if self.by_manager.is_empty() {
             return "N/A".into();
@@ -38,7 +35,6 @@ pub enum BatteryStatus {
 }
 
 impl BatteryStatus {
-
     pub fn parse(raw: &str) -> BatteryStatus {
         match raw.trim().to_ascii_lowercase().as_str() {
             "charging" => BatteryStatus::Charging,
@@ -80,7 +76,6 @@ impl BatteryStatus {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Battery {
-
     pub percent: f64,
     pub status: BatteryStatus,
 
@@ -108,7 +103,6 @@ pub fn battery_health(full: f64, design: f64) -> Option<f64> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Volume {
-
     pub level: f64,
     pub muted: bool,
 }
@@ -121,7 +115,6 @@ impl Volume {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerProfile {
-
     PowerSaver,
 
     Balanced,
@@ -130,7 +123,6 @@ pub enum PowerProfile {
 }
 
 impl PowerProfile {
-
     pub fn parse(raw: &str) -> Option<PowerProfile> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "power-saver" | "power_saver" | "powersave" | "economia" => {
@@ -234,7 +226,6 @@ pub struct ProcessInfo {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DetailInfo {
-
     pub board_vendor: Option<String>,
     pub board_name: Option<String>,
     pub bios_version: Option<String>,
@@ -258,7 +249,6 @@ pub struct DetailInfo {
 }
 
 impl DetailInfo {
-
     pub fn swap_ratio(&self) -> f64 {
         ratio(self.swap_used, self.swap_total)
     }
@@ -273,7 +263,6 @@ struct StaticInfo {
 }
 
 impl SystemSnapshot {
-
     fn collect(sys: &System, disks: &Disks, stat: &StaticInfo, cpu_temp_c: Option<f64>) -> Self {
         let cpu_name = sys
             .cpus()
@@ -293,7 +282,10 @@ impl SystemSnapshot {
             for t_ref in &mut top_5 {
                 if let Some(c) = current {
                     if let Some(t) = *t_ref {
-                        let cmp = c.cpu_usage().partial_cmp(&t.cpu_usage()).unwrap_or(std::cmp::Ordering::Equal)
+                        let cmp = c
+                            .cpu_usage()
+                            .partial_cmp(&t.cpu_usage())
+                            .unwrap_or(std::cmp::Ordering::Equal)
                             .then_with(|| c.memory().cmp(&t.memory()));
                         if cmp == std::cmp::Ordering::Greater {
                             *t_ref = Some(c);
@@ -306,12 +298,16 @@ impl SystemSnapshot {
                 }
             }
         }
-        let top_processes = top_5.into_iter().flatten().map(|p| ProcessInfo {
-            pid: p.pid().as_u32(),
-            name: p.name().to_string_lossy().into_owned(),
-            cpu_usage: p.cpu_usage(),
-            mem_bytes: p.memory(),
-        }).collect();
+        let top_processes = top_5
+            .into_iter()
+            .flatten()
+            .map(|p| ProcessInfo {
+                pid: p.pid().as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                cpu_usage: p.cpu_usage(),
+                mem_bytes: p.memory(),
+            })
+            .collect();
 
         let detail = DetailInfo {
             cpu_cores_logical: sys.cpus().len(),
@@ -389,7 +385,6 @@ fn read_host_model() -> Option<String> {
     ];
     for path in candidates {
         if let Ok(s) = std::fs::read_to_string(path) {
-
             let s = s.trim_matches(|c: char| c.is_whitespace() || c == '\0');
             if !s.is_empty() && s != "To be filled by O.E.M." && s != "System Product Name" {
                 return Some(s.to_string());
@@ -485,7 +480,9 @@ fn detect_desktop() -> (Option<String>, Option<String>) {
 }
 
 fn detect_wm_process() -> Option<String> {
-    for wm in ["sway", "i3", "hyprland", "bspwm", "dwm", "awesome", "xmonad"] {
+    for wm in [
+        "sway", "i3", "hyprland", "bspwm", "dwm", "awesome", "xmonad",
+    ] {
         if std::process::Command::new("pgrep")
             .args(["-x", wm])
             .output()
@@ -513,7 +510,6 @@ pub fn parse_lspci_gpu(output: &str) -> Option<String> {
             || lower.contains("3d controller")
             || lower.contains("display controller")
         {
-
             if let Some((_, name)) = line.split_once(": ") {
                 let name = name.trim();
                 if !name.is_empty() {
@@ -767,7 +763,6 @@ fn read_root_disk(disks: &Disks) -> Option<(u64, u64)> {
 }
 
 fn read_power_profile() -> Option<PowerProfile> {
-
     if let Ok(out) = std::process::Command::new("busctl")
         .args([
             "get-property",
@@ -869,8 +864,18 @@ pub async fn adjust_brightness(delta: i32) -> Result<u8, String> {
 }
 
 pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
-    let applied = run_ok("brightnessctl", &["--device", "*kbd*", "set", &delta_arg(delta)]).await.is_ok()
-        || run_ok("brightnessctl", &["--device", "*::kbd_backlight", "set", &delta_arg(delta)]).await.is_ok();
+    let applied = run_ok(
+        "brightnessctl",
+        &["--device", "*kbd*", "set", &delta_arg(delta)],
+    )
+    .await
+    .is_ok()
+        || run_ok(
+            "brightnessctl",
+            &["--device", "*::kbd_backlight", "set", &delta_arg(delta)],
+        )
+        .await
+        .is_ok();
 
     if !applied {
         if let Ok(entries) = std::fs::read_dir("/sys/class/leds") {
@@ -883,11 +888,16 @@ pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
                         std::fs::read_to_string(base.join("brightness")),
                         std::fs::read_to_string(base.join("max_brightness")),
                     ) {
-                        if let (Ok(c), Ok(m)) = (cur.trim().parse::<f32>(), max.trim().parse::<f32>()) {
+                        if let (Ok(c), Ok(m)) =
+                            (cur.trim().parse::<f32>(), max.trim().parse::<f32>())
+                        {
                             let mut step = m * (delta as f32 / 100.0);
-                            if step != 0.0 && step.abs() < 1.0 { step = step.signum(); }
+                            if step != 0.0 && step.abs() < 1.0 {
+                                step = step.signum();
+                            }
                             let new = (c + step).clamp(0.0, m);
-                            let _ = std::fs::write(base.join("brightness"), (new as i32).to_string());
+                            let _ =
+                                std::fs::write(base.join("brightness"), (new as i32).to_string());
                         }
                     }
                 }
@@ -924,7 +934,9 @@ pub async fn toggle_mute() -> Result<bool, String> {
     let applied = run_ok("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
         .await
         .is_ok()
-        || run_ok("amixer", &["sset", "Master", "toggle"]).await.is_ok()
+        || run_ok("amixer", &["sset", "Master", "toggle"])
+            .await
+            .is_ok()
         || run_ok("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "toggle"])
             .await
             .is_ok();
@@ -937,7 +949,6 @@ pub async fn toggle_mute() -> Result<bool, String> {
 }
 
 async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
-
     if run_ok(
         "busctl",
         &[
@@ -1014,14 +1025,20 @@ fn write_scaling_governor(governor: &str) -> bool {
 
 pub async fn toggle_airplane_mode() -> Result<bool, String> {
     let mut wifi_on = false;
-    if let Ok(out) = std::process::Command::new("nmcli").args(["radio", "wifi"]).output() {
+    if let Ok(out) = std::process::Command::new("nmcli")
+        .args(["radio", "wifi"])
+        .output()
+    {
         if String::from_utf8_lossy(&out.stdout).contains("enabled") {
             wifi_on = true;
         }
     }
 
     let mut bt_on = false;
-    if let Ok(out) = std::process::Command::new("rfkill").args(["list", "bluetooth"]).output() {
+    if let Ok(out) = std::process::Command::new("rfkill")
+        .args(["list", "bluetooth"])
+        .output()
+    {
         if !String::from_utf8_lossy(&out.stdout).contains("Soft blocked: yes") {
             bt_on = true;
         }
@@ -1195,19 +1212,30 @@ async fn check_updates() -> usize {
         }
     }
     if !arch_checked {
-        if let Ok(out) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
+        if let Ok(out) = tokio::process::Command::new("pacman")
+            .arg("-Qu")
+            .output()
+            .await
+        {
             if out.status.success() {
                 total += String::from_utf8_lossy(&out.stdout).lines().count();
             }
         }
     }
-    if let Ok(out) = tokio::process::Command::new("flatpak").args(["remote-ls", "--updates"]).output().await {
+    if let Ok(out) = tokio::process::Command::new("flatpak")
+        .args(["remote-ls", "--updates"])
+        .output()
+        .await
+    {
         if out.status.success() {
             total += String::from_utf8_lossy(&out.stdout).lines().count();
         }
     }
     if std::path::Path::new("/usr/lib/update-notifier/apt-check").exists() {
-        if let Ok(out) = tokio::process::Command::new("/usr/lib/update-notifier/apt-check").output().await {
+        if let Ok(out) = tokio::process::Command::new("/usr/lib/update-notifier/apt-check")
+            .output()
+            .await
+        {
             let s = String::from_utf8_lossy(&out.stderr);
             if let Some(num) = s.split(';').next() {
                 if let Ok(n) = num.parse::<usize>() {
@@ -1215,9 +1243,16 @@ async fn check_updates() -> usize {
                 }
             }
         }
-    } else if let Ok(out) = tokio::process::Command::new("apt-get").args(["-s", "upgrade"]).output().await {
+    } else if let Ok(out) = tokio::process::Command::new("apt-get")
+        .args(["-s", "upgrade"])
+        .output()
+        .await
+    {
         if out.status.success() {
-            total += String::from_utf8_lossy(&out.stdout).lines().filter(|l| l.starts_with("Inst ")).count();
+            total += String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| l.starts_with("Inst "))
+                .count();
         }
     }
     total

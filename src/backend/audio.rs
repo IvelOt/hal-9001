@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +7,6 @@ use crate::events::{Action, AppEvent, EventTx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AudioCategory {
-
     Sink,
 
     AppStream,
@@ -50,7 +48,6 @@ impl AudioCategory {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioNode {
-
     pub id: u32,
 
     pub name: String,
@@ -69,7 +66,6 @@ pub struct AudioNode {
 }
 
 impl AudioNode {
-
     pub fn volume_percent(&self) -> u32 {
         (self.volume * 100.0).round() as u32
     }
@@ -77,7 +73,6 @@ impl AudioNode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AudioSnapshot {
-
     pub server_name: String,
 
     pub sinks: Vec<AudioNode>,
@@ -92,7 +87,6 @@ pub struct AudioSnapshot {
 }
 
 impl AudioSnapshot {
-
     pub fn nodes_for_category(&self, cat: AudioCategory) -> &[AudioNode] {
         match cat {
             AudioCategory::Sink => &self.sinks,
@@ -102,11 +96,7 @@ impl AudioSnapshot {
     }
 }
 
-pub async fn run(
-    poll_interval_ms: u64,
-    tx: EventTx,
-    mut action_rx: broadcast::Receiver<Action>,
-) {
+pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(500)));
 
     loop {
@@ -162,7 +152,6 @@ pub async fn run(
 }
 
 pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
-
     if let Ok(output) = tokio::process::Command::new("wpctl")
         .arg("status")
         .output()
@@ -236,7 +225,8 @@ pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
         } else if trimmed.starts_with("Video") || trimmed.starts_with("Settings") {
             current_section = Section::None;
             continue;
-        } else if (trimmed.starts_with("├─") || trimmed.starts_with("└─")) && !trimmed.contains(':') {
+        } else if (trimmed.starts_with("├─") || trimmed.starts_with("└─")) && !trimmed.contains(':')
+        {
             current_section = Section::None;
         }
 
@@ -372,11 +362,18 @@ fn parse_pactl_nodes(output: &str, category: AudioCategory) -> Vec<AudioNode> {
 
     for line in output.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("Sink #") || trimmed.starts_with("Sink Input #") || trimmed.starts_with("Source #") {
+        if trimmed.starts_with("Sink #")
+            || trimmed.starts_with("Sink Input #")
+            || trimmed.starts_with("Source #")
+        {
             if let Some(id) = current_id {
                 nodes.push(AudioNode {
                     id,
-                    name: if current_name.is_empty() { format!("Audio Node {id}") } else { current_name.clone() },
+                    name: if current_name.is_empty() {
+                        format!("Audio Node {id}")
+                    } else {
+                        current_name.clone()
+                    },
                     description: current_name.clone(),
                     category,
                     volume: current_vol,
@@ -392,7 +389,11 @@ fn parse_pactl_nodes(output: &str, category: AudioCategory) -> Vec<AudioNode> {
             current_vol = 1.0;
             current_muted = false;
         } else if trimmed.starts_with("Description:") || trimmed.starts_with("application.name =") {
-            let val = trimmed.split_once(':').map(|x| x.1).or_else(|| trimmed.split_once('=').map(|x| x.1)).unwrap_or("");
+            let val = trimmed
+                .split_once(':')
+                .map(|x| x.1)
+                .or_else(|| trimmed.split_once('=').map(|x| x.1))
+                .unwrap_or("");
             current_name = val.trim().trim_matches('"').to_string();
         } else if trimmed.starts_with("Mute:") {
             current_muted = trimmed.contains("yes");
@@ -410,7 +411,11 @@ fn parse_pactl_nodes(output: &str, category: AudioCategory) -> Vec<AudioNode> {
     if let Some(id) = current_id {
         nodes.push(AudioNode {
             id,
-            name: if current_name.is_empty() { format!("Audio Node {id}") } else { current_name },
+            name: if current_name.is_empty() {
+                format!("Audio Node {id}")
+            } else {
+                current_name
+            },
             description: String::new(),
             category,
             volume: current_vol,
@@ -426,7 +431,11 @@ fn parse_pactl_nodes(output: &str, category: AudioCategory) -> Vec<AudioNode> {
 pub async fn set_volume(node_id: u32, volume: f32) -> anyhow::Result<()> {
     let vol_clamped = volume.clamp(0.0, 1.5);
     let _ = tokio::process::Command::new("wpctl")
-        .args(["set-volume", &node_id.to_string(), &format!("{vol_clamped:.2}")])
+        .args([
+            "set-volume",
+            &node_id.to_string(),
+            &format!("{vol_clamped:.2}"),
+        ])
         .output()
         .await;
     Ok(())
@@ -436,7 +445,13 @@ pub async fn adjust_volume(node_id: u32, delta: f32) -> anyhow::Result<()> {
     let sign = if delta >= 0.0 { "+" } else { "-" };
     let abs_pct = (delta.abs() * 100.0).round() as u32;
     let _ = tokio::process::Command::new("wpctl")
-        .args(["set-volume", "--limit", "1.5", &node_id.to_string(), &format!("{abs_pct}%{sign}")])
+        .args([
+            "set-volume",
+            "--limit",
+            "1.5",
+            &node_id.to_string(),
+            &format!("{abs_pct}%{sign}"),
+        ])
         .output()
         .await;
     Ok(())

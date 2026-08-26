@@ -1,11 +1,12 @@
-
 use std::path::PathBuf;
 use std::time::Instant;
 
 use tokio::sync::broadcast;
 
 use crate::backend::disk_analyzer::DiskUsageItem;
-use crate::backend::storage::{primary_partition, DriveInfo, PartitionInfo, StorageSnapshot, VentoyIsoEntry};
+use crate::backend::storage::{
+    primary_partition, DriveInfo, PartitionInfo, StorageSnapshot, VentoyIsoEntry,
+};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
 use crate::events::{Action, AppEvent, Toast};
@@ -121,7 +122,6 @@ pub enum FilePickerPurpose {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilePickerOutcome {
-
     None,
 
     Picked(PathBuf),
@@ -140,7 +140,6 @@ pub struct FilePickerState {
 }
 
 impl FilePickerState {
-
     pub fn open(start_dir: PathBuf, purpose: FilePickerPurpose) -> Self {
         let cwd = if start_dir.is_dir() {
             start_dir
@@ -270,7 +269,6 @@ pub struct DiskAnalyzerState {
 }
 
 impl DiskAnalyzerState {
-
     pub fn opening(path: PathBuf) -> Self {
         Self {
             current_path: path,
@@ -515,15 +513,37 @@ impl App {
         let mut follow_up: Vec<Action> = Vec::new();
         match event {
             AppEvent::System(snap) => {
-                if let (Some(old), Some(new)) = (self.system.as_ref().and_then(|s| s.battery.as_ref()), snap.battery.as_ref()) {
+                if let (Some(old), Some(new)) = (
+                    self.system.as_ref().and_then(|s| s.battery.as_ref()),
+                    snap.battery.as_ref(),
+                ) {
                     use crate::backend::system::BatteryStatus;
-                    if old.status != BatteryStatus::Charging && new.status == BatteryStatus::Charging {
-                        self.toast = Some((Toast::info("[ENERGIA] Carregador conectado".to_string()), Instant::now()));
-                    } else if old.status == BatteryStatus::Charging && new.status != BatteryStatus::Charging {
-                        self.toast = Some((Toast::info("[ENERGIA] Em bateria".to_string()), Instant::now()));
+                    if old.status != BatteryStatus::Charging
+                        && new.status == BatteryStatus::Charging
+                    {
+                        self.toast = Some((
+                            Toast::info("[ENERGIA] Carregador conectado".to_string()),
+                            Instant::now(),
+                        ));
+                    } else if old.status == BatteryStatus::Charging
+                        && new.status != BatteryStatus::Charging
+                    {
+                        self.toast = Some((
+                            Toast::info("[ENERGIA] Em bateria".to_string()),
+                            Instant::now(),
+                        ));
                     }
-                    if new.status == BatteryStatus::Discharging && new.percent < 15.0 && (old.percent >= 15.0 || old.status != BatteryStatus::Discharging) {
-                        self.toast = Some((Toast::warn(format!("[BATERIA] Nível crítico: {:.0}% restante", new.percent)), Instant::now()));
+                    if new.status == BatteryStatus::Discharging
+                        && new.percent < 15.0
+                        && (old.percent >= 15.0 || old.status != BatteryStatus::Discharging)
+                    {
+                        self.toast = Some((
+                            Toast::warn(format!(
+                                "[BATERIA] Nível crítico: {:.0}% restante",
+                                new.percent
+                            )),
+                            Instant::now(),
+                        ));
                     }
                 }
                 self.system = Some(*snap);
@@ -534,7 +554,13 @@ impl App {
                         if new_drv.removable {
                             let was_present = old_snap.drives.iter().any(|d| d.id == new_drv.id);
                             if !was_present {
-                                self.toast = Some((Toast::success(format!("[DISCO] Dispositivo conectado: {}", new_drv.dev_node)), Instant::now()));
+                                self.toast = Some((
+                                    Toast::success(format!(
+                                        "[DISCO] Dispositivo conectado: {}",
+                                        new_drv.dev_node
+                                    )),
+                                    Instant::now(),
+                                ));
                             }
                         }
                     }
@@ -543,16 +569,24 @@ impl App {
             }
             AppEvent::Network(snap) => {
                 if let Some(old_snap) = self.network.as_ref() {
-
                     let old_has_ip = old_snap.active.is_some() && old_snap.telemetry.ipv4.is_some();
                     let new_has_ip = snap.active.is_some() && snap.telemetry.ipv4.is_some();
 
                     if !old_has_ip && new_has_ip {
                         if let (Some(active), Some(ip)) = (&snap.active, &snap.telemetry.ipv4) {
-                            self.toast = Some((Toast::success(format!("[REDE] Conectado em '{}' (IP: {})", active.ssid, ip)), Instant::now()));
+                            self.toast = Some((
+                                Toast::success(format!(
+                                    "[REDE] Conectado em '{}' (IP: {})",
+                                    active.ssid, ip
+                                )),
+                                Instant::now(),
+                            ));
                         }
                     } else if old_has_ip && !new_has_ip {
-                        self.toast = Some((Toast::warn("[REDE] Desconectado".to_string()), Instant::now()));
+                        self.toast = Some((
+                            Toast::warn("[REDE] Desconectado".to_string()),
+                            Instant::now(),
+                        ));
                     }
                 }
                 let ap_count = snap.access_points.len();
@@ -565,15 +599,28 @@ impl App {
             AppEvent::Bluetooth(snap) => {
                 if let Some(old_snap) = self.bluetooth.as_ref() {
                     for new_dev in &snap.devices {
-                        if let Some(old_dev) = old_snap.devices.iter().find(|d| d.id == new_dev.id) {
+                        if let Some(old_dev) = old_snap.devices.iter().find(|d| d.id == new_dev.id)
+                        {
                             if !old_dev.connected && new_dev.connected {
                                 let bat_str = match new_dev.battery_percentage {
                                     Some(b) => format!(" (Bateria: {}%)", b),
                                     None => "".to_string(),
                                 };
-                                self.toast = Some((Toast::success(format!("[BLUETOOTH] Conectado: {}{}", new_dev.name, bat_str)), Instant::now()));
+                                self.toast = Some((
+                                    Toast::success(format!(
+                                        "[BLUETOOTH] Conectado: {}{}",
+                                        new_dev.name, bat_str
+                                    )),
+                                    Instant::now(),
+                                ));
                             } else if old_dev.connected && !new_dev.connected {
-                                self.toast = Some((Toast::info(format!("[BLUETOOTH] Desconectado: {}", new_dev.name)), Instant::now()));
+                                self.toast = Some((
+                                    Toast::info(format!(
+                                        "[BLUETOOTH] Desconectado: {}",
+                                        new_dev.name
+                                    )),
+                                    Instant::now(),
+                                ));
                             }
                         }
                     }
@@ -657,19 +704,29 @@ impl App {
                     if s.device_id == device_id {
                         s.stage = match result {
                             Ok(_msg) => {
-                                self.toast = Some((Toast::success("[GRAVADOR] Gravação de ISO concluída com sucesso".to_string()), Instant::now()));
+                                self.toast = Some((
+                                    Toast::success(
+                                        "[GRAVADOR] Gravação de ISO concluída com sucesso"
+                                            .to_string(),
+                                    ),
+                                    Instant::now(),
+                                ));
                                 FlasherStage::Done {
                                     ok: true,
-                                    message: "[GRAVADOR] Gravação de ISO concluída com sucesso".to_string(),
+                                    message: "[GRAVADOR] Gravação de ISO concluída com sucesso"
+                                        .to_string(),
                                 }
-                            },
+                            }
                             Err(err) => {
-                                self.toast = Some((Toast::error("[GRAVADOR] Erro na gravação de ISO".to_string()), Instant::now()));
+                                self.toast = Some((
+                                    Toast::error("[GRAVADOR] Erro na gravação de ISO".to_string()),
+                                    Instant::now(),
+                                ));
                                 FlasherStage::Done {
                                     ok: false,
                                     message: err,
                                 }
-                            },
+                            }
                         };
                     }
                 }
@@ -744,7 +801,6 @@ impl App {
             }
             AppEvent::StorageAnalyzerSnapshot(snap) => {
                 if let Some(state) = &mut self.storage_analyzer {
-
                     if state.current_path == snap.current_path {
                         state.total_bytes = snap.total_bytes;
                         state.items = snap.items;
@@ -801,7 +857,6 @@ impl App {
     fn cycle_config_value(&mut self, forward: bool) {
         match self.config_cursor {
             0 => {
-
                 let options = ["auto", "pt-BR", "en-US", "es-ES"];
                 let cur = options
                     .iter()
@@ -816,7 +871,6 @@ impl App {
                 self.lang = self.config.ui.resolved_language();
             }
             1 => {
-
                 let options = [
                     "hal",
                     "catppuccin",
@@ -839,7 +893,6 @@ impl App {
                 self.config.theme.name = options[next].to_string();
             }
             2 => {
-
                 let options = ["auto", "main", "medium", "compact", "none"];
                 let cur = options
                     .iter()
@@ -853,11 +906,9 @@ impl App {
                 self.config.overview.ascii = options[next].to_string();
             }
             3 => {
-
                 self.config.ui.icons = !self.config.ui.icons;
             }
             4 => {
-
                 let options = [33u64, 16, 66];
                 let cur = options
                     .iter()
@@ -871,11 +922,9 @@ impl App {
                 self.config.ui.frame_ms = options[next];
             }
             5 => {
-
                 self.config.splash.enabled = !self.config.splash.enabled;
             }
             6 => {
-
                 let options = [1500u64, 750, 3000];
                 let cur = options
                     .iter()
@@ -975,7 +1024,6 @@ impl App {
                 }
             }
             Action::ToggleConfig => {
-
                 self.sudo_prompt = None;
                 if let Some(respond) = self.sudo_respond.take() {
                     let _ = respond.send(None);
@@ -1036,7 +1084,6 @@ impl App {
                 });
             }
             Action::ToggleConfig => {
-
                 self.wifi_prompt = None;
             }
             _ => {}
@@ -1195,7 +1242,10 @@ impl App {
         }
         let Some(partition) = partition else {
             let m = self.lang.messages();
-            self.toast = Some((Toast::error(m.storage_multiboot_no_partition), Instant::now()));
+            self.toast = Some((
+                Toast::error(m.storage_multiboot_no_partition),
+                Instant::now(),
+            ));
             return;
         };
         let _ = action_tx.send(Action::StorageMultibootPrepare {
@@ -1209,7 +1259,10 @@ impl App {
         };
         let Some(partition) = partition else {
             let m = self.lang.messages();
-            self.toast = Some((Toast::error(m.storage_multiboot_no_partition), Instant::now()));
+            self.toast = Some((
+                Toast::error(m.storage_multiboot_no_partition),
+                Instant::now(),
+            ));
             return;
         };
         let target_label = drive.friendly_label();
@@ -1361,7 +1414,6 @@ impl App {
         let m = self.lang.messages();
         match &mut s.stage {
             FlasherStage::SelectIso { input, error } => match action {
-
                 Action::StorageModalOpenPicker => {
                     return StorageModal::FilePicker(FilePickerState::open(
                         Self::home_dir(),
@@ -1661,7 +1713,6 @@ impl App {
     }
 
     pub fn dispatch(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
-
         if self.phase == Phase::Splash {
             self.phase = Phase::Running;
         }
@@ -1898,10 +1949,8 @@ impl App {
             }
             Action::AudioSelectCategory(cat_idx) => {
                 if cat_idx == 99 {
-
                     self.audio_category = (self.audio_category + 1) % 3;
                 } else if cat_idx == 98 {
-
                     self.audio_category = (self.audio_category + 2) % 3;
                 } else {
                     self.audio_category = cat_idx.min(2);
@@ -2006,7 +2055,6 @@ impl App {
             | Action::StorageMultibootListIsos { .. }
             | Action::StorageMultibootAddIso { .. }
             | Action::StorageMultibootRemoveIso { .. } => {
-
                 let _ = action_tx.send(action);
             }
 

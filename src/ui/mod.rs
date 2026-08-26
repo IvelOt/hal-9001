@@ -1,4 +1,3 @@
-
 pub mod theme;
 pub mod widgets;
 
@@ -78,7 +77,6 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                 };
                 format!("{} {short}", i + 1)
             } else {
-
                 if app.active == *t {
                     let short = match t {
                         Tab::Overview => "Visão",
@@ -146,7 +144,6 @@ fn draw_content(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 }
 
 fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
-
     if let Some((toast, _)) = &app.toast {
         let color = match toast.level {
             ToastLevel::Info => pal.accent,

@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, Tab};
 use hal9001::backend::system::PowerProfile;
 use hal9001::config::Config;
@@ -27,7 +26,6 @@ fn language_parsing_variants() {
 
 #[test]
 fn tab_titles_in_all_languages() {
-
     assert_eq!(Tab::Overview.title_in(Language::PtBr), "Overview");
     assert_eq!(Tab::Network.title_in(Language::PtBr), "Rede");
     assert_eq!(Tab::Audio.title_in(Language::PtBr), "Áudio");
@@ -46,17 +44,38 @@ fn tab_titles_in_all_languages() {
 
 #[test]
 fn power_profile_labels_in_all_languages() {
-    assert_eq!(PowerProfile::PowerSaver.label_in(Language::PtBr), "Economia");
-    assert_eq!(PowerProfile::Balanced.label_in(Language::PtBr), "Equilibrado");
-    assert_eq!(PowerProfile::Performance.label_in(Language::PtBr), "Desempenho");
+    assert_eq!(
+        PowerProfile::PowerSaver.label_in(Language::PtBr),
+        "Economia"
+    );
+    assert_eq!(
+        PowerProfile::Balanced.label_in(Language::PtBr),
+        "Equilibrado"
+    );
+    assert_eq!(
+        PowerProfile::Performance.label_in(Language::PtBr),
+        "Desempenho"
+    );
 
-    assert_eq!(PowerProfile::PowerSaver.label_in(Language::EnUs), "Power Saver");
+    assert_eq!(
+        PowerProfile::PowerSaver.label_in(Language::EnUs),
+        "Power Saver"
+    );
     assert_eq!(PowerProfile::Balanced.label_in(Language::EnUs), "Balanced");
-    assert_eq!(PowerProfile::Performance.label_in(Language::EnUs), "Performance");
+    assert_eq!(
+        PowerProfile::Performance.label_in(Language::EnUs),
+        "Performance"
+    );
 
     assert_eq!(PowerProfile::PowerSaver.label_in(Language::EsEs), "Ahorro");
-    assert_eq!(PowerProfile::Balanced.label_in(Language::EsEs), "Equilibrado");
-    assert_eq!(PowerProfile::Performance.label_in(Language::EsEs), "Rendimiento");
+    assert_eq!(
+        PowerProfile::Balanced.label_in(Language::EsEs),
+        "Equilibrado"
+    );
+    assert_eq!(
+        PowerProfile::Performance.label_in(Language::EsEs),
+        "Rendimiento"
+    );
 }
 
 #[test]

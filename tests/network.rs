@@ -1,4 +1,3 @@
-
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use tokio::sync::broadcast;
@@ -14,7 +13,6 @@ use hal9001::ui;
 
 #[test]
 fn test_security_derivation() {
-
     assert_eq!(derive_security(0, 0, 0), Security::Open);
 
     assert_eq!(derive_security(0x1, 0, 0), Security::Wep);

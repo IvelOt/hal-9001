@@ -1,4 +1,3 @@
-
 use hal9001::app::{App, Tab};
 use hal9001::backend::display::{
     parse_xrandr_query, DisplayLayoutMode, DisplayMode, DisplayNode, DisplaySnapshot,
@@ -76,7 +75,10 @@ fn test_display_app_navigation_and_actions() {
     app.dispatch(Action::Right, &action_tx);
     assert_eq!(app.display_selected, 1);
 
-    app.dispatch(Action::DisplaySetLayout(DisplayLayoutMode::Mirror), &action_tx);
+    app.dispatch(
+        Action::DisplaySetLayout(DisplayLayoutMode::Mirror),
+        &action_tx,
+    );
     assert_eq!(
         action_rx.try_recv().unwrap(),
         Action::DisplaySetLayout(DisplayLayoutMode::Mirror)
@@ -191,7 +193,10 @@ fn test_parse_wlr_randr_impl() {
     assert!(external.is_active);
     assert_eq!(external.pos_x, 1920);
 
-    assert_eq!(snap.current_layout, Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight));
+    assert_eq!(
+        snap.current_layout,
+        Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight)
+    );
 }
 
 const HYPRCTL_SAMPLE: &str = r#"
@@ -246,5 +251,8 @@ fn test_parse_hyprctl_impl() {
     assert!(external.is_active);
     assert_eq!(external.pos_x, 1920);
 
-    assert_eq!(snap.current_layout, Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight));
+    assert_eq!(
+        snap.current_layout,
+        Some(hal9001::backend::display::DisplayLayoutMode::ExtendRight)
+    );
 }

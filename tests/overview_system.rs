@@ -1,4 +1,3 @@
-
 use std::fs;
 
 use hal9001::backend::system::{
@@ -71,7 +70,6 @@ fn amixer_volume_parsing() {
 
 #[test]
 fn control_delta_args_relative_syntax() {
-
     assert_eq!(delta_arg(CONTROL_STEP), "5%+");
     assert_eq!(delta_arg(-CONTROL_STEP), "5%-");
     assert_eq!(delta_arg(10), "10%+");
@@ -84,9 +82,15 @@ fn control_delta_args_relative_syntax() {
 #[test]
 fn battery_status_parsing() {
     assert_eq!(BatteryStatus::parse("Charging"), BatteryStatus::Charging);
-    assert_eq!(BatteryStatus::parse("discharging"), BatteryStatus::Discharging);
+    assert_eq!(
+        BatteryStatus::parse("discharging"),
+        BatteryStatus::Discharging
+    );
     assert_eq!(BatteryStatus::parse("Full"), BatteryStatus::Full);
-    assert_eq!(BatteryStatus::parse("Not charging"), BatteryStatus::NotCharging);
+    assert_eq!(
+        BatteryStatus::parse("Not charging"),
+        BatteryStatus::NotCharging
+    );
     assert_eq!(BatteryStatus::parse("weird"), BatteryStatus::Unknown);
 }
 
@@ -123,7 +127,6 @@ fn read_battery_power_from_current_voltage() {
 
 #[test]
 fn battery_health_and_details_from_sysfs() {
-
     assert!((battery_health(4400.0, 5000.0).unwrap() - 0.88).abs() < 1e-9);
     assert_eq!(battery_health(0.0, 5000.0), None);
     assert_eq!(battery_health(4400.0, 0.0), None);
@@ -209,11 +212,26 @@ fn packages_summary_formats() {
 fn power_profile_parsing_and_cycling() {
     use hal9001::backend::system::PowerProfile;
 
-    assert_eq!(PowerProfile::parse("power-saver"), Some(PowerProfile::PowerSaver));
-    assert_eq!(PowerProfile::parse("powersave"), Some(PowerProfile::PowerSaver));
-    assert_eq!(PowerProfile::parse("balanced"), Some(PowerProfile::Balanced));
-    assert_eq!(PowerProfile::parse("schedutil"), Some(PowerProfile::Balanced));
-    assert_eq!(PowerProfile::parse("performance"), Some(PowerProfile::Performance));
+    assert_eq!(
+        PowerProfile::parse("power-saver"),
+        Some(PowerProfile::PowerSaver)
+    );
+    assert_eq!(
+        PowerProfile::parse("powersave"),
+        Some(PowerProfile::PowerSaver)
+    );
+    assert_eq!(
+        PowerProfile::parse("balanced"),
+        Some(PowerProfile::Balanced)
+    );
+    assert_eq!(
+        PowerProfile::parse("schedutil"),
+        Some(PowerProfile::Balanced)
+    );
+    assert_eq!(
+        PowerProfile::parse("performance"),
+        Some(PowerProfile::Performance)
+    );
     assert_eq!(PowerProfile::parse("unknown-value"), None);
 
     assert_eq!(PowerProfile::PowerSaver.next(), PowerProfile::Balanced);

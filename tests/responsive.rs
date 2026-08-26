@@ -1,4 +1,3 @@
-
 use hal9001::app::App;
 use hal9001::backend::system::{
     Battery, BatteryStatus, DetailInfo, Packages, PowerProfile, SystemSnapshot, Volume,
@@ -137,7 +136,6 @@ fn min_content_col(buf: &Buffer, rows: std::ops::Range<u16>) -> Option<u16> {
 fn renders_every_resolution_without_panic() {
     for (w, h) in RESOLUTIONS {
         for detailed in [false, true] {
-
             let buf = render_overview(w, h, detailed);
             assert_eq!(buf.area().width, w);
             assert_eq!(buf.area().height, h);
@@ -147,7 +145,6 @@ fn renders_every_resolution_without_panic() {
 
 #[test]
 fn wide_terminals_center_content() {
-
     for (w, h) in [(120u16, 35u16), (200, 50)] {
         let buf = render_overview(w, h, false);
 
@@ -161,7 +158,6 @@ fn wide_terminals_center_content() {
 
 #[test]
 fn micro_terminal_collapses_logo_but_still_renders() {
-
     let buf = render_overview(60, 15, false);
     let joined = buffer_text(&buf);
     assert!(
@@ -172,7 +168,6 @@ fn micro_terminal_collapses_logo_but_still_renders() {
 
 #[test]
 fn portrait_mobile_terminal_renders_centered_logo_and_vertical_stack() {
-
     for (w, h) in [(45, 80), (40, 70), (50, 60)] {
         let buf = render_overview(w, h, false);
         let text = buffer_text(&buf);
@@ -182,7 +177,10 @@ fn portrait_mobile_terminal_renders_centered_logo_and_vertical_stack() {
             "logo ASCII compacta deveria estar presente no topo em {w}x{h}"
         );
 
-        assert!(text.contains("HAL-9001"), "cabeçalho HAL-9001 ausente em {w}x{h}");
+        assert!(
+            text.contains("HAL-9001"),
+            "cabeçalho HAL-9001 ausente em {w}x{h}"
+        );
         assert!(text.contains("operator"), "usuário ausente em {w}x{h}");
         assert!(text.contains("RAM"), "métrica RAM ausente em {w}x{h}");
     }
@@ -217,7 +215,6 @@ fn logo_gears(buf: &Buffer) -> usize {
 
 #[test]
 fn wide_terminal_renders_gear_logo_and_sections() {
-
     let buf = render_overview(120, 40, false);
     assert!(logo_gears(&buf) > 0, "dentes de engrenagem ausentes");
     assert!(buffer_text(&buf).contains('O'), "olho do HAL ausente");
@@ -235,7 +232,6 @@ fn wide_terminal_renders_gear_logo_and_sections() {
 
 #[test]
 fn logo_does_not_shrink_in_detailed_mode() {
-
     for (w, h) in [(120u16, 40u16), (200, 50)] {
         let normal = logo_gears(&render_overview(w, h, false));
         let detailed = logo_gears(&render_overview(w, h, true));
@@ -249,11 +245,18 @@ fn logo_does_not_shrink_in_detailed_mode() {
 
 #[test]
 fn detailed_mode_shows_extra_fields_when_space_allows() {
-
     let buf = render_overview(110, 42, true);
     let text = buffer_text(&buf);
-    assert!(text.contains("BIOS") || text.contains("GPU") || text.contains("Núcleos") || text.contains("TOP PROCESSES"));
-    assert!(text.contains("Expandido") || text.contains("Detalhes"), "indicador de modo ausente");
+    assert!(
+        text.contains("BIOS")
+            || text.contains("GPU")
+            || text.contains("Núcleos")
+            || text.contains("TOP PROCESSES")
+    );
+    assert!(
+        text.contains("Expandido") || text.contains("Detalhes"),
+        "indicador de modo ausente"
+    );
 
     let mut ansi_out = String::new();
     let area = *buf.area();
@@ -268,12 +271,8 @@ fn detailed_mode_shows_extra_fields_when_space_allows() {
 
 #[test]
 fn window_header_uses_clean_project_name() {
-
     let text = buffer_text(&render_overview(120, 40, false));
-    assert!(
-        text.contains("HAL-9001"),
-        "cabeçalho sem o nome do projeto"
-    );
+    assert!(text.contains("HAL-9001"), "cabeçalho sem o nome do projeto");
     assert!(
         !text.to_lowercase().contains("cockpit"),
         "termo 'cockpit' ainda presente na UI"
@@ -282,7 +281,6 @@ fn window_header_uses_clean_project_name() {
 
 #[test]
 fn battery_status_renders_before_bar_on_its_line() {
-
     let buf = render_overview(120, 40, false);
     let area = *buf.area();
     let mut checked = false;
@@ -312,7 +310,6 @@ fn footer_shows_mode_indicator() {
 
 #[test]
 fn footer_shows_control_hints() {
-
     let text = buffer_text(&render_overview(120, 40, false));
     assert!(text.contains("[b/B]"), "atalho de brilho ausente");
     assert!(text.contains("[v/V]"), "atalho de volume ausente");
@@ -321,15 +318,16 @@ fn footer_shows_control_hints() {
 
 #[test]
 fn footer_shows_power_profile_hint() {
-
     let text = buffer_text(&render_overview(120, 40, false));
     assert!(text.contains("[p]"), "atalho de perfil ausente");
-    assert!(text.contains("Perfil"), "rótulo de perfil ausente no rodapé");
+    assert!(
+        text.contains("Perfil"),
+        "rótulo de perfil ausente no rodapé"
+    );
 }
 
 #[test]
 fn power_profile_row_renders_active_tag() {
-
     let text = buffer_text(&render_overview(120, 40, false));
     assert!(
         text.contains("[PERFORMANCE]"),
@@ -339,7 +337,6 @@ fn power_profile_row_renders_active_tag() {
 
 #[test]
 fn dense_lines_combine_metric_and_bar() {
-
     let buf = render_overview(120, 40, false);
     let area = *buf.area();
     let mut found = false;
@@ -359,11 +356,13 @@ fn dense_lines_combine_metric_and_bar() {
 
 #[test]
 fn standard_terminal_keeps_box_and_footer_visible() {
-
     for detailed in [false, true] {
         let buf = render_overview(80, 24, detailed);
         let text = buffer_text(&buf);
-        assert!(text.contains("Overview"), "título do bloco cortado (detailed={detailed})");
+        assert!(
+            text.contains("Overview"),
+            "título do bloco cortado (detailed={detailed})"
+        );
         assert!(
             text.contains("[b/B]") && text.contains("[m]"),
             "rodapé de controles cortado (detailed={detailed})"
@@ -377,7 +376,10 @@ fn standard_terminal_keeps_box_and_footer_visible() {
         "PERIPHERALS & POWER",
         "COLOR PALETTE",
     ] {
-        assert!(text.contains(title), "seção '{title}' cortada no modo normal");
+        assert!(
+            text.contains(title),
+            "seção '{title}' cortada no modo normal"
+        );
     }
 }
 

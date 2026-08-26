@@ -1,10 +1,10 @@
-use hal9001::app::{App, };
-use hal9001::backend::system::{Battery, BatteryStatus, SystemSnapshot};
+use hal9001::app::App;
+use hal9001::backend::bluetooth::{BluetoothDevice, BluetoothDeviceType, BluetoothSnapshot};
+use hal9001::backend::network::{ActiveConnectionInfo, NetTelemetry, NetworkSnapshot};
 use hal9001::backend::storage::{DriveInfo, StorageSnapshot};
-use hal9001::backend::bluetooth::{BluetoothSnapshot, BluetoothDevice, BluetoothDeviceType};
-use hal9001::backend::network::{NetworkSnapshot, ActiveConnectionInfo, NetTelemetry};
+use hal9001::backend::system::{Battery, BatteryStatus, SystemSnapshot};
 use hal9001::config::Config;
-use hal9001::events::{AppEvent};
+use hal9001::events::AppEvent;
 
 #[test]
 fn test_battery_toasts() {
@@ -24,7 +24,8 @@ fn test_battery_toasts() {
         mem_total: 0,
         host_model: None,
         packages: None,
-        brightness: None, kbd_backlight: None,
+        brightness: None,
+        kbd_backlight: None,
         volume: None,
         battery: Some(Battery {
             percent: 20.0,
@@ -44,7 +45,13 @@ fn test_battery_toasts() {
 
     snap.battery.as_mut().unwrap().percent = 14.0;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Nível crítico: 14%"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Nível crítico: 14%"));
 
     app.toast = None;
     snap.battery.as_mut().unwrap().percent = 13.0;
@@ -53,7 +60,13 @@ fn test_battery_toasts() {
 
     snap.battery.as_mut().unwrap().status = BatteryStatus::Charging;
     app.handle_event(AppEvent::System(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Carregador conectado"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Carregador conectado"));
 
     snap.battery.as_mut().unwrap().percent = 20.0;
     snap.battery.as_mut().unwrap().status = BatteryStatus::Discharging;
@@ -90,7 +103,13 @@ fn test_storage_toasts() {
         partitions: vec![],
     });
     app.handle_event(AppEvent::Storage(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Dispositivo conectado: /dev/sdb"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Dispositivo conectado: /dev/sdb"));
 }
 
 #[test]
@@ -119,7 +138,13 @@ fn test_network_toasts() {
     });
     snap.telemetry.ipv4 = Some("192.168.0.2".into());
     app.handle_event(AppEvent::Network(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Conectado em 'MyNet' (IP: 192.168.0.2)"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Conectado em 'MyNet' (IP: 192.168.0.2)"));
 
     snap.active = None;
     snap.telemetry.ipv4 = None;
@@ -159,10 +184,22 @@ fn test_bluetooth_toasts() {
     dev.battery_percentage = Some(80);
     snap.devices = vec![dev.clone()];
     app.handle_event(AppEvent::Bluetooth(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Conectado: MyHeadset (Bateria: 80%)"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Conectado: MyHeadset (Bateria: 80%)"));
 
     dev.connected = false;
     snap.devices = vec![dev.clone()];
     app.handle_event(AppEvent::Bluetooth(Box::new(snap.clone())));
-    assert!(app.toast.as_ref().unwrap().0.text.contains("Desconectado: MyHeadset"));
+    assert!(app
+        .toast
+        .as_ref()
+        .unwrap()
+        .0
+        .text
+        .contains("Desconectado: MyHeadset"));
 }

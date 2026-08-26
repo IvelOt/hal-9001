@@ -1,7 +1,5 @@
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
-
     #[default]
     PtBr,
 
@@ -11,7 +9,6 @@ pub enum Language {
 }
 
 impl Language {
-
     pub fn parse(raw: &str) -> Option<Self> {
         let clean = raw.trim().to_lowercase().replace('_', "-");
         if clean.starts_with("pt") {
@@ -63,7 +60,6 @@ impl Language {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Messages {
-
     pub app_title_suffix: &'static str,
     pub splash_title: &'static str,
     pub splash_loading: &'static str,
@@ -388,7 +384,8 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     filepicker_jump_downloads: "Downloads",
     filepicker_jump_media: "Mídia",
     filepicker_jump_root: "Raiz",
-    filepicker_err_unsupported: "Arquivo não suportado (use .iso/.img/.vhd/.raw ou comprimido .gz/.zip/.xz/.zst)",
+    filepicker_err_unsupported:
+        "Arquivo não suportado (use .iso/.img/.vhd/.raw ou comprimido .gz/.zip/.xz/.zst)",
     filepicker_empty_dir: "Diretório vazio",
     filepicker_label_size: "Tamanho",
     filepicker_label_modified: "Modificado",
@@ -558,7 +555,8 @@ pub static MESSAGES_EN_US: Messages = Messages {
     filepicker_jump_downloads: "Downloads",
     filepicker_jump_media: "Media",
     filepicker_jump_root: "Root",
-    filepicker_err_unsupported: "Unsupported file (use .iso/.img/.vhd/.raw or compressed .gz/.zip/.xz/.zst)",
+    filepicker_err_unsupported:
+        "Unsupported file (use .iso/.img/.vhd/.raw or compressed .gz/.zip/.xz/.zst)",
     filepicker_empty_dir: "Empty directory",
     filepicker_label_size: "Size",
     filepicker_label_modified: "Modified",
@@ -727,7 +725,8 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     filepicker_jump_downloads: "Descargas",
     filepicker_jump_media: "Medios",
     filepicker_jump_root: "Raíz",
-    filepicker_err_unsupported: "Archivo no compatible (use .iso/.img/.vhd/.raw o comprimido .gz/.zip/.xz/.zst)",
+    filepicker_err_unsupported:
+        "Archivo no compatible (use .iso/.img/.vhd/.raw o comprimido .gz/.zip/.xz/.zst)",
     filepicker_empty_dir: "Directorio vacío",
     filepicker_label_size: "Tamaño",
     filepicker_label_modified: "Modificado",

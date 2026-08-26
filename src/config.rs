@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -16,7 +15,6 @@ use crate::i18n::Language;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
-
     pub frame_ms: u64,
 
     pub icons: bool,
@@ -25,7 +23,6 @@ pub struct UiConfig {
 }
 
 impl UiConfig {
-
     pub fn resolved_language(&self) -> Language {
         if self.language.trim().eq_ignore_ascii_case("auto") || self.language.trim().is_empty() {
             Language::detect()
@@ -48,7 +45,6 @@ impl Default for UiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
-
     pub name: String,
 }
 
@@ -89,7 +85,6 @@ impl Default for PollingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SplashConfig {
-
     pub min_ms: u64,
     pub enabled: bool,
 }
@@ -106,7 +101,6 @@ impl Default for SplashConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OverviewConfig {
-
     pub ascii: String,
 }
 
@@ -119,14 +113,12 @@ impl Default for OverviewConfig {
 }
 
 impl Config {
-
     pub fn load() -> Self {
         for path in Self::candidate_paths() {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 match toml::from_str::<Config>(&text) {
                     Ok(cfg) => return cfg,
                     Err(e) => {
-
                         eprintln!("hal9001: config inválida em {path:?}: {e}");
                     }
                 }
@@ -136,8 +128,8 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<std::path::PathBuf, String> {
-        let toml_str = toml::to_string_pretty(self)
-            .map_err(|e| format!("erro ao serializar config: {e}"))?;
+        let toml_str =
+            toml::to_string_pretty(self).map_err(|e| format!("erro ao serializar config: {e}"))?;
 
         let target_file = if let Ok(p) = std::env::var("HAL9001_CONFIG") {
             std::path::PathBuf::from(p)

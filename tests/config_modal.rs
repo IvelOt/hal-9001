@@ -1,4 +1,3 @@
-
 use hal9001::app::App;
 use hal9001::config::Config;
 use hal9001::events::Action;

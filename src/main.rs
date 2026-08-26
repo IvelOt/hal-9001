@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 
 use hal9001::config::Config;

@@ -1,4 +1,3 @@
-
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -348,9 +347,15 @@ fn capacity_bar<'a>(pal: &Palette, m: &crate::i18n::Messages, p: &PartitionInfo)
     let filled = (ratio * bar_w as f64).round() as usize;
     let empty = bar_w.saturating_sub(filled);
     out.push(Line::from(vec![
-        Span::styled("█".repeat(filled), Style::default().fg(pal.gauge_color(ratio))),
+        Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(pal.gauge_color(ratio)),
+        ),
         Span::styled("░".repeat(empty), Style::default().fg(pal.dim)),
-        Span::styled(format!(" {:>3.0}%", ratio * 100.0), Style::default().fg(pal.dim)),
+        Span::styled(
+            format!(" {:>3.0}%", ratio * 100.0),
+            Style::default().fg(pal.dim),
+        ),
     ]));
     out.push(Line::from(Span::styled(
         format!(
@@ -856,7 +861,10 @@ fn draw_multiboot_iso_manager_modal(
                     format!("{}  ", m.multiboot_iso_mgr_hint_add),
                     Style::default().fg(pal.dim),
                 ),
-                Span::styled(m.multiboot_iso_mgr_hint_remove, Style::default().fg(pal.dim)),
+                Span::styled(
+                    m.multiboot_iso_mgr_hint_remove,
+                    Style::default().fg(pal.dim),
+                ),
             ]));
         }
         MultibootIsoManagerStage::ConfirmRemove { file_name } => {
