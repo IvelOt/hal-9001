@@ -203,6 +203,7 @@ jobs:
           cp packaging/arch/PKGBUILD /tmp/aur-src/PKGBUILD
           cd /tmp/aur-src
           docker run --rm -v "$PWD":/pkg -w /pkg archlinux:latest bash -c "pacman -Syu --noconfirm base-devel sudo pacman-contrib && useradd -m builduser && chown -R builduser /pkg && sudo -u builduser updpkgsums && sudo -u builduser makepkg --printsrcinfo > .SRCINFO"
+          sudo chown -R "$USER:$USER" /tmp/aur-src
           git config user.name "IvelOt"
           git config user.email "contact@ivelot.dev"
           git add PKGBUILD .SRCINFO
@@ -221,6 +222,7 @@ jobs:
           cp packaging/arch/PKGBUILD.bin /tmp/aur-bin/PKGBUILD
           cd /tmp/aur-bin
           docker run --rm -v "$PWD":/pkg -w /pkg archlinux:latest bash -c "pacman -Syu --noconfirm base-devel sudo pacman-contrib && useradd -m builduser && chown -R builduser /pkg && sudo -u builduser updpkgsums && sudo -u builduser makepkg --printsrcinfo > .SRCINFO"
+          sudo chown -R "$USER:$USER" /tmp/aur-bin
           git config user.name "IvelOt"
           git config user.email "contact@ivelot.dev"
           git add PKGBUILD .SRCINFO
