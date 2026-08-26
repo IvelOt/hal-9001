@@ -1074,6 +1074,13 @@ fn build_snapshot(objects: &ManagedObjects, swaps_text: &str, disks: &Disks) -> 
         // partições reconhecidas ainda (ex.: sysfs incompleto no boot).
         drive_is_system |= !drive.removable && drive.bus != BusType::Usb;
         drive.is_system = drive_is_system;
+        
+        if drive_is_system {
+            for part in &mut drive.partitions {
+                part.is_system = true;
+            }
+        }
+        
         drive.is_ventoy = detect_ventoy(&drive.partitions);
     }
     drives.sort_by(|a, b| a.dev_node.cmp(&b.dev_node));
@@ -1419,7 +1426,7 @@ fn flash_sync(
     let (is_gzip, total_bytes) = probe_image_sync(iso_path);
     let raw_file = std::fs::File::open(iso_path)?;
     let mut reader: Box<dyn Read> = if is_gzip {
-        Box::new(GzDecoder::new(raw_file))
+        Box::new(std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file)))
     } else {
         Box::new(raw_file)
     };
@@ -1434,7 +1441,15 @@ fn flash_sync(
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("gravação cancelada pelo usuário");
         }
-        let n = reader.read(&mut buf)?;
+        let mut n = 0;
+        while n < IO_BUFFER_SIZE {
+            match reader.read(&mut buf[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
         if n == 0 {
             break;
         }
@@ -1848,7 +1863,7 @@ fn flash_elevated_gzip_sync(
 
     let write_result: anyhow::Result<()> = (|| {
         let raw_file = std::fs::File::open(iso_path)?;
-        let mut decoder = GzDecoder::new(raw_file);
+        let mut decoder = std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file));
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
         let mut written: u64 = 0;
         let mut window_started = std::time::Instant::now();
@@ -1857,7 +1872,15 @@ fn flash_elevated_gzip_sync(
             if cancel.load(Ordering::Relaxed) {
                 anyhow::bail!("gravação cancelada pelo usuário");
             }
-            let n = decoder.read(&mut buf)?;
+            let mut n = 0;
+            while n < IO_BUFFER_SIZE {
+                match decoder.read(&mut buf[n..]) {
+                    Ok(0) => break,
+                    Ok(k) => n += k,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
             if n == 0 {
                 break;
             }
@@ -2493,6 +2516,9 @@ async fn handle_action(
                 )));
                 return;
             };
+            for part_path in mounted_partition_paths(snap, &id) {
+                let _ = unmount(conn, &part_path).await;
+            }
             tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, iso = %iso_path, "gravação de ISO solicitada");
             let cancel = Arc::new(AtomicBool::new(false));
             flash_cancels.insert(device_id.clone(), cancel.clone());

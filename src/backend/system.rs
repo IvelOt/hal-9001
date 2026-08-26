@@ -331,12 +331,26 @@ impl SystemSnapshot {
 
         // Modo detalhado: parte estática (DMI/GPU/arch) + parte dinâmica.
         let cpu_freq_mhz = sys.cpus().first().map(|c| c.frequency()).unwrap_or(0);
-        let mut procs: Vec<_> = sys.processes().values().collect();
-        procs.sort_unstable_by(|a, b| {
-            b.cpu_usage().partial_cmp(&a.cpu_usage()).unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.memory().cmp(&a.memory()))
-        });
-        let top_processes = procs.into_iter().take(5).map(|p| ProcessInfo {
+        let mut top_5: [Option<&sysinfo::Process>; 5] = [None, None, None, None, None];
+        for p in sys.processes().values() {
+            let mut current = Some(p);
+            for t_ref in &mut top_5 {
+                if let Some(c) = current {
+                    if let Some(t) = *t_ref {
+                        let cmp = c.cpu_usage().partial_cmp(&t.cpu_usage()).unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| c.memory().cmp(&t.memory()));
+                        if cmp == std::cmp::Ordering::Greater {
+                            *t_ref = Some(c);
+                            current = Some(t);
+                        }
+                    } else {
+                        *t_ref = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+        let top_processes = top_5.into_iter().flatten().map(|p| ProcessInfo {
             pid: p.pid().as_u32(),
             name: p.name().to_string_lossy().into_owned(),
             cpu_usage: p.cpu_usage(),
@@ -991,7 +1005,7 @@ pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
                     ) {
                         if let (Ok(c), Ok(m)) = (cur.trim().parse::<f32>(), max.trim().parse::<f32>()) {
                             let mut step = m * (delta as f32 / 100.0);
-                            if step.abs() < 1.0 { step = step.signum(); }
+                            if step != 0.0 && step.abs() < 1.0 { step = step.signum(); }
                             let new = (c + step).clamp(0.0, m);
                             let _ = std::fs::write(base.join("brightness"), (new as i32).to_string());
                         }
@@ -1322,17 +1336,18 @@ pub async fn run(
 
 async fn check_updates() -> usize {
     let mut total = 0;
+    let mut arch_checked = false;
     if let Ok(out) = tokio::process::Command::new("checkupdates").output().await {
         if out.status.success() {
             total += String::from_utf8_lossy(&out.stdout).lines().count();
-        } else if let Ok(out2) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
-            if out2.status.success() {
-                total += String::from_utf8_lossy(&out2.stdout).lines().count();
-            }
+            arch_checked = true;
         }
-    } else if let Ok(out2) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
-        if out2.status.success() {
-            total += String::from_utf8_lossy(&out2.stdout).lines().count();
+    }
+    if !arch_checked {
+        if let Ok(out) = tokio::process::Command::new("pacman").arg("-Qu").output().await {
+            if out.status.success() {
+                total += String::from_utf8_lossy(&out.stdout).lines().count();
+            }
         }
     }
     if let Ok(out) = tokio::process::Command::new("flatpak").args(["remote-ls", "--updates"]).output().await {

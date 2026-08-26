@@ -146,16 +146,30 @@ impl Config {
     pub fn save(&self) -> Result<std::path::PathBuf, String> {
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| format!("erro ao serializar config: {e}"))?;
-        let target_dir = directories::ProjectDirs::from("com", "hal9001", "hall-9001")
-            .map(|dirs| dirs.config_dir().to_path_buf())
-            .unwrap_or_else(|| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                std::path::PathBuf::from(home).join(".config/hall-9001")
-            });
-        let _ = std::fs::create_dir_all(&target_dir);
-        let target_file = target_dir.join("config.toml");
-        std::fs::write(&target_file, toml_str)
-            .map_err(|e| format!("erro ao salvar {target_file:?}: {e}"))?;
+            
+        let target_file = if let Ok(p) = std::env::var("HAL9001_CONFIG") {
+            std::path::PathBuf::from(p)
+        } else {
+            let target_dir = directories::ProjectDirs::from("com", "hal9001", "hall-9001")
+                .map(|dirs| dirs.config_dir().to_path_buf())
+                .unwrap_or_else(|| {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+                    std::path::PathBuf::from(home).join(".config/hall-9001")
+                });
+            let _ = std::fs::create_dir_all(&target_dir);
+            target_dir.join("config.toml")
+        };
+        
+        if let Some(parent) = target_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        
+        let tmp_file = target_file.with_extension("tmp");
+        std::fs::write(&tmp_file, &toml_str)
+            .map_err(|e| format!("erro ao salvar {tmp_file:?}: {e}"))?;
+        std::fs::rename(&tmp_file, &target_file)
+            .map_err(|e| format!("erro ao renomear {tmp_file:?} para {target_file:?}: {e}"))?;
+            
         Ok(target_file)
     }
 

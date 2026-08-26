@@ -164,31 +164,33 @@ pub fn logo_lines_phase(size: LogoSize, phase: u8) -> Vec<Line<'static>> {
     let eye = eye_colors(phase);
     size.art()
         .iter()
-        .map(|raw| {
+        .map(|&raw| {
             let mut spans: Vec<Span<'static>> = Vec::new();
-            let mut buf = String::new();
             let mut cur: Option<Color> = None;
+            let mut start = 0;
 
-            let flush = |spans: &mut Vec<Span<'static>>, buf: &mut String, cur: Option<Color>| {
-                if buf.is_empty() {
+            let flush = |spans: &mut Vec<Span<'static>>, start: usize, end: usize, cur: Option<Color>| {
+                if start == end {
                     return;
                 }
                 let style = match cur {
                     Some(c) => Style::default().fg(c),
                     None => Style::default(),
                 };
-                spans.push(Span::styled(std::mem::take(buf), style));
+                spans.push(Span::styled(&raw[start..end], style));
             };
 
-            for c in raw.chars() {
+            for (i, c) in raw.char_indices() {
                 let color = glyph_color(c, eye);
                 if color != cur {
-                    flush(&mut spans, &mut buf, cur);
+                    if i > start {
+                        flush(&mut spans, start, i, cur);
+                    }
                     cur = color;
+                    start = i;
                 }
-                buf.push(c);
             }
-            flush(&mut spans, &mut buf, cur);
+            flush(&mut spans, start, raw.len(), cur);
             Line::from(spans)
         })
         .collect()
