@@ -11,12 +11,12 @@ import subprocess
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
-COLS = 110
-ROWS = 32
+COLS = 120
+ROWS = 40
 FONT_PATH = "/home/ivelot/.local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"
 FONT_SIZE = 26
-PAD_X = 36
-PAD_Y = 36
+PAD_X = 24
+PAD_Y = 24
 BG_COLOR = (13, 15, 24)
 
 ANSI_COLORS = {
@@ -55,18 +55,30 @@ def parse_color(c, is_bg=False):
     return BG_COLOR if is_bg else (220, 225, 235)
 
 def render_screen_to_image(screen, font):
+    # Auto-detect exact content bounding box
+    max_x, max_y = 0, 0
+    for y in range(ROWS):
+        for x in range(COLS):
+            c = screen.buffer[y][x]
+            if (c.data and c.data.strip()) or (c.bg != "default" and c.bg != "130f18"):
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+
+    used_cols = max(max_x + 1, 70)
+    used_rows = max(max_y + 1, 20)
+
     bbox = font.getbbox("M")
     char_w = bbox[2] - bbox[0] + 1
-    char_h = int(FONT_SIZE * 1.55)
+    char_h = int(FONT_SIZE * 1.52)
 
-    img_w = COLS * char_w + (PAD_X * 2)
-    img_h = ROWS * char_h + (PAD_Y * 2)
+    img_w = used_cols * char_w + (PAD_X * 2)
+    img_h = used_rows * char_h + (PAD_Y * 2)
 
     img = Image.new("RGB", (img_w, img_h), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    for y in range(ROWS):
-        for x in range(COLS):
+    for y in range(used_rows):
+        for x in range(used_cols):
             cell = screen.buffer[y][x]
             fg = parse_color(cell.fg, is_bg=False)
             bg = parse_color(cell.bg, is_bg=True)
@@ -78,7 +90,7 @@ def render_screen_to_image(screen, font):
                 draw.rectangle([px, py, px + char_w, py + char_h], fill=bg)
 
             if cell.data and cell.data != " ":
-                draw.text((px, py + 2), cell.data, font=font, fill=fg)
+                draw.text((px, py + 1), cell.data, font=font, fill=fg)
 
     return img
 
@@ -107,7 +119,7 @@ def capture_sessions(binary_path, out_dir):
     ]
 
     for filename, key_seq in targets:
-        print(f"[*] Capturing {filename} (Pure English 2K Retina) with keys {key_seq}...")
+        print(f"[*] Capturing {filename} with tight bounding box...")
         master, slave = pty.openpty()
         set_terminal_size(slave, COLS, ROWS)
 
@@ -121,6 +133,8 @@ def capture_sessions(binary_path, out_dir):
         env["LC_ALL"] = "en_US.UTF-8"
         env["LC_MESSAGES"] = "en_US.UTF-8"
         env["HAL9001_CONFIG"] = tmp_config_path
+        env["COLUMNS"] = "80"
+        env["LINES"] = "24"
 
         p = subprocess.Popen(
             [binary_path],
@@ -167,4 +181,4 @@ if __name__ == "__main__":
     bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
     output_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
     capture_sessions(bin_path, output_dir)
-    print("[+] All new English screenshots generated successfully!")
+    print("[+] All perfectly fitted screenshots generated successfully!")
