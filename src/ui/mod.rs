@@ -65,7 +65,6 @@ pub fn draw(app: &App, f: &mut Frame) {
 }
 
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
-    let m = app.lang.messages();
     let width = area.width;
 
     let titles: Vec<Line> = Tab::ALL
@@ -109,14 +108,9 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         })
         .collect();
 
-    // Título da janela: nome do assistente + SO/arch (ou simplificado em telas estreitas).
+    // Título da janela: apenas HAL-9001 (+ SO/arch quando couber, sem subtítulos).
     let title = if width < 50 {
         " HAL-9001 ".to_string()
-    } else if width < 75 {
-        match &app.system {
-            Some(s) => format!(" HAL-9001 ({}) ", s.os),
-            None => " HAL-9001 ".to_string(),
-        }
     } else {
         match &app.system {
             Some(s) => {
@@ -124,9 +118,9 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                     Some(arch) => format!("{} {arch}", s.os),
                     None => s.os.clone(),
                 };
-                format!(" HAL-9001 · {} ({plat}) ", m.app_title_suffix)
+                format!(" HAL-9001 ({plat}) ")
             }
-            None => format!(" HAL-9001 · {} ", m.app_title_suffix),
+            None => " HAL-9001 ".to_string(),
         }
     };
 

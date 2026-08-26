@@ -146,22 +146,41 @@ fn eye_phase(app: &App) -> u8 {
     ((app.elapsed_ms() / 250) % 4) as u8
 }
 
-/// Layout de coluna única (telas estreitas / celular portrait): cabeçalho compacto + metadados + seções, sem logo ASCII.
+/// Layout de coluna única (telas estreitas / celular portrait): logo ASCII no topo + HAL-9001 + metadados + seções.
 fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
     let info_w = area.width;
     let mut lines = Vec::new();
 
-    // Em telas retrato / móveis, exibe uma linha de identidade estilizada
-    let eye = match eye_phase(app) {
-        0 => "●",
-        1 => "◉",
-        2 => "○",
-        _ => "◌",
+    // Escolhe a melhor logo ASCII para o topo em modo vertical/retrato:
+    let logo_size = if app.config.overview.ascii != "none" && app.config.overview.ascii != "off" {
+        if area.width >= 30 && area.height >= 34 {
+            Some(LogoSize::Compact)
+        } else {
+            None
+        }
+    } else {
+        None
     };
+
+    if let Some(size) = logo_size {
+        let logo = ascii::logo_lines_phase(size, eye_phase(app));
+        let logo_w = size.width() as usize;
+        let pad = (info_w as usize).saturating_sub(logo_w) / 2;
+        let pad_str = " ".repeat(pad);
+
+        for line in logo {
+            let mut spans = vec![Span::raw(pad_str.clone())];
+            spans.extend(line.spans);
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Título limpo do projeto (sem subtítulos!)
+    let title_pad = (info_w as usize).saturating_sub(8) / 2;
     lines.push(Line::from(vec![
-        Span::styled(format!(" [{eye}] "), Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(title_pad)),
         Span::styled("HAL-9001", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(" · Telemetria do Sistema", Style::default().fg(pal.dim)),
     ]));
     lines.push(Line::from(""));
 
