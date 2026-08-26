@@ -4,7 +4,7 @@
 //! cálculo de velocidade/ETA e a invariante de segurança contra discos de
 //! sistema.
 
-use hal9001::app::{App, FlasherStage, FormatField, StorageModal, Tab};
+use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, detect_ventoy, format_fat32_pure_rust,
     gzip_uncompressed_size_hint, is_gzip_file, is_iso_or_img, is_no_usb_device_error,
@@ -1560,4 +1560,86 @@ fn no_emojis_anywhere_in_the_source_tree() {
         "emojis encontrados no código-fonte (Zero Emojis Policy):\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn needs_continuous_tick_while_disk_analyzer_is_scanning() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    assert!(!app.needs_continuous_tick());
+
+    app.storage_analyzer = Some(DiskAnalyzerState::opening("/tmp".into()));
+    assert!(app.needs_continuous_tick());
+
+    if let Some(state) = &mut app.storage_analyzer {
+        state.is_scanning = false;
+    }
+    assert!(!app.needs_continuous_tick());
+}
+
+#[test]
+fn on_tick_advances_disk_analyzer_spinner_only_while_scanning() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.storage_analyzer = Some(DiskAnalyzerState::opening("/tmp".into()));
+    app.on_tick();
+    app.on_tick();
+    assert_eq!(app.storage_analyzer.as_ref().unwrap().spinner_frame, 2);
+
+    if let Some(state) = &mut app.storage_analyzer {
+        state.is_scanning = false;
+    }
+    app.on_tick();
+    assert_eq!(app.storage_analyzer.as_ref().unwrap().spinner_frame, 2);
+}
+
+#[test]
+fn storage_analyzer_progress_event_updates_scanning_state() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.storage_analyzer = Some(DiskAnalyzerState::opening("/tmp".into()));
+
+    app.handle_event(AppEvent::StorageAnalyzerProgress {
+        current_item: "/tmp/foo/bar.txt".to_string(),
+        items_scanned: 1420,
+        total_bytes: 4_100_000_000,
+    });
+
+    let state = app.storage_analyzer.as_ref().unwrap();
+    assert_eq!(state.files_scanned, 1420);
+    assert_eq!(state.total_bytes, 4_100_000_000);
+    assert_eq!(
+        state.current_scanning_item.as_deref(),
+        Some("/tmp/foo/bar.txt")
+    );
+}
+
+#[test]
+fn render_disk_analyzer_scanning_panel_without_panic() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
+    app.storage_analyzer = Some(DiskAnalyzerState::opening("/home/user/some/deep/path".into()));
+    app.handle_event(AppEvent::StorageAnalyzerProgress {
+        current_item: "/home/user/some/deep/path/big_file.bin".to_string(),
+        items_scanned: 1420,
+        total_bytes: 4_100_000_000,
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    for frame in 0..12 {
+        if let Some(state) = &mut app.storage_analyzer {
+            state.spinner_frame = frame;
+        }
+        terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+    }
 }

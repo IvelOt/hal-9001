@@ -139,6 +139,14 @@ pub enum AppEvent {
     /// Uma varredura do Analisador de Espaço em Disco falhou (ex.: diretório
     /// inacessível).
     StorageAnalyzerError { path: PathBuf, message: String },
+    /// Progresso periódico (a cada 100ms ou 500 itens) de uma varredura em
+    /// curso do Analisador de Espaço em Disco — mantém a UI viva (spinner +
+    /// contadores) durante árvores grandes, em vez de um único evento final.
+    StorageAnalyzerProgress {
+        current_item: String,
+        items_scanned: usize,
+        total_bytes: u64,
+    },
 }
 
 /// Solicitação do backend de Storage para obter a senha de sudo através do

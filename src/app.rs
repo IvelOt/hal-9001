@@ -291,6 +291,15 @@ pub struct DiskAnalyzerState {
     pub selected: usize,
     pub is_scanning: bool,
     pub error: Option<String>,
+    /// Último item (arquivo/subdiretório) visitado, reportado por
+    /// `AppEvent::StorageAnalyzerProgress` — exibido na linha de status
+    /// enquanto a varredura está em curso.
+    pub current_scanning_item: Option<String>,
+    /// Contagem de itens já visitados na varredura em curso.
+    pub files_scanned: usize,
+    /// Frame atual do spinner ASCII de loading, avançado por `App::on_tick`
+    /// enquanto `is_scanning == true`.
+    pub spinner_frame: usize,
 }
 
 impl DiskAnalyzerState {
@@ -304,6 +313,9 @@ impl DiskAnalyzerState {
             selected: 0,
             is_scanning: true,
             error: None,
+            current_scanning_item: None,
+            files_scanned: 0,
+            spinner_frame: 0,
         }
     }
 
@@ -522,7 +534,14 @@ impl App {
 
     /// Retorna `true` se a UI precisa de atualização contínua (animações).
     pub fn needs_continuous_tick(&self) -> bool {
-        self.phase == Phase::Splash || self.active == Tab::Overview || self.toast.is_some()
+        self.phase == Phase::Splash
+            || self.active == Tab::Overview
+            || self.toast.is_some()
+            || self
+                .storage_analyzer
+                .as_ref()
+                .map(|a| a.is_scanning)
+                .unwrap_or(false)
     }
 
     /// Milissegundos desde o boot — usado pela animação da splash.
@@ -539,6 +558,11 @@ impl App {
         if let Some((_, at)) = &self.toast {
             if at.elapsed().as_secs() >= 4 {
                 self.toast = None;
+            }
+        }
+        if let Some(state) = &mut self.storage_analyzer {
+            if state.is_scanning {
+                state.spinner_frame = state.spinner_frame.wrapping_add(1);
             }
         }
     }
@@ -789,6 +813,7 @@ impl App {
                         state.selected = 0;
                         state.is_scanning = false;
                         state.error = None;
+                        state.current_scanning_item = None;
                     }
                 }
             }
@@ -796,6 +821,19 @@ impl App {
                 if let Some(state) = &mut self.storage_analyzer {
                     state.is_scanning = false;
                     state.error = Some(message);
+                }
+            }
+            AppEvent::StorageAnalyzerProgress {
+                current_item,
+                items_scanned,
+                total_bytes,
+            } => {
+                if let Some(state) = &mut self.storage_analyzer {
+                    if state.is_scanning {
+                        state.current_scanning_item = Some(current_item);
+                        state.files_scanned = items_scanned;
+                        state.total_bytes = total_bytes;
+                    }
                 }
             }
         }
@@ -1199,6 +1237,8 @@ impl App {
             state.selected = 0;
             state.is_scanning = true;
             state.error = None;
+            state.current_scanning_item = None;
+            state.files_scanned = 0;
         }
         let _ = action_tx.send(Action::StorageAnalyzerScan(new_path));
     }
@@ -1217,6 +1257,8 @@ impl App {
             state.selected = 0;
             state.is_scanning = true;
             state.error = None;
+            state.current_scanning_item = None;
+            state.files_scanned = 0;
         }
         let _ = action_tx.send(Action::StorageAnalyzerScan(parent));
     }
@@ -1228,6 +1270,8 @@ impl App {
         };
         state.is_scanning = true;
         state.error = None;
+        state.current_scanning_item = None;
+        state.files_scanned = 0;
         let path = state.current_path.clone();
         let _ = action_tx.send(Action::StorageAnalyzerScan(path));
     }

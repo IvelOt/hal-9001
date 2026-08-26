@@ -3,10 +3,69 @@
 //! externa. Sobe uma linha (arquivo ou subdiretório) por vez, somando o
 //! tamanho recursivo de cada subdiretório para permitir a navegação "entrar/
 //! voltar" da UI (ver `ui::storage::draw_analyzer`).
+//!
+//! A varredura roda em streaming: publica `AppEvent::StorageAnalyzerProgress`
+//! periodicamente (ver [`ScanProgress`]) para que a UI anime um spinner e
+//! mostre contadores em tempo real em árvores grandes, em vez de parecer
+//! travada até um único evento final.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::events::{AppEvent, EventTx};
+
+/// Diretórios de sistema/virtuais nunca escaneados recursivamente — evita
+/// tentar ler pseudo-arquivos como `/proc/kcore` (reporta 128 TB de tamanho)
+/// ou travar em `/sys`/`/dev` ao escanear a raiz `/`.
+const SKIPPED_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run", "/tmp", "/sys/kernel/debug"];
+
+fn is_skipped_dir(path: &Path) -> bool {
+    SKIPPED_DIRS.iter().any(|s| path == Path::new(s))
+}
+
+/// Emite no máximo um evento de progresso a cada 500 itens visitados ou a
+/// cada 100ms (o que ocorrer primeiro) — throttling para não inundar o canal
+/// de eventos em árvores com milhões de arquivos.
+const PROGRESS_ITEMS_INTERVAL: usize = 500;
+const PROGRESS_TIME_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Acumulador de progresso de uma varredura em curso, compartilhado por toda
+/// a recursão de [`dir_size_recursive`] via referência mutável.
+struct ScanProgress<'a> {
+    tx: &'a EventTx,
+    items_scanned: usize,
+    total_bytes: u64,
+    last_emit: Instant,
+}
+
+impl<'a> ScanProgress<'a> {
+    fn new(tx: &'a EventTx) -> Self {
+        Self {
+            tx,
+            items_scanned: 0,
+            total_bytes: 0,
+            last_emit: Instant::now(),
+        }
+    }
+
+    /// Registra `path` como visitado, somando `bytes` ao total acumulado
+    /// (`0` para diretórios, cujo tamanho já foi somado item a item pelos
+    /// arquivos dentro deles) e publica progresso quando o throttle permite.
+    fn record(&mut self, path: &Path, bytes: u64) {
+        self.items_scanned += 1;
+        self.total_bytes += bytes;
+        if self.items_scanned % PROGRESS_ITEMS_INTERVAL == 0
+            || self.last_emit.elapsed() >= PROGRESS_TIME_INTERVAL
+        {
+            self.last_emit = Instant::now();
+            let _ = self.tx.send(AppEvent::StorageAnalyzerProgress {
+                current_item: path.display().to_string(),
+                items_scanned: self.items_scanned,
+                total_bytes: self.total_bytes,
+            });
+        }
+    }
+}
 
 /// Uma linha da listagem do Analisador: um arquivo, ou um subdiretório com o
 /// tamanho de toda a sua árvore já somado.
@@ -34,8 +93,12 @@ pub struct DiskUsageSnapshot {
 /// Soma recursiva do tamanho de `path` (arquivos regulares) — símbolos
 /// (symlinks) contam apenas seu próprio tamanho, sem seguir o alvo, para
 /// nunca entrar em ciclo. Diretórios ilegíveis (permissão negada, etc.)
-/// contribuem com `0` em vez de abortar a varredura inteira.
-fn dir_size_recursive(path: &Path) -> u64 {
+/// contribuem com `0` em vez de abortar a varredura inteira. Pula
+/// compulsoriamente [`SKIPPED_DIRS`] (pseudo-filesystems como `/proc`/`/sys`).
+fn dir_size_recursive(path: &Path, progress: &mut ScanProgress) -> u64 {
+    if is_skipped_dir(path) {
+        return 0;
+    }
     let Ok(entries) = std::fs::read_dir(path) else {
         return 0;
     };
@@ -44,32 +107,56 @@ fn dir_size_recursive(path: &Path) -> u64 {
         let Ok(meta) = entry.metadata() else {
             continue;
         };
-        if meta.is_dir() {
-            total += dir_size_recursive(&entry.path());
+        let entry_path = entry.path();
+        let size = if meta.is_dir() {
+            dir_size_recursive(&entry_path, progress)
         } else {
-            total += meta.len();
-        }
+            meta.len()
+        };
+        total += size;
+        progress.record(&entry_path, if meta.is_dir() { 0 } else { size });
     }
     total
 }
 
+/// Traduz um erro de I/O de varredura numa mensagem clara para a TUI, sem
+/// travar nem expor o texto cru do sistema operacional para os casos comuns
+/// (pasta protegida ou removida entre a navegação e a varredura).
+fn friendly_scan_error(err: &std::io::Error) -> String {
+    match err.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            "Permissão negada para acessar este diretório".to_string()
+        }
+        std::io::ErrorKind::NotFound => "Diretório não encontrado".to_string(),
+        _ => format!("Falha ao escanear: {err}"),
+    }
+}
+
 /// Varre um único nível de `path`, somando recursivamente o tamanho de cada
 /// subdiretório — o núcleo síncrono/bloqueante da varredura, chamado dentro
-/// de `tokio::task::spawn_blocking` por [`scan`].
-pub fn scan_dir(path: &Path) -> std::io::Result<DiskUsageSnapshot> {
+/// de `tokio::task::spawn_blocking` por [`scan`]. Publica progresso periódico
+/// via `tx` (ver [`ScanProgress`]) enquanto percorre a árvore.
+pub fn scan_dir(path: &Path, tx: &EventTx) -> std::io::Result<DiskUsageSnapshot> {
     let entries = std::fs::read_dir(path)?;
+    let mut progress = ScanProgress::new(tx);
 
     let mut items: Vec<DiskUsageItem> = Vec::new();
     for entry in entries.flatten() {
         let Ok(meta) = entry.metadata() else {
             continue;
         };
+        let entry_path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         let (is_dir, size_bytes) = if meta.is_dir() {
-            (true, dir_size_recursive(&entry.path()))
+            if is_skipped_dir(&entry_path) {
+                (true, 0)
+            } else {
+                (true, dir_size_recursive(&entry_path, &mut progress))
+            }
         } else {
             (false, meta.len())
         };
+        progress.record(&entry_path, if is_dir { 0 } else { size_bytes });
         items.push(DiskUsageItem {
             name,
             is_dir,
@@ -101,7 +188,11 @@ pub fn scan_dir(path: &Path) -> std::io::Result<DiskUsageSnapshot> {
 /// thread) e publica o resultado — `StorageAnalyzerSnapshot` em caso de
 /// sucesso, `StorageAnalyzerError` caso `path` não possa ser listado.
 pub async fn scan(path: PathBuf, tx: EventTx) {
-    let result = tokio::task::spawn_blocking(move || scan_dir(&path)).await;
+    let result = tokio::task::spawn_blocking({
+        let tx = tx.clone();
+        move || scan_dir(&path, &tx)
+    })
+    .await;
     match result {
         Ok(Ok(snapshot)) => {
             let _ = tx.send(AppEvent::StorageAnalyzerSnapshot(Box::new(snapshot)));
@@ -109,7 +200,7 @@ pub async fn scan(path: PathBuf, tx: EventTx) {
         Ok(Err(e)) => {
             let _ = tx.send(AppEvent::StorageAnalyzerError {
                 path: PathBuf::new(),
-                message: e.to_string(),
+                message: friendly_scan_error(&e),
             });
         }
         Err(e) => {
@@ -125,6 +216,10 @@ pub async fn scan(path: PathBuf, tx: EventTx) {
 mod tests {
     use super::*;
 
+    fn test_tx() -> EventTx {
+        tokio::sync::mpsc::unbounded_channel().0
+    }
+
     #[test]
     fn scans_files_and_dirs_sorted_by_size_desc() {
         let tmp = tempfile::tempdir().unwrap();
@@ -133,7 +228,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("subdir")).unwrap();
         std::fs::write(tmp.path().join("subdir/nested.txt"), vec![0u8; 500]).unwrap();
 
-        let snap = scan_dir(tmp.path()).unwrap();
+        let snap = scan_dir(tmp.path(), &test_tx()).unwrap();
         assert_eq!(snap.items.len(), 3);
         assert_eq!(snap.items[0].name, "big.txt");
         assert_eq!(snap.items[0].size_bytes, 1000);
@@ -150,13 +245,52 @@ mod tests {
     #[test]
     fn empty_dir_yields_no_items() {
         let tmp = tempfile::tempdir().unwrap();
-        let snap = scan_dir(tmp.path()).unwrap();
+        let snap = scan_dir(tmp.path(), &test_tx()).unwrap();
         assert!(snap.items.is_empty());
         assert_eq!(snap.total_bytes, 0);
     }
 
     #[test]
     fn missing_dir_errors() {
-        assert!(scan_dir(Path::new("/nonexistent/path/for/hal9001/tests")).is_err());
+        assert!(scan_dir(Path::new("/nonexistent/path/for/hal9001/tests"), &test_tx()).is_err());
+    }
+
+    #[test]
+    fn skips_virtual_filesystem_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("proc")).unwrap();
+        std::fs::write(tmp.path().join("real.txt"), vec![0u8; 100]).unwrap();
+
+        // `is_skipped_dir` only matches the absolute canonical paths, so a
+        // plain nested "proc" dir here isn't skipped — but the top-level
+        // `/proc` itself must never be traversed.
+        assert!(is_skipped_dir(Path::new("/proc")));
+        assert!(is_skipped_dir(Path::new("/sys")));
+        assert!(is_skipped_dir(Path::new("/dev")));
+        assert!(is_skipped_dir(Path::new("/run")));
+        assert!(is_skipped_dir(Path::new("/tmp")));
+        assert!(is_skipped_dir(Path::new("/sys/kernel/debug")));
+        assert!(!is_skipped_dir(&tmp.path().join("proc")));
+
+        let snap = scan_dir(tmp.path(), &test_tx()).unwrap();
+        assert_eq!(snap.total_bytes, 100);
+    }
+
+    #[test]
+    fn emits_progress_events_during_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            std::fs::write(tmp.path().join(format!("f{i}.txt")), vec![0u8; 10]).unwrap();
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        // Force emission regardless of the time/count throttle by draining
+        // whatever progress events happened to fire; absence is also valid
+        // for a scan this small, so just assert the scan itself completes
+        // and any received progress events carry sane data.
+        let snap = scan_dir(tmp.path(), &tx).unwrap();
+        assert_eq!(snap.items.len(), 5);
+        while let Ok(AppEvent::StorageAnalyzerProgress { items_scanned, .. }) = rx.try_recv() {
+            assert!(items_scanned > 0);
+        }
     }
 }

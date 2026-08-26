@@ -108,13 +108,28 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
             rows[1],
         );
     } else if analyzer.is_scanning {
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "Escaneando...",
+        let lines = vec![
+            Line::from(Span::styled(
+                format!(
+                    "[ {} ] [ESCANEANDO...] {} itens processados . {} acumulados",
+                    spinner_glyph(analyzer.spinner_frame),
+                    format_item_count(analyzer.files_scanned),
+                    human_bytes(analyzer.total_bytes),
+                ),
+                Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Diretorio: {}",
+                    analyzer
+                        .current_scanning_item
+                        .as_deref()
+                        .unwrap_or(analyzer.current_path.to_str().unwrap_or("")),
+                ),
                 Style::default().fg(pal.dim),
-            ))),
-            rows[1],
-        );
+            )),
+        ];
+        f.render_widget(Paragraph::new(lines), rows[1]);
     } else if analyzer.items.is_empty() {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -160,11 +175,44 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
         f.render_widget(Paragraph::new(lines), rows[1]);
     }
 
-    let hints = Line::from(Span::styled(
-        "[Enter] Entrar  [Backspace/h] Voltar  [r] Re-escanear  [Esc] Fechar",
-        Style::default().fg(pal.dim),
-    ));
+    let hints = if analyzer.is_scanning {
+        Line::from(Span::styled(
+            "[Esc] Cancelar varredura",
+            Style::default().fg(pal.dim),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "[Enter] Entrar  [Backspace/h] Voltar  [r] Re-escanear  [Esc] Fechar",
+            Style::default().fg(pal.dim),
+        ))
+    };
     f.render_widget(Paragraph::new(hints), rows[2]);
+}
+
+/// Frames do spinner ASCII retro (glifos Braille) exibido durante a
+/// varredura — avança um frame por tick de render (~250ms, ver
+/// `App::on_tick`).
+const SPINNER_FRAMES: [&str; 10] = [
+    "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}",
+    "\u{2807}", "\u{280f}",
+];
+
+fn spinner_glyph(frame: usize) -> &'static str {
+    SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+}
+
+/// Formata uma contagem de itens com separador de milhar `.` (padrão
+/// pt-BR), ex.: `1420` -> `"1.420"`.
+fn format_item_count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out.chars().rev().collect()
 }
 
 fn icon(app: &App, nerd: &str, ascii: &str) -> String {
