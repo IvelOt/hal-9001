@@ -511,6 +511,11 @@ impl App {
         }
     }
 
+    /// Retorna `true` se a UI precisa de atualização contínua (animações).
+    pub fn needs_continuous_tick(&self) -> bool {
+        self.phase == Phase::Splash || self.active == Tab::Overview || self.toast.is_some()
+    }
+
     /// Milissegundos desde o boot — usado pela animação da splash.
     pub fn elapsed_ms(&self) -> u128 {
         self.started.elapsed().as_millis()

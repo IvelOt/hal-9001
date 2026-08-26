@@ -38,18 +38,27 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
 
     let mut app = App::new(config);
     let mut input = InputStream::new();
-    let mut render_tick = tokio::time::interval(Duration::from_millis(app.config.ui.frame_ms));
+    let mut render_tick = tokio::time::interval(Duration::from_millis(250));
     render_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // Render inicial
+    let term_size = terminal.size().unwrap_or_default();
+    for resize in app.sync_pty_size(term_size.width, term_size.height) {
+        let _ = action_tx.send(resize);
+    }
+    terminal.draw(|f| ui::draw(&app, f))?;
 
     loop {
         tokio::select! {
             Some(ev) = event_rx.recv() => {
-                // Ações de acompanhamento (ex.: relistar ISOs multi-boot após
-                // uma cópia/remoção concluída) devolvidas pelo `App` são
-                // repassadas aos backends como se tivessem vindo do input.
                 for follow_up in app.handle_event(ev) {
                     let _ = action_tx.send(follow_up);
                 }
+                let term_size = terminal.size().unwrap_or_default();
+                for resize in app.sync_pty_size(term_size.width, term_size.height) {
+                    let _ = action_tx.send(resize);
+                }
+                terminal.draw(|f| ui::draw(&app, f))?;
             }
             Some(action) = input.next(
                 app.active,
@@ -57,15 +66,23 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                 app.text_input_active(),
                 app.sudo_prompt_open(),
                 app.pty_focused(),
-            ) => app.dispatch(action, &action_tx),
-            Some(req) = sudo_rx.recv() => {
-                // Abre o modal nativo de senha de sudo (mascarado) — a TUI
-                // permanece ativa, sem suspender o raw mode/alt-screen: a
-                // senha é digitada dentro da própria grade do Ratatui e
-                // enviada de volta ao backend via stdin do `sudo -S`.
-                app.open_sudo_prompt(req);
+            ) => {
+                app.dispatch(action, &action_tx);
+                let term_size = terminal.size().unwrap_or_default();
+                for resize in app.sync_pty_size(term_size.width, term_size.height) {
+                    let _ = action_tx.send(resize);
+                }
+                terminal.draw(|f| ui::draw(&app, f))?;
             }
-            _ = render_tick.tick() => {
+            Some(req) = sudo_rx.recv() => {
+                app.open_sudo_prompt(req);
+                let term_size = terminal.size().unwrap_or_default();
+                for resize in app.sync_pty_size(term_size.width, term_size.height) {
+                    let _ = action_tx.send(resize);
+                }
+                terminal.draw(|f| ui::draw(&app, f))?;
+            }
+            _ = render_tick.tick(), if app.needs_continuous_tick() => {
                 app.on_tick();
                 let term_size = terminal.size().unwrap_or_default();
                 for resize in app.sync_pty_size(term_size.width, term_size.height) {
