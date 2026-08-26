@@ -1,12 +1,12 @@
 Package: hal-9001
-Version: 0.1.0
+Version: 0.1.2
 Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: IvelOt <contact@ivelot.dev>
-Depends: libc6 (>= 2.34), libdbus-1-3, systemd
+Depends: libc6 (>= 2.31) | libc6, libdbus-1-3, systemd
 Recommends: pipewire-bin | pulseaudio-utils, network-manager, bluez, udisks2, upower, x11-xserver-utils | wlr-randr
-Suggests: yazi, sudo
+Suggests: sudo
 Homepage: https://github.com/IvelOt/hal-9001
 Description: Central TUI de Controle do Sistema & Assistente de Sistema
  HAL-9001 e um painel de controle e monitor de telemetria de sistema TUI moderno

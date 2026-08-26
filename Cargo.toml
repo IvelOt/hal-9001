@@ -1,6 +1,6 @@
 [package]
 name = "hal-9001"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.80"
 authors = ["IvelOt <contact@ivelot.dev>"]
@@ -29,7 +29,7 @@ HAL-9001 é uma central de controle e monitor de telemetria de sistema TUI \
 moderno e de alta performance escrito em 100% Rust puro com Ratatui e D-Bus assíncrono. \
 Permite monitorar CPU/RAM/Discos e controlar Wi-Fi, Bluetooth, Áudio (PipeWire/PulseAudio), \
 Displays com auto-expansão e gravação de mídias/ISOs de forma segura."""
-depends = "$auto, libdbus-1-3, systemd"
+depends = "libc6 (>= 2.31) | libc6, libdbus-1-3, systemd"
 recommends = "pipewire-bin | pulseaudio-utils, network-manager, bluez, udisks2, upower, x11-xserver-utils | wlr-randr"
 section = "utils"
 priority = "optional"

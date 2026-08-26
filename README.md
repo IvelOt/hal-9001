@@ -135,6 +135,12 @@ HAL-9001 includes 8 built-in themes out of the box, switchable in real-time via 
 
 Ensure you have Rust stable (1.80+) installed.
 
+You can install it instantly with our universal script:
+```bash
+curl -fsSL https://raw.githubusercontent.com/IvelOt/hal-9001/main/install.sh | bash
+```
+
+Alternatively, to build manually:
 ```bash
 # 1. Clone the repository
 git clone https://github.com/IvelOt/hal-9001.git

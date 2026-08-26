@@ -92,7 +92,7 @@ jobs:
 
   package-deb:
     name: Build Debian package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: build
     steps:
       - name: Checkout repository
