@@ -1269,8 +1269,15 @@ pub async fn run(
     loop {
         tokio::select! {
             Some(n) = updates_rx.recv() => {
+                let prev = stat.packages.as_ref().and_then(|p| p.pending_updates);
                 if let Some(p) = &mut stat.packages {
                     p.pending_updates = Some(n);
+                }
+                if n > 0 && prev != Some(n) {
+                    let _ = tx.send(AppEvent::Toast(Toast::warn(format!(
+                        "[SISTEMA] {} atualizações de pacotes disponíveis! [U: Detalhes]",
+                        n
+                    ))));
                 }
                 let snap = refresh(&mut sys, &mut disks, &stat);
                 let _ = tx.send(AppEvent::System(snap));
