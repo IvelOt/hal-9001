@@ -32,7 +32,7 @@ fn sample_snapshot() -> SystemSnapshot {
         packages: Some(Packages {
             total: 1560,
             by_manager: vec![("pacman", 1500), ("flatpak", 60)],
-            pending_updates: None,
+            pending_updates: Some(12),
         }),
         brightness: Some(0.6),
         volume: Some(Volume {
@@ -66,7 +66,38 @@ fn sample_snapshot() -> SystemSnapshot {
             swap_total: 8 * 1024 * 1024 * 1024,
             desktop: Some("sway".into()),
             session_type: Some("wayland".into()),
-            top_processes: Vec::new(),
+            top_processes: vec![
+                hal9001::backend::system::ProcessInfo {
+                    pid: 1420,
+                    name: "firefox".into(),
+                    cpu_usage: 18.5,
+                    mem_bytes: 2 * 1024 * 1024 * 1024,
+                },
+                hal9001::backend::system::ProcessInfo {
+                    pid: 8932,
+                    name: "rust-analyzer".into(),
+                    cpu_usage: 12.0,
+                    mem_bytes: 1400 * 1024 * 1024,
+                },
+                hal9001::backend::system::ProcessInfo {
+                    pid: 4511,
+                    name: "discord".into(),
+                    cpu_usage: 4.2,
+                    mem_bytes: 850 * 1024 * 1024,
+                },
+                hal9001::backend::system::ProcessInfo {
+                    pid: 1205,
+                    name: "cargo".into(),
+                    cpu_usage: 3.1,
+                    mem_bytes: 420 * 1024 * 1024,
+                },
+                hal9001::backend::system::ProcessInfo {
+                    pid: 980,
+                    name: "kitty".into(),
+                    cpu_usage: 1.0,
+                    mem_bytes: 180 * 1024 * 1024,
+                },
+            ],
         },
     }
 }
@@ -236,11 +267,21 @@ fn logo_does_not_shrink_in_detailed_mode() {
 
 #[test]
 fn detailed_mode_shows_extra_fields_when_space_allows() {
-    // Em tela moderna, o modo detalhado expõe campos extras (ex.: BIOS, GPU).
-    let buf = render_overview(120, 40, true);
+    // Em tela moderna, o modo detalhado expõe campos extras (ex.: BIOS, GPU, Processos, Pacotes).
+    let buf = render_overview(110, 42, true);
     let text = buffer_text(&buf);
-    assert!(text.contains("BIOS") || text.contains("GPU") || text.contains("Núcleos"));
-    assert!(text.contains("Expandido"), "indicador de modo ausente");
+    assert!(text.contains("BIOS") || text.contains("GPU") || text.contains("Núcleos") || text.contains("TOP PROCESSES"));
+    assert!(text.contains("Expandido") || text.contains("Detalhes"), "indicador de modo ausente");
+
+    let mut ansi_out = String::new();
+    let area = *buf.area();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            ansi_out.push_str(buf[(x, y)].symbol());
+        }
+        ansi_out.push('\n');
+    }
+    let _ = std::fs::write("/tmp/hall9001_tab1_overview_detailed.ansi", ansi_out);
 }
 
 #[test]
