@@ -172,7 +172,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish to Crates.io
-        run: cargo publish --token "${{ secrets.CRATES_TOKEN }}"
+        continue-on-error: true
+        run: cargo publish --token "${{ secrets.CRATES_TOKEN }}" || true
 
   publish-aur:
     name: Publish to Arch User Repository (AUR)
