@@ -10,7 +10,7 @@
 //! apenas o painel de informações centralizado.
 
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -73,6 +73,12 @@ fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 /// orçamento de largura usa `MIN_INFO` fixo — independente dos campos
 /// detalhados —, então a logo não encolhe ao alternar `.`.
 fn pick_size(pref: &str, area: Rect) -> Option<LogoSize> {
+    // Modo Celular / Retrato: se a altura for maior que a largura (portrait)
+    // ou se a largura for estreita (< 72 cols), colapsa a logo ASCII para
+    // dar prioridade total às métricas de telemetria verticalmente!
+    if area.height > area.width || area.width < 72 {
+        return None;
+    }
     let budget = area.width.saturating_sub(GAP + MIN_INFO);
     let first = ascii::select(pref, budget)?;
     let order = [LogoSize::Main, LogoSize::Medium, LogoSize::Compact];
@@ -140,16 +146,32 @@ fn eye_phase(app: &App) -> u8 {
     ((app.elapsed_ms() / 250) % 4) as u8
 }
 
-/// Layout de coluna única (telas estreitas): metadados + seções, sem logo.
+/// Layout de coluna única (telas estreitas / celular portrait): cabeçalho compacto + metadados + seções, sem logo ASCII.
 fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
     let info_w = area.width;
-    let mut lines = build_meta(s, pal);
+    let mut lines = Vec::new();
+
+    // Em telas retrato / móveis, exibe uma linha de identidade estilizada
+    let eye = match eye_phase(app) {
+        0 => "●",
+        1 => "◉",
+        2 => "○",
+        _ => "◌",
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" [{eye}] "), Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled("HAL-9001", Style::default().fg(pal.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(" · Telemetria do Sistema", Style::default().fg(pal.dim)),
+    ]));
+    lines.push(Line::from(""));
+
+    lines.extend(build_meta(s, pal));
     lines.push(Line::from(""));
     lines.extend(build_sections(app, s, pal, info_w));
 
     let content_h = (lines.len() as u16).min(area.height).max(1);
     let vband = Layout::vertical([Constraint::Length(content_h)])
-        .flex(Flex::Center)
+        .flex(Flex::Start)
         .split(area)[0];
 
     let info_w = info_w.min(area.width);

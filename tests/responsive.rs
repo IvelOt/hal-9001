@@ -145,6 +145,38 @@ fn micro_terminal_collapses_logo_but_still_renders() {
     );
 }
 
+#[test]
+fn portrait_mobile_terminal_collapses_logo_and_renders_vertical_stack() {
+    // Cenário Celular / Smartphone / Termux: Altura maior que largura (ex: 45x80 ou 40x70)
+    for (w, h) in [(45, 80), (40, 70), (50, 60)] {
+        let buf = render_overview(w, h, false);
+        let text = buffer_text(&buf);
+
+        // Logo ASCII com dentes de engrenagem é colapsada para não poluir
+        assert_eq!(
+            logo_gears(&buf),
+            0,
+            "logo ASCII deveria estar colapsada no modo celular {w}x{h}"
+        );
+
+        // Identidade textual e métricas são preservadas
+        assert!(text.contains("HAL-9001"), "cabeçalho HAL-9001 ausente em {w}x{h}");
+        assert!(text.contains("operator"), "usuário ausente em {w}x{h}");
+        assert!(text.contains("RAM"), "métrica RAM ausente em {w}x{h}");
+    }
+
+    let buf = render_overview(48, 42, false);
+    let mut ansi_out = String::new();
+    let area = *buf.area();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            ansi_out.push_str(buf[(x, y)].symbol());
+        }
+        ansi_out.push('\n');
+    }
+    let _ = std::fs::write("/tmp/hall9001_mobile_portrait.ansi", ansi_out);
+}
+
 /// Conta os dentes de engrenagem `#` — glifo exclusivo da logo (não aparece no
 /// texto das seções/metadados), servindo de impressão digital estável do
 /// tamanho renderizado.

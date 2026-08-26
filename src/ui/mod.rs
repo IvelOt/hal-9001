@@ -66,28 +66,47 @@ pub fn draw(app: &App, f: &mut Frame) {
 
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
+    let is_compact = area.width < 72;
+
     let titles: Vec<Line> = Tab::ALL
         .iter()
         .enumerate()
         .map(|(i, t)| {
+            let label = if is_compact {
+                match t {
+                    Tab::Overview => "Visão",
+                    Tab::Network => "Rede",
+                    Tab::Bluetooth => "BT",
+                    Tab::Storage => "Disco",
+                    Tab::Audio => "Som",
+                    Tab::Displays => "Tela",
+                    Tab::Files => "Arq",
+                    Tab::Terminal => "Term",
+                }
+            } else {
+                t.title_in(app.lang)
+            };
             Line::from(vec![
                 Span::styled(format!("{} ", i + 1), Style::default().fg(pal.dim)),
-                Span::raw(t.title_in(app.lang)),
+                Span::raw(label),
             ])
         })
         .collect();
 
-    // Título da janela: nome do assistente + SO/arch quando já houver snapshot.
-    // Ex.: `HAL-9001 · Assistente de Sistema (Arch Linux x86_64)`.
-    let title = match &app.system {
-        Some(s) => {
-            let plat = match &s.detail.cpu_arch {
-                Some(arch) => format!("{} {arch}", s.os),
-                None => s.os.clone(),
-            };
-            format!(" HAL-9001 · {} ({plat}) ", m.app_title_suffix)
+    // Título da janela: nome do assistente + SO/arch (ou simplificado em telas estreitas).
+    let title = if is_compact {
+        " HAL-9001 ".to_string()
+    } else {
+        match &app.system {
+            Some(s) => {
+                let plat = match &s.detail.cpu_arch {
+                    Some(arch) => format!("{} {arch}", s.os),
+                    None => s.os.clone(),
+                };
+                format!(" HAL-9001 · {} ({plat}) ", m.app_title_suffix)
+            }
+            None => format!(" HAL-9001 · {} ", m.app_title_suffix),
         }
-        None => format!(" HAL-9001 · {} ", m.app_title_suffix),
     };
 
     let tabs = Tabs::new(titles)
