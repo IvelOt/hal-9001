@@ -30,6 +30,28 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 
 ---
 
+## Built-in Themes & Color Palettes
+
+HALL-9001 includes 8 built-in themes out of the box, switchable in real-time via the settings modal (`[c]` / `[F2]`) or in `config.toml`:
+
+| HAL Classic (Default) | Catppuccin Mocha |
+|:---:|:---:|
+| ![HAL Classic](assets/screenshots/themes/theme_hal.png) | ![Catppuccin Mocha](assets/screenshots/themes/theme_catppuccin.png) |
+
+| Dracula | Gruvbox Dark |
+|:---:|:---:|
+| ![Dracula](assets/screenshots/themes/theme_dracula.png) | ![Gruvbox Dark](assets/screenshots/themes/theme_gruvbox.png) |
+
+| Nord Arctic | Tokyo Night |
+|:---:|:---:|
+| ![Nord](assets/screenshots/themes/theme_nord.png) | ![Tokyo Night](assets/screenshots/themes/theme_tokyonight.png) |
+
+| Cyberpunk 2077 | Minimal Monochrome |
+|:---:|:---:|
+| ![Cyberpunk](assets/screenshots/themes/theme_cyberpunk.png) | ![Monochrome](assets/screenshots/themes/theme_monochrome.png) |
+
+---
+
 ## Features & Architecture
 
 ### 1. System Overview & Telemetry (Tab 1)
@@ -66,9 +88,9 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 ### 5. Audio Mixer & Hardware Hub (Tab 5 — Pure Rust)
 - **PipeWire & PulseAudio Engine:** Native asynchronous integration with WirePlumber / PipeWire (`wpctl`) and PulseAudio fallback.
 - **3 Specialized Sub-Panels:**
-  - **`[1] Saidas de Som (Sinks)`**: Internal Speakers, Headphones (P2/Bluetooth A2DP), HDMI/DisplayPort audio.
-  - **`[2] Aplicativos (Streams)`**: Individual volume sliders and mute toggles per running app (**Spotify**, **Firefox/Chrome**, **Discord**, **Steam**, **VLC**, games).
-  - **`[3] Microfones (Sources)`**: Input gain and mute control for internal mics, headsets, and USB microphones.
+  - **`[1] Audio Outputs (Sinks)`**: Internal Speakers, Headphones (P2/Bluetooth A2DP), HDMI/DisplayPort audio.
+  - **`[2] Applications (Streams)`**: Individual volume sliders and mute toggles per running app (**Spotify**, **Firefox/Chrome**, **Discord**, **Steam**, **VLC**, games).
+  - **`[3] Microphones (Sources)`**: Input gain and mute control for internal mics, headsets, and USB microphones.
 - **Volume Overdrive (0..=150%):** Visual color progression (accent -> green -> yellow/red overdrive).
 - **One-Key Shortcuts:** Volume (`[+/-]` or `[h/l]`), Mute (`[m]`), Set Default Device (`[Enter]`), Switch Category (`[Tab]` or `[1/2/3]`).
 
@@ -77,11 +99,11 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 - **Automatic Hotplug Auto-Expand:** Instantly detects when an external monitor (HDMI/DisplayPort/USB-C) is connected and automatically activates **Extend-Right Mode** with instant TUI toast notifications.
 - **Interactive 2D Canvas Diagram:** Spatial ASCII representation of connected screens with real-time resolution, position, primary badge, and refresh rates.
 - **Display Modes:**
-  - `[1] Expandir a Direita (Extend Right)`
-  - `[2] Expandir a Esquerda (Extend Left)`
-  - `[3] Espelhar Telas (Mirror)`
-  - `[4] Apenas Monitor Externo`
-  - `[5] Apenas Tela do Notebook`
+  - `[1] Extend Right (Default)`
+  - `[2] Extend Left`
+  - `[3] Mirror Screens`
+  - `[4] External Monitor Only`
+  - `[5] Notebook Screen Only`
 - **Output Management:** Set Primary Display (`[p]`), change resolutions/Hz, and toggle displays.
 - **Unified Hardware Toast System:** Statusline notifications for Monitor connect/disconnect, USB insertions/ejections, Bluetooth pairing, and network transitions.
 
@@ -148,4 +170,4 @@ HALL-9001 searches for configuration in order:
 2. `~/.config/hall-9001/config.toml`
 3. `./config.toml`
 
-Customizable options include UI refresh rates (15/30/60 FPS), language (`auto`, `pt-BR`, `en-US`, `es-ES`), Nerd Font icon toggles, ASCII logo styles, polling intervals, and color palettes (*HAL Classic*, *Monochrome*, *Catppuccin*).
+Customizable options include UI refresh rates (15/30/60 FPS), language (`auto`, `pt-BR`, `en-US`, `es-ES`), Nerd Font icon toggles, ASCII logo styles, polling intervals, and color palettes (*HAL Classic*, *Monochrome*, *Catppuccin*, *Dracula*, *Gruvbox*, *Nord*, *Tokyo Night*, *Cyberpunk*).

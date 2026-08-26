@@ -55,7 +55,6 @@ def parse_color(c, is_bg=False):
     return BG_COLOR if is_bg else (220, 225, 235)
 
 def render_screen_to_image(screen, font):
-    # Auto-detect exact content bounding box
     max_x, max_y = 0, 0
     for y in range(ROWS):
         for x in range(COLS):
@@ -98,15 +97,76 @@ def set_terminal_size(fd, cols, rows):
     winsize = struct.pack("HHHH", rows, cols, 0, 0)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
 
-def capture_sessions(binary_path, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
+def run_and_capture(binary_path, config_path, key_seq, font):
+    master, slave = pty.openpty()
+    set_terminal_size(slave, COLS, ROWS)
+
+    screen = pyte.Screen(COLS, ROWS)
+    stream = pyte.ByteStream(screen)
+
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+    env["LANG"] = "en_US.UTF-8"
+    env["LC_ALL"] = "en_US.UTF-8"
+    env["LC_MESSAGES"] = "en_US.UTF-8"
+    env["HAL9001_CONFIG"] = config_path
+    env["COLUMNS"] = "80"
+    env["LINES"] = "24"
+
+    p = subprocess.Popen(
+        [binary_path],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        env=env,
+    )
+    os.close(slave)
+
+    time.sleep(0.5)
+
+    for k in key_seq:
+        os.write(master, k.encode("utf-8"))
+        time.sleep(0.35)
+
+    deadline = time.time() + 1.2
+    while time.time() < deadline:
+        r, _, _ = select.select([master], [], [], 0.1)
+        if r:
+            try:
+                data = os.read(master, 4096)
+                if not data:
+                    break
+                stream.feed(data)
+            except OSError:
+                break
+
+    try:
+        os.write(master, b"q")
+        p.terminate()
+        p.wait(timeout=0.5)
+    except Exception:
+        pass
+    os.close(master)
+
+    return render_screen_to_image(screen, font)
+
+def main():
+    bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
+    base_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
+    themes_dir = os.path.join(base_dir, "themes")
+    os.makedirs(base_dir, exist_ok=True)
+    os.makedirs(themes_dir, exist_ok=True)
+
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 
-    tmp_config_path = "/tmp/hal9001_en_config.toml"
-    with open(tmp_config_path, "w") as f:
-        f.write('[ui]\nlanguage = "en-US"\n[splash]\nenabled = false\n')
+    # 1. Capture 6 core tabs in English (Default HAL theme)
+    default_config = "/tmp/hal9001_en_default.toml"
+    with open(default_config, "w") as f:
+        f.write('[ui]\nlanguage = "en-US"\n[splash]\nenabled = false\n[theme]\nname = "hal"\n')
 
-    targets = [
+    core_targets = [
         ("tab1_overview.png", []),
         ("tab1_overview_detailed.png", ["."]),
         ("tab2_network.png", ["2"]),
@@ -118,67 +178,36 @@ def capture_sessions(binary_path, out_dir):
         ("config_modal.png", ["c"]),
     ]
 
-    for filename, key_seq in targets:
-        print(f"[*] Capturing {filename} with tight bounding box...")
-        master, slave = pty.openpty()
-        set_terminal_size(slave, COLS, ROWS)
-
-        screen = pyte.Screen(COLS, ROWS)
-        stream = pyte.ByteStream(screen)
-
-        env = os.environ.copy()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["LANG"] = "en_US.UTF-8"
-        env["LC_ALL"] = "en_US.UTF-8"
-        env["LC_MESSAGES"] = "en_US.UTF-8"
-        env["HAL9001_CONFIG"] = tmp_config_path
-        env["COLUMNS"] = "80"
-        env["LINES"] = "24"
-
-        p = subprocess.Popen(
-            [binary_path],
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            close_fds=True,
-            env=env,
-        )
-        os.close(slave)
-
-        time.sleep(0.5)
-
-        for k in key_seq:
-            os.write(master, k.encode("utf-8"))
-            time.sleep(0.35)
-
-        deadline = time.time() + 1.2
-        while time.time() < deadline:
-            r, _, _ = select.select([master], [], [], 0.1)
-            if r:
-                try:
-                    data = os.read(master, 4096)
-                    if not data:
-                        break
-                    stream.feed(data)
-                except OSError:
-                    break
-
-        try:
-            os.write(master, b"q")
-            p.terminate()
-            p.wait(timeout=0.5)
-        except Exception:
-            pass
-        os.close(master)
-
-        img = render_screen_to_image(screen, font)
-        out_path = os.path.join(out_dir, filename)
+    for filename, keys in core_targets:
+        print(f"[*] Capturing Core Tab: {filename}...")
+        img = run_and_capture(bin_path, default_config, keys, font)
+        out_path = os.path.join(base_dir, filename)
         img.save(out_path, "PNG", optimize=True)
         print(f"    Saved: {out_path} ({img.width}x{img.height})")
 
+    # 2. Capture all 8 themes for the Themes Gallery
+    themes = [
+        ("theme_hal.png", "hal"),
+        ("theme_catppuccin.png", "catppuccin"),
+        ("theme_dracula.png", "dracula"),
+        ("theme_gruvbox.png", "gruvbox"),
+        ("theme_nord.png", "nord"),
+        ("theme_tokyonight.png", "tokyo-night"),
+        ("theme_cyberpunk.png", "cyberpunk"),
+        ("theme_monochrome.png", "mono"),
+    ]
+
+    for filename, theme_name in themes:
+        print(f"[*] Capturing Theme: {theme_name} -> {filename}...")
+        cfg_path = f"/tmp/hal9001_theme_{theme_name}.toml"
+        with open(cfg_path, "w") as f:
+            f.write(f'[ui]\nlanguage = "en-US"\n[splash]\nenabled = false\n[theme]\nname = "{theme_name}"\n')
+        img = run_and_capture(bin_path, cfg_path, [], font)
+        out_path = os.path.join(themes_dir, filename)
+        img.save(out_path, "PNG", optimize=True)
+        print(f"    Saved Theme: {out_path} ({img.width}x{img.height})")
+
+    print("[+] All Core Tabs & Themes Gallery screenshots generated successfully!")
+
 if __name__ == "__main__":
-    bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
-    output_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
-    capture_sessions(bin_path, output_dir)
-    print("[+] All perfectly fitted screenshots generated successfully!")
+    main()
