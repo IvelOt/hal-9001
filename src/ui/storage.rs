@@ -12,14 +12,14 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{
-    App, FlasherModalState, FlasherStage, FormatField, FormatModalState, FsChoice,
-    MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal, SudoPromptState,
+    App, DiskAnalyzerState, FlasherModalState, FlasherStage, FormatField, FormatModalState,
+    FsChoice, MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal, SudoPromptState,
 };
 use crate::backend::multiboot;
 use crate::backend::storage::{primary_partition, BusType, DriveInfo, PartitionInfo};
 
 use super::theme::Palette;
-use super::widgets::human_bytes;
+use super::widgets::{human_bytes, truncate_str};
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let Some(snapshot) = &app.storage else {
@@ -54,11 +54,117 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
+    if let Some(analyzer) = &app.storage_analyzer {
+        draw_analyzer(analyzer, pal, f, area);
+        return;
+    }
+
     let cols =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
 
     draw_list(app, pal, f, cols[0]);
     draw_details(app, pal, f, cols[1]);
+}
+
+/// Analisador de Espaço em Disco Nativo (tecla `a`) — lista de itens do
+/// diretório atual, ordenada por tamanho decrescente, com barra de
+/// progresso visual e navegação estilo `ncdu`/`dua`.
+fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(pal.dim))
+        .title(Span::styled(
+            " [ANALISADOR] Espaço em Disco ",
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let rows = Layout::vertical([
+        Constraint::Length(2), // breadcrumb + total
+        Constraint::Min(0),    // listagem
+        Constraint::Length(1), // hints
+    ])
+    .split(inner);
+
+    let header = vec![
+        Line::from(Span::styled(
+            format!("{}", analyzer.current_path.display()),
+            Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("Total: {}", human_bytes(analyzer.total_bytes)),
+            Style::default().fg(pal.dim),
+        )),
+    ];
+    f.render_widget(Paragraph::new(header), rows[0]);
+
+    if let Some(err) = &analyzer.error {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("[ERRO] {err}"),
+                Style::default().fg(pal.err),
+            ))),
+            rows[1],
+        );
+    } else if analyzer.is_scanning {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Escaneando...",
+                Style::default().fg(pal.dim),
+            ))),
+            rows[1],
+        );
+    } else if analyzer.items.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Diretório vazio",
+                Style::default().fg(pal.dim),
+            ))),
+            rows[1],
+        );
+    } else {
+        let bar_width: usize = 16;
+        let lines: Vec<Line> = analyzer
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let selected = i == analyzer.selected;
+                let badge = if item.is_dir { "[DIR ]" } else { "[FILE]" };
+                let filled = ((item.percentage / 100.0) * bar_width as f32).round() as usize;
+                let filled = filled.min(bar_width);
+                let bar = format!(
+                    "[{}{}]",
+                    "\u{2588}".repeat(filled),
+                    "\u{2591}".repeat(bar_width - filled)
+                );
+                let text = format!(
+                    "{badge} {:<28} {bar} {:>10} {:>5.1}%",
+                    truncate_str(&item.name, 28),
+                    human_bytes(item.size_bytes),
+                    item.percentage,
+                );
+                let style = if selected {
+                    Style::default()
+                        .fg(pal.accent)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else if item.is_dir {
+                    Style::default().fg(pal.fg)
+                } else {
+                    Style::default().fg(pal.dim)
+                };
+                Line::from(Span::styled(text, style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(lines), rows[1]);
+    }
+
+    let hints = Line::from(Span::styled(
+        "[Enter] Entrar  [Backspace/h] Voltar  [r] Re-escanear  [Esc] Fechar",
+        Style::default().fg(pal.dim),
+    ));
+    f.render_widget(Paragraph::new(hints), rows[2]);
 }
 
 fn icon(app: &App, nerd: &str, ascii: &str) -> String {
@@ -360,6 +466,7 @@ fn draw_details(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             format!("{}  ", m.storage_hint_refresh),
             Style::default().fg(pal.dim),
         ),
+        Span::styled("[a] Analisar  ", Style::default().fg(pal.dim)),
     ]));
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);

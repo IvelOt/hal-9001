@@ -2249,6 +2249,11 @@ pub async fn run(
                 }
             }
             res = actions.recv() => match res {
+                Ok(Action::StorageAnalyzerScan(path)) => {
+                    // Varredura pura de filesystem — não depende do UDisks2/
+                    // D-Bus, então roda mesmo enquanto `conn` está indisponível.
+                    tokio::spawn(crate::backend::disk_analyzer::scan(path, tx.clone()));
+                }
                 Ok(action) => {
                     if let Some(c) = &conn {
                         handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels, &sudo_tx).await;

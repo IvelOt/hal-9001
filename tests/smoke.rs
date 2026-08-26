@@ -24,7 +24,7 @@ fn next_prev_tab_wraps() {
 
     assert_eq!(app.active, Tab::Overview);
     app.dispatch(hal9001::events::Action::PrevTab, &tx);
-    assert_eq!(app.active, Tab::Terminal); // wrap-around
+    assert_eq!(app.active, Tab::Displays); // wrap-around
     app.dispatch(hal9001::events::Action::NextTab, &tx);
     assert_eq!(app.active, Tab::Overview);
 }

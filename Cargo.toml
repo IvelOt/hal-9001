@@ -31,7 +31,6 @@ Permite monitorar CPU/RAM/Discos e controlar Wi-Fi, Bluetooth, Áudio (PipeWire/
 Displays com auto-expansão e gravação de mídias/ISOs de forma segura."""
 depends = "$auto, libdbus-1-3, systemd"
 recommends = "pipewire-bin | pulseaudio-utils, network-manager, bluez, udisks2, upower, x11-xserver-utils | wlr-randr"
-suggests = "yazi"
 section = "utils"
 priority = "optional"
 assets = [
@@ -75,10 +74,6 @@ fatfs = "0.3.6"
 
 # --- Descompressão em streaming do ISO Flasher (backend `miniz_oxide`, 100% Rust puro, zero bindings C/libz) ---
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-
-# --- embedded PTY (Terminal Deck / Yazi) ---
-portable-pty = "0.8"
-vt100 = "0.15"
 
 # --- config / serde ---
 serde = { version = "1", features = ["derive"] }

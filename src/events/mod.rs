@@ -7,8 +7,6 @@ pub mod input;
 
 use std::path::PathBuf;
 
-use crossterm::event::KeyEvent;
-
 use crate::backend::audio::AudioSnapshot;
 use crate::backend::bluetooth::BluetoothSnapshot;
 use crate::backend::display::DisplaySnapshot;
@@ -18,68 +16,6 @@ use crate::backend::system::SystemSnapshot;
 
 /// Sender de eventos usado pelos backends.
 pub type EventTx = tokio::sync::mpsc::UnboundedSender<AppEvent>;
-
-/// Sessão de PTY endereçada por uma `Action`/`AppEvent` de terminal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PtyTarget {
-    /// Aba 7 — Gerenciador de Arquivos (Yazi).
-    Files,
-    /// Aba 8 — Terminal Deck.
-    Terminal,
-}
-
-/// Cor de uma célula VT100, em forma neutra (sem depender de `ratatui`) —
-/// espelha `vt100::Color`. A conversão para `ratatui::style::Color` acontece
-/// na camada de render (`ui::terminal`/`ui::files`), preservando `events`
-/// livre de dependências de UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PtyColor {
-    #[default]
-    Default,
-    Indexed(u8),
-    Rgb(u8, u8, u8),
-}
-
-/// Uma célula da grade VT100 (caractere + atributos visuais).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PtyCell {
-    pub ch: char,
-    pub fg: PtyColor,
-    pub bg: PtyColor,
-    pub bold: bool,
-    pub underline: bool,
-    pub inverse: bool,
-    pub italic: bool,
-}
-
-impl Default for PtyCell {
-    /// Célula "vazia" — espaço em branco, sem atributos. Usado para células
-    /// fora dos limites do grid do `vt100::Screen` (ex.: continuação de
-    /// caractere largo). `char::default()` seria `'\0'`, que renderizaria
-    /// como um glifo de controle em vez de um espaço em branco.
-    fn default() -> Self {
-        Self {
-            ch: ' ',
-            fg: PtyColor::default(),
-            bg: PtyColor::default(),
-            bold: false,
-            underline: false,
-            inverse: false,
-            italic: false,
-        }
-    }
-}
-
-/// Snapshot completo da grade de uma sessão PTY, pronto para render — gerado
-/// pela thread leitora em `backend::pty` a partir do `vt100::Parser`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PtyScreenSnapshot {
-    pub cols: u16,
-    pub rows: u16,
-    pub cells: Vec<Vec<PtyCell>>,
-    pub cursor: (u16, u16),
-    pub cursor_visible: bool,
-}
 
 /// Identidade estável de um dispositivo/objeto UDisks2 — o caminho do objeto
 /// D-Bus (ex.: `/org/freedesktop/UDisks2/block_devices/sdb1`). Usado em vez do
@@ -196,19 +132,13 @@ pub enum AppEvent {
         device_id: String,
         result: Result<String, String>,
     },
-    /// Novo frame renderizado da grade VT100 de uma sessão PTY (Módulos 7/8).
-    /// Boxed pelo mesmo motivo dos demais snapshots grandes.
-    PtyScreenUpdate {
-        target: PtyTarget,
-        screen: Box<PtyScreenSnapshot>,
-    },
-    /// A sessão PTY solicitada não pôde ser iniciada (ex.: `yazi` ausente do
-    /// `$PATH`) — distinto de `ServiceDegraded` para permitir que a aba
-    /// Arquivos renderize o cartão de instruções de instalação específico.
-    PtyUnavailable { target: PtyTarget, reason: String },
-    /// O processo filho da sessão PTY encerrou (o backend pode reiniciá-lo
-    /// automaticamente uma vez).
-    PtyExited { target: PtyTarget },
+    /// Resultado (concluído) de uma varredura do Analisador de Espaço em
+    /// Disco Nativo, disparada por `Action::StorageOpenAnalyzer` — ver
+    /// `backend::disk_analyzer`.
+    StorageAnalyzerSnapshot(Box<crate::backend::disk_analyzer::DiskUsageSnapshot>),
+    /// Uma varredura do Analisador de Espaço em Disco falhou (ex.: diretório
+    /// inacessível).
+    StorageAnalyzerError { path: PathBuf, message: String },
 }
 
 /// Solicitação do backend de Storage para obter a senha de sudo através do
@@ -348,6 +278,22 @@ pub enum Action {
     StorageModalDelete,
     /// Tecla dedicada (F3) que abre o seletor de arquivos.
     StorageModalOpenPicker,
+    /// Tecla `a`: abre o Analisador de Espaço em Disco Nativo, iniciando a
+    /// varredura em `path` (ou no ponto de montagem do drive selecionado,
+    /// quando `None`).
+    StorageOpenAnalyzer(Option<PathBuf>),
+    /// Tecla `Enter`/`l` no Analisador: desce no diretório selecionado.
+    StorageAnalyzerDrillDown,
+    /// Tecla `Backspace`/`h` no Analisador: sobe para o diretório pai.
+    StorageAnalyzerGoUp,
+    /// Tecla `r` no Analisador: re-escaneia o diretório atual.
+    StorageAnalyzerRescan,
+    /// Tecla `Esc` no Analisador: fecha e descarta a varredura.
+    StorageAnalyzerClose,
+    /// Dispara (via broadcast, consumido pelo backend de Storage) a
+    /// varredura assíncrona de `path`, publicando o resultado como
+    /// `AppEvent::StorageAnalyzerSnapshot`.
+    StorageAnalyzerScan(PathBuf),
     /// Ações de Rede e Wi-Fi (Módulo 2)
     NetworkRescan,
     NetworkToggleRadio,
@@ -379,21 +325,4 @@ pub enum Action {
     DisplaySetLayout(crate::backend::display::DisplayLayoutMode),
     DisplaySetResolution { display: String, mode: String, rate: Option<f32> },
     DisplaySetPrimary(String),
-    /// Tecla não mapeada — repassada para PTY quando a aba tem foco de terminal.
-    Raw(KeyEvent),
-    /// Bytes de input a escrever na sessão PTY `target` (Módulos 7/8),
-    /// já codificados em sequências VT100/xterm por `events::input`.
-    PtyInput { target: PtyTarget, bytes: Vec<u8> },
-    /// Redimensiona a sessão PTY `target` para `cols`x`rows`.
-    PtyResize {
-        target: PtyTarget,
-        cols: u16,
-        rows: u16,
-    },
-    /// Tecla `Enter` nas abas Arquivos/Terminal com a sessão pronta: dá foco
-    /// de teclado ao PTY ativo.
-    PtyFocus,
-    /// Leader `Ctrl-a` ou `Esc` com o PTY em foco: devolve o foco ao chrome
-    /// da TUI (tabbar/atalhos globais).
-    PtyUnfocus,
 }

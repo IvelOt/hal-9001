@@ -42,10 +42,6 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     render_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Render inicial
-    let term_size = terminal.size().unwrap_or_default();
-    for resize in app.sync_pty_size(term_size.width, term_size.height) {
-        let _ = action_tx.send(resize);
-    }
     terminal.draw(|f| ui::draw(&app, f))?;
 
     loop {
@@ -54,10 +50,6 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                 for follow_up in app.handle_event(ev) {
                     let _ = action_tx.send(follow_up);
                 }
-                let term_size = terminal.size().unwrap_or_default();
-                for resize in app.sync_pty_size(term_size.width, term_size.height) {
-                    let _ = action_tx.send(resize);
-                }
                 terminal.draw(|f| ui::draw(&app, f))?;
             }
             Some(action) = input.next(
@@ -65,29 +57,17 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                 app.storage_modal_open(),
                 app.text_input_active(),
                 app.sudo_prompt_open(),
-                app.pty_focused(),
+                app.storage_analyzer_open(),
             ) => {
                 app.dispatch(action, &action_tx);
-                let term_size = terminal.size().unwrap_or_default();
-                for resize in app.sync_pty_size(term_size.width, term_size.height) {
-                    let _ = action_tx.send(resize);
-                }
                 terminal.draw(|f| ui::draw(&app, f))?;
             }
             Some(req) = sudo_rx.recv() => {
                 app.open_sudo_prompt(req);
-                let term_size = terminal.size().unwrap_or_default();
-                for resize in app.sync_pty_size(term_size.width, term_size.height) {
-                    let _ = action_tx.send(resize);
-                }
                 terminal.draw(|f| ui::draw(&app, f))?;
             }
             _ = render_tick.tick(), if app.needs_continuous_tick() => {
                 app.on_tick();
-                let term_size = terminal.size().unwrap_or_default();
-                for resize in app.sync_pty_size(term_size.width, term_size.height) {
-                    let _ = action_tx.send(resize);
-                }
                 terminal.draw(|f| ui::draw(&app, f))?;
             }
         }

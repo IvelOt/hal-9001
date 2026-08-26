@@ -7,11 +7,11 @@
 
 pub mod audio;
 pub mod bluetooth;
+pub mod disk_analyzer;
 pub mod display;
 pub mod multiboot;
 pub mod network;
 pub mod power;
-pub mod pty;
 pub mod storage;
 pub mod system;
 pub mod updates;
@@ -70,9 +70,6 @@ pub fn spawn_all(
         tx.clone(),
         action_tx.subscribe(),
     ));
-
-    // Stubs — sobem e registram estado "pendente" (Módulos 7..8).
-    tokio::spawn(pty::run(tx, action_tx.subscribe()));
 }
 
 /// Loop utilitário para um backend ainda não implementado: registra-se como

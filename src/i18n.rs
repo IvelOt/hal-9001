@@ -87,8 +87,6 @@ pub struct Messages {
     pub tab_storage: &'static str,
     pub tab_audio: &'static str,
     pub tab_displays: &'static str,
-    pub tab_files: &'static str,
-    pub tab_terminal: &'static str,
 
     // Seções do Overview
     pub sec_compute: &'static str,
@@ -265,24 +263,6 @@ pub struct Messages {
     pub multiboot_iso_mgr_copy_failed: &'static str,
     pub multiboot_iso_mgr_remove_done: &'static str,
     pub multiboot_iso_mgr_remove_failed: &'static str,
-
-    // Aba 7 — Gerenciador de Arquivos (Yazi via PTY)
-    pub files_unavailable_title: &'static str,
-    pub files_unavailable_install_pacman: &'static str,
-    pub files_unavailable_install_cargo: &'static str,
-    pub files_starting: &'static str,
-    pub files_exited: &'static str,
-
-    // Aba 8 — Terminal Deck (PTY + VT100)
-    pub terminal_starting: &'static str,
-    pub terminal_exited: &'static str,
-    pub terminal_unavailable_title: &'static str,
-
-    // Comuns às abas PTY (Arquivos/Terminal)
-    pub pty_status_focused: &'static str,
-    pub pty_status_navigation: &'static str,
-    pub pty_hint_focus: &'static str,
-    pub pty_hint_unfocus: &'static str,
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +280,6 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     tab_storage: "Discos",
     tab_audio: "Áudio",
     tab_displays: "Telas",
-    tab_files: "Arquivos",
-    tab_terminal: "Terminal",
 
     sec_compute: "Available Compute / Hardware",
     sec_system: "System & Platform",
@@ -457,21 +435,6 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     multiboot_iso_mgr_copy_failed: "Falha ao copiar a ISO",
     multiboot_iso_mgr_remove_done: "ISO removida com sucesso",
     multiboot_iso_mgr_remove_failed: "Falha ao remover a ISO",
-
-    files_unavailable_title: "yazi não encontrado",
-    files_unavailable_install_pacman: "Arch Linux:  sudo pacman -S yazi",
-    files_unavailable_install_cargo: "Cargo:       cargo install --locked yazi-fm yazi-cli",
-    files_starting: "Iniciando sessão do Yazi...",
-    files_exited: "A sessão do Yazi encerrou.",
-
-    terminal_starting: "Iniciando shell...",
-    terminal_exited: "O shell encerrou.",
-    terminal_unavailable_title: "Terminal indisponível",
-
-    pty_status_focused: "[Focado]",
-    pty_status_navigation: "[Navegação]",
-    pty_hint_focus: "[Enter] focar",
-    pty_hint_unfocus: "[Ctrl-a]/[Esc] devolver foco à tabbar",
 };
 
 // ---------------------------------------------------------------------------
@@ -489,8 +452,6 @@ pub static MESSAGES_EN_US: Messages = Messages {
     tab_storage: "Storage",
     tab_audio: "Audio",
     tab_displays: "Displays",
-    tab_files: "Files",
-    tab_terminal: "Terminal",
 
     sec_compute: "Available Compute / Hardware",
     sec_system: "System & Platform",
@@ -647,21 +608,6 @@ pub static MESSAGES_EN_US: Messages = Messages {
     multiboot_iso_mgr_copy_failed: "Failed to copy the ISO",
     multiboot_iso_mgr_remove_done: "ISO removed successfully",
     multiboot_iso_mgr_remove_failed: "Failed to remove the ISO",
-
-    files_unavailable_title: "yazi not found",
-    files_unavailable_install_pacman: "Arch Linux:  sudo pacman -S yazi",
-    files_unavailable_install_cargo: "Cargo:       cargo install --locked yazi-fm yazi-cli",
-    files_starting: "Starting Yazi session...",
-    files_exited: "The Yazi session has exited.",
-
-    terminal_starting: "Starting shell...",
-    terminal_exited: "The shell has exited.",
-    terminal_unavailable_title: "Terminal unavailable",
-
-    pty_status_focused: "[Focused]",
-    pty_status_navigation: "[Navigation]",
-    pty_hint_focus: "[Enter] focus",
-    pty_hint_unfocus: "[Ctrl-a]/[Esc] return focus to tabbar",
 };
 
 // ---------------------------------------------------------------------------
@@ -679,8 +625,6 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     tab_storage: "Discos",
     tab_audio: "Audio",
     tab_displays: "Pantallas",
-    tab_files: "Archivos",
-    tab_terminal: "Terminal",
 
     sec_compute: "Disponibilidade de Hardware",
     sec_system: "Sistema y Plataforma",
@@ -836,19 +780,4 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     multiboot_iso_mgr_copy_failed: "Error al copiar la ISO",
     multiboot_iso_mgr_remove_done: "ISO eliminada con éxito",
     multiboot_iso_mgr_remove_failed: "Error al eliminar la ISO",
-
-    files_unavailable_title: "yazi no encontrado",
-    files_unavailable_install_pacman: "Arch Linux:  sudo pacman -S yazi",
-    files_unavailable_install_cargo: "Cargo:       cargo install --locked yazi-fm yazi-cli",
-    files_starting: "Iniciando sesión de Yazi...",
-    files_exited: "La sesión de Yazi ha finalizado.",
-
-    terminal_starting: "Iniciando shell...",
-    terminal_exited: "El shell ha finalizado.",
-    terminal_unavailable_title: "Terminal no disponible",
-
-    pty_status_focused: "[Enfocado]",
-    pty_status_navigation: "[Navegación]",
-    pty_hint_focus: "[Enter] enfocar",
-    pty_hint_unfocus: "[Ctrl-a]/[Esc] devolver el foco a la barra de pestañas",
 };

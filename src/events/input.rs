@@ -5,7 +5,7 @@ use futures::StreamExt;
 
 use crate::app::Tab;
 
-use super::{Action, PtyTarget};
+use super::Action;
 
 /// Stream de input que traduz eventos de terminal em [`Action`]s.
 pub struct InputStream {
@@ -33,11 +33,9 @@ impl InputStream {
     /// modal nativo de senha de sudo estiver aberto, todo o teclado (mesmo
     /// fora da aba Storage) vira digitação mascarada nesse campo.
     ///
-    /// `pty_focused` tem a mesma prioridade máxima quando ativo: com o
-    /// teclado capturado pela sessão PTY da aba Arquivos/Terminal, toda
-    /// tecla vira `Action::PtyInput` (bytes VT100/xterm), exceto o leader de
-    /// escape (`Ctrl-a`/`Esc`) e as teclas de função `F1..F8`, que devolvem o
-    /// foco ao chrome da TUI.
+    /// `storage_analyzer_open` desvia o teclado para o Analisador de Espaço
+    /// em Disco Nativo (navegação, drill-down/up, re-escaneio e fechamento)
+    /// enquanto ele estiver aberto na aba Storage.
     #[allow(clippy::too_many_arguments)]
     pub async fn next(
         &mut self,
@@ -45,7 +43,7 @@ impl InputStream {
         storage_modal_open: bool,
         text_mode: bool,
         sudo_prompt_open: bool,
-        pty_focused: bool,
+        storage_analyzer_open: bool,
     ) -> Option<Action> {
         loop {
             match self.inner.next().await {
@@ -56,7 +54,7 @@ impl InputStream {
                         storage_modal_open,
                         text_mode,
                         sudo_prompt_open,
-                        pty_focused,
+                        storage_analyzer_open,
                     ) {
                         return Some(action);
                     }
@@ -85,7 +83,7 @@ fn map_key(
     storage_modal_open: bool,
     text_mode: bool,
     sudo_prompt_open: bool,
-    pty_focused: bool,
+    storage_analyzer_open: bool,
 ) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -94,25 +92,22 @@ fn map_key(
         return Some(Action::Quit);
     }
 
-    // PTY em foco (abas Arquivos/Terminal, Módulos 7/8): prioridade máxima
-    // (mesmo nível do modal de sudo). `Ctrl-a`/`Esc` e `F1..F8` devolvem o
-    // foco ao chrome; qualquer outra tecla vira input bruto para o PTY.
-    if pty_focused {
+    // Analisador de Espaço em Disco Nativo (aba Storage): prioridade máxima
+    // (mesmo nível do modal de sudo), enquanto estiver aberto.
+    if active == Tab::Storage && storage_analyzer_open {
         return match key.code {
-            KeyCode::F(n @ 1..=8) => Some(Action::SelectTab((n - 1) as usize)),
-            KeyCode::Esc => Some(Action::PtyUnfocus),
-            KeyCode::Char('a') if ctrl => Some(Action::PtyUnfocus),
-            _ => Some(Action::PtyInput {
-                target: pty_target_for(active),
-                bytes: key_to_pty_bytes(key),
-            }),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::Up),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::Down),
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                Some(Action::StorageAnalyzerDrillDown)
+            }
+            KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => {
+                Some(Action::StorageAnalyzerGoUp)
+            }
+            KeyCode::Char('r') => Some(Action::StorageAnalyzerRescan),
+            KeyCode::Esc => Some(Action::StorageAnalyzerClose),
+            _ => None,
         };
-    }
-
-    // Tecla `Enter` nas abas Arquivos/Terminal (sem foco de PTY ainda): pede
-    // para o `App` dar foco ao PTY, se a sessão já estiver rodando.
-    if (active == Tab::Files || active == Tab::Terminal) && key.code == KeyCode::Enter {
-        return Some(Action::PtyFocus);
     }
 
     // Modal nativo de senha de sudo: prioridade máxima, funciona em qualquer
@@ -247,6 +242,9 @@ fn map_key(
             KeyCode::Char('G') if !storage_modal_open => {
                 return Some(Action::StorageMultibootIsoManagerOpen)
             }
+            KeyCode::Char('a') if !storage_modal_open => {
+                return Some(Action::StorageOpenAnalyzer(None))
+            }
             KeyCode::Delete if storage_modal_open => return Some(Action::StorageModalDelete),
             KeyCode::Char(c) if storage_modal_open => return Some(Action::StorageModalChar(c)),
             KeyCode::Char('m') if !storage_modal_open => {
@@ -263,10 +261,11 @@ fn map_key(
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Tab => Some(Action::NextTab),
         KeyCode::BackTab => Some(Action::PrevTab),
-        KeyCode::Char(c @ '1'..='8') => {
+        KeyCode::Char(c @ '1'..='6') => {
             let idx = (c as u8 - b'1') as usize;
             Some(Action::SelectTab(idx))
         }
+        KeyCode::F(n @ 1..=6) => Some(Action::SelectTab((n - 1) as usize)),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::Down),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::Up),
         KeyCode::Left | KeyCode::Char('h') => Some(Action::Left),
@@ -275,8 +274,8 @@ fn map_key(
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('U') => Some(Action::CheckUpdates),
         KeyCode::Char('.') => Some(Action::ToggleDetail),
-        // Configurações interativas: `c`/`C` ou F2.
-        KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::F(2) => Some(Action::ToggleConfig),
+        // Configurações interativas: `c`/`C`.
+        KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::ToggleConfig),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SaveConfig),
         // Brilho: minúscula/`-` diminui, maiúscula/`+`/`=` aumenta.
         KeyCode::Char('b') | KeyCode::Char('-') => Some(Action::BrightnessDown),
@@ -289,55 +288,6 @@ fn map_key(
         KeyCode::Char('p') | KeyCode::Char('P') => Some(Action::CyclePowerProfile),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Esc => Some(Action::ToggleConfig),
-        _ => Some(Action::Raw(key)),
-    }
-}
-
-/// Sessão PTY endereçada pela aba ativa (só chamado quando `active` é
-/// `Files` ou `Terminal`, os únicos casos em que `pty_focused` pode ser
-/// `true`; qualquer outra aba cai no `_ => PtyTarget::Terminal` neutro, que
-/// nunca é de fato despachado por não haver como focar o PTY fora dessas
-/// duas abas).
-fn pty_target_for(active: Tab) -> PtyTarget {
-    match active {
-        Tab::Files => PtyTarget::Files,
-        _ => PtyTarget::Terminal,
-    }
-}
-
-/// Codifica uma tecla em bytes VT100/xterm para escrever na sessão PTY em
-/// foco — mesma convenção usada por emuladores de terminal reais (setas,
-/// Home/End/PageUp/PageDown/Delete como sequências CSI; `Ctrl+letra` como o
-/// byte de controle `0x01..=0x1A`; `Enter`/`Backspace`/`Tab` nos bytes
-/// clássicos). `Esc` e o leader `Ctrl-a` nunca chegam aqui — já são
-/// interceptados antes, em `map_key`.
-pub fn key_to_pty_bytes(key: KeyEvent) -> Vec<u8> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Char(c) => {
-            if ctrl {
-                let upper = c.to_ascii_uppercase();
-                if upper.is_ascii_uppercase() {
-                    return vec![(upper as u8) - b'A' + 1];
-                }
-            }
-            let mut buf = [0u8; 4];
-            c.encode_utf8(&mut buf).as_bytes().to_vec()
-        }
-        KeyCode::Enter => vec![b'\r'],
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Tab => vec![b'\t'],
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        _ => Vec::new(),
+        _ => None,
     }
 }

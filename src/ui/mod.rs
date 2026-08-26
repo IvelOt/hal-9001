@@ -8,13 +8,11 @@ pub mod bluetooth;
 pub mod config_modal;
 pub mod display;
 pub mod file_picker;
-pub mod files;
 pub mod network;
 pub mod overview;
 pub mod power;
 pub mod splash;
 pub mod storage;
-pub mod terminal;
 pub mod updates;
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -81,8 +79,6 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                     Tab::Storage => "Disco",
                     Tab::Audio => "Som",
                     Tab::Displays => "Tela",
-                    Tab::Files => "Arq",
-                    Tab::Terminal => "Term",
                 };
                 format!("{} {short}", i + 1)
             } else {
@@ -96,8 +92,6 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                         Tab::Storage => "Disco",
                         Tab::Audio => "Som",
                         Tab::Displays => "Tela",
-                        Tab::Files => "Arq",
-                        Tab::Terminal => "Term",
                     };
                     format!("{}:{}", i + 1, short)
                 } else {
@@ -154,8 +148,6 @@ fn draw_content(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         Tab::Storage => storage::draw(app, pal, f, area),
         Tab::Audio => audio::draw(app, pal, f, area),
         Tab::Displays => display::draw(app, pal, f, area),
-        Tab::Files => files::draw(app, pal, f, area),
-        Tab::Terminal => terminal::draw(app, pal, f, area),
     }
 }
 
@@ -177,11 +169,11 @@ fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     }
 
     let hints = if area.width < 50 {
-        " [1-8] Abas  [?] Ajuda  [q] Sair "
+        " [1-6] Abas  [?] Ajuda  [q] Sair "
     } else if area.width < 68 {
-        " [1-8/Tab] abas  [j/k] nav  [Enter] ação  [?] ajuda "
+        " [1-6/Tab] abas  [j/k] nav  [Enter] ação  [?] ajuda "
     } else {
-        " [1-8/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair "
+        " [1-6/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair "
     };
     let line = Line::from(Span::styled(hints, Style::default().fg(pal.dim)));
     f.render_widget(Paragraph::new(line), area);
@@ -197,7 +189,7 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("1..8 / Tab / Shift-Tab   trocar de aba"),
+        Line::from("1..6 / Tab / Shift-Tab   trocar de aba"),
         Line::from("j / k / ↑ / ↓            navegar listas"),
         Line::from("Enter                   ação primária do item"),
         Line::from("r                       refresh / rescan"),
@@ -281,34 +273,6 @@ pub(crate) fn draw_pending(
     }
 
     f.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Cols x rows disponíveis para a grade VT100 dentro da `area` de conteúdo
-/// de uma aba PTY (Arquivos/Terminal), depois de descontar o chrome fixo que
-/// `ui::terminal`/`ui::files` usam para o próprio layout: uma linha de
-/// cabeçalho, uma linha de rodapé, e as bordas do bloco que envolve a grade.
-/// Única fonte de verdade dessa conta — usada tanto pelo render quanto por
-/// `App::sync_pty_size` (via [`pty_grid_size_for_terminal`]), para que o
-/// tamanho da grade renderizada nunca fique fora de sincronia com o
-/// `PtySize` real da sessão.
-pub(crate) fn pty_grid_size(area: Rect) -> (u16, u16) {
-    let cols = area.width.saturating_sub(2); // bordas esquerda/direita do bloco
-    let rows = area.height.saturating_sub(4); // header(1) + footer(1) + bordas topo/baixo(2)
-    (cols.max(1), rows.max(1))
-}
-
-/// Mesma conta de [`pty_grid_size`], mas a partir do tamanho bruto do
-/// terminal (`term_w`x`term_h`), replicando o layout vertical de `ui::draw`
-/// (tabbar `Length(3)` + statusline `Length(1)`) para chegar à mesma `area`
-/// de conteúdo que `draw_content` passa às abas Arquivos/Terminal.
-pub(crate) fn pty_grid_size_for_terminal(term_w: u16, term_h: u16) -> (u16, u16) {
-    let content_area = Rect {
-        x: 0,
-        y: 0,
-        width: term_w,
-        height: term_h.saturating_sub(4), // tabbar(3) + statusline(1)
-    };
-    pty_grid_size(content_area)
 }
 
 /// Bloco padrão de conteúdo com título de aba.

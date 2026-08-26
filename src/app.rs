@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
+use crate::backend::disk_analyzer::DiskUsageItem;
 use crate::backend::storage::{primary_partition, DriveInfo, PartitionInfo, StorageSnapshot, VentoyIsoEntry};
 use crate::backend::system::SystemSnapshot;
 use crate::config::Config;
@@ -279,6 +280,44 @@ pub struct MultibootIsoManagerState {
     pub stage: MultibootIsoManagerStage,
 }
 
+/// Estado do Analisador de Espaço em Disco Nativo (tecla `a` na aba
+/// Storage) — navegação estilo `ncdu`/`dua`, independente dos modais em
+/// [`StorageModal`] (drives ainda podem ser montados/ejetados por baixo).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiskAnalyzerState {
+    pub current_path: PathBuf,
+    pub total_bytes: u64,
+    pub items: Vec<DiskUsageItem>,
+    pub selected: usize,
+    pub is_scanning: bool,
+    pub error: Option<String>,
+}
+
+impl DiskAnalyzerState {
+    /// Abre o Analisador em `path`, já marcado como "escaneando" — o
+    /// resultado chega depois via `AppEvent::StorageAnalyzerSnapshot`.
+    pub fn opening(path: PathBuf) -> Self {
+        Self {
+            current_path: path,
+            total_bytes: 0,
+            items: Vec::new(),
+            selected: 0,
+            is_scanning: true,
+            error: None,
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.items.len() {
+            self.selected += 1;
+        }
+    }
+}
+
 /// Modal interativo ativo na aba Storage (mutuamente exclusivo).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum StorageModal {
@@ -291,30 +330,27 @@ pub enum StorageModal {
 }
 
 /// Abas do Assistente de Sistema, na ordem da tabbar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
+    #[default]
     Overview,
     Network,
     Bluetooth,
     Storage,
     Audio,
     Displays,
-    Files,
-    Terminal,
 }
 
 use crate::i18n::Language;
 
 impl Tab {
-    pub const ALL: [Tab; 8] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Overview,
         Tab::Network,
         Tab::Bluetooth,
         Tab::Storage,
         Tab::Audio,
         Tab::Displays,
-        Tab::Files,
-        Tab::Terminal,
     ];
 
     pub fn index(self) -> usize {
@@ -335,8 +371,6 @@ impl Tab {
             Tab::Storage => m.tab_storage,
             Tab::Audio => m.tab_audio,
             Tab::Displays => m.tab_displays,
-            Tab::Files => m.tab_files,
-            Tab::Terminal => m.tab_terminal,
         }
     }
 
@@ -344,20 +378,6 @@ impl Tab {
     pub fn title(self) -> &'static str {
         self.title_in(Language::default())
     }
-}
-
-/// Estado de uma sessão PTY (Terminal Deck ou Yazi) do ponto de vista da UI.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum PtyState {
-    /// Sessão solicitada, aguardando o primeiro evento do backend.
-    #[default]
-    Starting,
-    /// A sessão não pôde ser iniciada (ex.: `yazi` ausente do `$PATH`).
-    Unavailable(String),
-    /// Sessão ativa, com o último frame renderizado.
-    Running(Box<crate::events::PtyScreenSnapshot>),
-    /// O processo filho encerrou.
-    Exited,
 }
 
 /// Fase de apresentação: splash animada antes do dashboard.
@@ -407,7 +427,7 @@ pub struct App {
     pub detailed_overview: bool,
 
     /// Índice selecionado por aba (para listas navegáveis).
-    pub selection: [usize; 8],
+    pub selection: [usize; 6],
 
     /// Último snapshot de sistema.
     pub system: Option<SystemSnapshot>,
@@ -418,6 +438,9 @@ pub struct App {
     pub storage_selected: usize,
     /// Modal interativo ativo na aba Storage (formatação ou ISO Flasher).
     pub storage_modal: StorageModal,
+    /// Estado do Analisador de Espaço em Disco Nativo (tecla `a`), quando
+    /// aberto — independente de `storage_modal`.
+    pub storage_analyzer: Option<DiskAnalyzerState>,
     /// Modal nativo de senha de sudo.
     pub sudo_prompt: Option<SudoPromptState>,
     sudo_respond: Option<tokio::sync::oneshot::Sender<Option<String>>>,
@@ -442,17 +465,6 @@ pub struct App {
     pub displays: Option<Box<crate::backend::display::DisplaySnapshot>>,
     pub display_selected: usize,
     pub display_res_selected: usize,
-
-    /// Estado da sessão PTY da aba Arquivos (Módulo 7 — Yazi).
-    pub files_pty: PtyState,
-    /// Estado da sessão PTY da aba Terminal Deck (Módulo 8).
-    pub terminal_pty: PtyState,
-    /// `true` quando o teclado está capturado pela sessão PTY da aba ativa
-    /// (Arquivos ou Terminal) em vez do chrome/atalhos globais da TUI.
-    pub pty_focused: bool,
-    /// Último tamanho de grade (cols, rows) informado às sessões PTY, usado
-    /// para só emitir `Action::PtyResize` quando o tamanho realmente muda.
-    pub last_pty_size: (u16, u16),
 
     /// Status por nome de serviço (network, bluetooth, ...).
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
@@ -481,11 +493,12 @@ impl App {
             show_config: false,
             config_cursor: 0,
             detailed_overview: false,
-            selection: [0; 8],
+            selection: [0; 6],
             system: None,
             storage: None,
             storage_selected: 0,
             storage_modal: StorageModal::None,
+            storage_analyzer: None,
             sudo_prompt: None,
             sudo_respond: None,
             network: None,
@@ -501,10 +514,6 @@ impl App {
             displays: None,
             display_selected: 0,
             display_res_selected: 0,
-            files_pty: PtyState::Starting,
-            terminal_pty: PtyState::Starting,
-            pty_focused: false,
-            last_pty_size: (0, 0),
             services: std::collections::HashMap::new(),
             toast: None,
             started: Instant::now(),
@@ -770,27 +779,23 @@ impl App {
                     }
                 }
             }
-            AppEvent::PtyScreenUpdate { target, screen } => match target {
-                crate::events::PtyTarget::Files => self.files_pty = PtyState::Running(screen),
-                crate::events::PtyTarget::Terminal => self.terminal_pty = PtyState::Running(screen),
-            },
-            AppEvent::PtyUnavailable { target, reason } => match target {
-                crate::events::PtyTarget::Files => self.files_pty = PtyState::Unavailable(reason),
-                crate::events::PtyTarget::Terminal => {
-                    self.terminal_pty = PtyState::Unavailable(reason)
+            AppEvent::StorageAnalyzerSnapshot(snap) => {
+                if let Some(state) = &mut self.storage_analyzer {
+                    // Descarta respostas de uma varredura já obsoleta (o
+                    // usuário navegou para outro diretório antes dela chegar).
+                    if state.current_path == snap.current_path {
+                        state.total_bytes = snap.total_bytes;
+                        state.items = snap.items;
+                        state.selected = 0;
+                        state.is_scanning = false;
+                        state.error = None;
+                    }
                 }
-            },
-            AppEvent::PtyExited { target } => {
-                let is_active_target = (target == crate::events::PtyTarget::Files
-                    && self.active == Tab::Files)
-                    || (target == crate::events::PtyTarget::Terminal
-                        && self.active == Tab::Terminal);
-                if is_active_target {
-                    self.pty_focused = false;
-                }
-                match target {
-                    crate::events::PtyTarget::Files => self.files_pty = PtyState::Exited,
-                    crate::events::PtyTarget::Terminal => self.terminal_pty = PtyState::Exited,
+            }
+            AppEvent::StorageAnalyzerError { message, .. } => {
+                if let Some(state) = &mut self.storage_analyzer {
+                    state.is_scanning = false;
+                    state.error = Some(message);
                 }
             }
         }
@@ -1057,38 +1062,11 @@ impl App {
         self.wifi_prompt.is_some()
     }
 
-    /// `true` quando o teclado está capturado pela sessão PTY da aba ativa
-    /// (Arquivos/Terminal) — usado por `InputStream::next` para desviar toda
-    /// a digitação, com prioridade análoga a `storage_modal_open`.
-    pub fn pty_focused(&self) -> bool {
-        self.pty_focused
-    }
-
-    /// Recalcula o tamanho de grade (cols, rows) disponível para as sessões
-    /// PTY a partir do tamanho `term_w`x`term_h` do terminal e, se mudou
-    /// desde a última chamada, devolve as `Action::PtyResize` a difundir para
-    /// o backend (uma por sessão). Chamado uma vez por tick em `lib.rs`, não
-    /// a partir de `draw()` — a camada `ui` permanece uma função pura de
-    /// `&App`.
-    pub fn sync_pty_size(&mut self, term_w: u16, term_h: u16) -> Vec<Action> {
-        let size = crate::ui::pty_grid_size_for_terminal(term_w, term_h);
-        if size == self.last_pty_size {
-            return Vec::new();
-        }
-        self.last_pty_size = size;
-        let (cols, rows) = size;
-        vec![
-            Action::PtyResize {
-                target: crate::events::PtyTarget::Files,
-                cols,
-                rows,
-            },
-            Action::PtyResize {
-                target: crate::events::PtyTarget::Terminal,
-                cols,
-                rows,
-            },
-        ]
+    /// `true` quando o Analisador de Espaço em Disco Nativo está aberto —
+    /// usado por `InputStream::next` para rotear o teclado, com a mesma
+    /// prioridade de `storage_modal_open`.
+    pub fn storage_analyzer_open(&self) -> bool {
+        self.storage_analyzer.is_some()
     }
 
     fn dispatch_wifi_prompt(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
@@ -1187,6 +1165,96 @@ impl App {
                 target_size: drive.size,
             },
         ));
+    }
+
+    /// Tecla `a`: abre o Analisador de Espaço em Disco Nativo no ponto de
+    /// montagem da partição primária do drive selecionado, ou em `$HOME`
+    /// quando o drive não tiver um ponto de montagem resolvível.
+    fn storage_analyzer_open_selected(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let start = self
+            .storage_selection()
+            .and_then(|(_, part)| part)
+            .and_then(|p| p.mount_points.first().cloned())
+            .map(PathBuf::from)
+            .unwrap_or_else(Self::home_dir);
+        self.storage_analyzer = Some(DiskAnalyzerState::opening(start.clone()));
+        let _ = action_tx.send(Action::StorageAnalyzerScan(start));
+    }
+
+    /// Tecla `Enter`/`l`: desce no diretório selecionado da listagem atual.
+    fn storage_analyzer_drill_down(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some(state) = &self.storage_analyzer else {
+            return;
+        };
+        let Some(item) = state.items.get(state.selected) else {
+            return;
+        };
+        if !item.is_dir {
+            return;
+        }
+        let new_path = state.current_path.join(&item.name);
+        if let Some(state) = &mut self.storage_analyzer {
+            state.current_path = new_path.clone();
+            state.items.clear();
+            state.selected = 0;
+            state.is_scanning = true;
+            state.error = None;
+        }
+        let _ = action_tx.send(Action::StorageAnalyzerScan(new_path));
+    }
+
+    /// Tecla `Backspace`/`h`: sobe para o diretório pai (sem efeito na raiz).
+    fn storage_analyzer_go_up(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some(state) = &self.storage_analyzer else {
+            return;
+        };
+        let Some(parent) = state.current_path.parent().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        if let Some(state) = &mut self.storage_analyzer {
+            state.current_path = parent.clone();
+            state.items.clear();
+            state.selected = 0;
+            state.is_scanning = true;
+            state.error = None;
+        }
+        let _ = action_tx.send(Action::StorageAnalyzerScan(parent));
+    }
+
+    /// Tecla `r`: re-escaneia o diretório atual do Analisador.
+    fn storage_analyzer_rescan(&mut self, action_tx: &broadcast::Sender<Action>) {
+        let Some(state) = &mut self.storage_analyzer else {
+            return;
+        };
+        state.is_scanning = true;
+        state.error = None;
+        let path = state.current_path.clone();
+        let _ = action_tx.send(Action::StorageAnalyzerScan(path));
+    }
+
+    /// Roteia uma `Action` para o Analisador de Espaço em Disco quando
+    /// aberto — navegação, drill-down/up, re-escaneio e fechamento.
+    fn dispatch_storage_analyzer(&mut self, action: Action, action_tx: &broadcast::Sender<Action>) {
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::StorageAnalyzerClose | Action::ToggleConfig => self.storage_analyzer = None,
+            Action::Up => {
+                if let Some(s) = &mut self.storage_analyzer {
+                    s.move_up();
+                }
+            }
+            Action::Down => {
+                if let Some(s) = &mut self.storage_analyzer {
+                    s.move_down();
+                }
+            }
+            Action::StorageAnalyzerDrillDown | Action::Enter => {
+                self.storage_analyzer_drill_down(action_tx)
+            }
+            Action::StorageAnalyzerGoUp => self.storage_analyzer_go_up(action_tx),
+            Action::StorageAnalyzerRescan => self.storage_analyzer_rescan(action_tx),
+            _ => {}
+        }
     }
 
     /// Tecla `B`: prepara (não-destrutivamente) a partição primária do drive
@@ -1724,6 +1792,13 @@ impl App {
             return;
         }
 
+        // Se o Analisador de Espaço em Disco estiver aberto, captura
+        // navegação/drill-down antes de qualquer outro roteamento.
+        if self.storage_analyzer_open() {
+            self.dispatch_storage_analyzer(action, action_tx);
+            return;
+        }
+
         // Se o modal de configurações estiver aberto, captura a navegação e controles.
         if self.show_config {
             match action {
@@ -1759,16 +1834,13 @@ impl App {
             }
             Action::NextTab => {
                 self.active = Tab::from_index((self.active.index() + 1) % Tab::ALL.len());
-                self.pty_focused = false;
             }
             Action::PrevTab => {
                 let n = Tab::ALL.len();
                 self.active = Tab::from_index((self.active.index() + n - 1) % n);
-                self.pty_focused = false;
             }
             Action::SelectTab(i) => {
                 self.active = Tab::from_index(i);
-                self.pty_focused = false;
             }
             Action::Up => {
                 if self.active == Tab::Storage {
@@ -2025,6 +2097,13 @@ impl App {
             Action::StorageEjectSelected => self.storage_eject_selected(action_tx),
             Action::StorageFormatOpen => self.storage_format_open(),
             Action::StorageFlasherOpen => self.storage_flasher_open(),
+            Action::StorageOpenAnalyzer(path) => match path {
+                Some(p) => {
+                    self.storage_analyzer = Some(DiskAnalyzerState::opening(p.clone()));
+                    let _ = action_tx.send(Action::StorageAnalyzerScan(p));
+                }
+                None => self.storage_analyzer_open_selected(action_tx),
+            },
             Action::StorageMultibootPrepareOpen => self.storage_multiboot_prepare_open(action_tx),
             Action::StorageMultibootIsoManagerOpen => {
                 self.storage_multiboot_iso_manager_open(action_tx)
@@ -2051,23 +2130,15 @@ impl App {
             | Action::StorageModalBackspace
             | Action::StorageModalDelete
             | Action::StorageModalOpenPicker => {}
-            Action::Raw(_key) => {
-                // Tecla sem mapeamento global e fora do foco de PTY; ignorada.
-            }
-            Action::PtyInput { .. } | Action::PtyResize { .. } => {
+            // Sem o Analisador aberto (já capturado antes, no topo de
+            // `dispatch`), estas intenções não têm alvo; ignora.
+            Action::StorageAnalyzerDrillDown
+            | Action::StorageAnalyzerGoUp
+            | Action::StorageAnalyzerRescan
+            | Action::StorageAnalyzerClose => {}
+            Action::StorageAnalyzerScan(_) => {
                 let _ = action_tx.send(action);
             }
-            Action::PtyFocus => {
-                let running = match self.active {
-                    Tab::Files => matches!(self.files_pty, PtyState::Running(_)),
-                    Tab::Terminal => matches!(self.terminal_pty, PtyState::Running(_)),
-                    _ => false,
-                };
-                if running {
-                    self.pty_focused = true;
-                }
-            }
-            Action::PtyUnfocus => self.pty_focused = false,
         }
     }
 }
