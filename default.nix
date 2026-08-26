@@ -10,9 +10,9 @@
 , upower ? null
 , wireplumber ? null
 , pulseaudio ? null
-, xorg ? null
+, xrandr ? null
 , wlr-randr ? null
-, yazi ? null
+, hyprland ? null
 }:
 
 rustPlatform.buildRustPackage {
@@ -55,9 +55,9 @@ rustPlatform.buildRustPackage {
         upower
         wireplumber
         pulseaudio
-        (if xorg != null then xorg.xrandr else null)
+        xrandr
         wlr-randr
-        yazi
+        hyprland
       ])}
   '';
 
