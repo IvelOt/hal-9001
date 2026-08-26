@@ -11,12 +11,12 @@ import subprocess
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
-COLS = 100
-ROWS = 30
+COLS = 110
+ROWS = 32
 FONT_PATH = "/home/ivelot/.local/share/fonts/JetBrainsMono/JetBrainsMonoNerdFont-Regular.ttf"
-FONT_SIZE = 16
-PAD_X = 20
-PAD_Y = 20
+FONT_SIZE = 26
+PAD_X = 36
+PAD_Y = 36
 BG_COLOR = (13, 15, 24)
 
 ANSI_COLORS = {
@@ -57,7 +57,7 @@ def parse_color(c, is_bg=False):
 def render_screen_to_image(screen, font):
     bbox = font.getbbox("M")
     char_w = bbox[2] - bbox[0] + 1
-    char_h = int(FONT_SIZE * 1.5)
+    char_h = int(FONT_SIZE * 1.55)
 
     img_w = COLS * char_w + (PAD_X * 2)
     img_h = ROWS * char_h + (PAD_Y * 2)
@@ -106,7 +106,7 @@ def capture_sessions(binary_path, out_dir):
     ]
 
     for filename, key_seq in targets:
-        print(f"[*] Capturing {filename} with keys {key_seq}...")
+        print(f"[*] Capturing {filename} in English (2x HD) with keys {key_seq}...")
         master, slave = pty.openpty()
         set_terminal_size(slave, COLS, ROWS)
 
@@ -116,7 +116,9 @@ def capture_sessions(binary_path, out_dir):
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
-        env["LANG"] = "pt_BR.UTF-8"
+        env["LANG"] = "en_US.UTF-8"
+        env["LC_ALL"] = "en_US.UTF-8"
+        env["LC_MESSAGES"] = "en_US.UTF-8"
         env["HAL9001_CONFIG"] = "/nonexistent/config.toml"
 
         p = subprocess.Popen(
@@ -135,9 +137,9 @@ def capture_sessions(binary_path, out_dir):
 
         for k in key_seq:
             os.write(master, k.encode("utf-8"))
-            time.sleep(0.3)
+            time.sleep(0.35)
 
-        deadline = time.time() + 1.0
+        deadline = time.time() + 1.2
         while time.time() < deadline:
             r, _, _ = select.select([master], [], [], 0.1)
             if r:
@@ -160,10 +162,10 @@ def capture_sessions(binary_path, out_dir):
         img = render_screen_to_image(screen, font)
         out_path = os.path.join(out_dir, filename)
         img.save(out_path, "PNG", optimize=True)
-        print(f"    Saved: {out_path}")
+        print(f"    Saved: {out_path} ({img.width}x{img.height})")
 
 if __name__ == "__main__":
     bin_path = "/home/ivelot/Projetos/firstmate/projects/hall-9001/target/release/hal9001"
     output_dir = "/home/ivelot/Projetos/firstmate/projects/hall-9001/assets/screenshots"
     capture_sessions(bin_path, output_dir)
-    print("[+] All screenshots generated successfully!")
+    print("[+] All high-res English screenshots generated successfully!")
