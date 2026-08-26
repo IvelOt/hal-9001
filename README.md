@@ -12,17 +12,21 @@ Inspired by classic sci-fi aesthetics and engineered for maximum efficiency, HAL
 
 ## Screenshots
 
-| Overview & Telemetry (Tab 1) | Network & Wi-Fi (Tab 2) |
+| Overview & Telemetry (Tab 1) | Detailed Overview & Top Processes (Tab 1 `[.]`) |
 |:---:|:---:|
-| ![Overview](assets/screenshots/overview.png) | ![Network Management](assets/screenshots/network.png) |
+| ![Overview](assets/screenshots/overview.png) | ![Detailed Overview](assets/screenshots/overview_detailed.png) |
 
-| Bluetooth & Devices (Tab 3) | Storage & Disk Space Analyzer (Tab 4) |
+| Network & Wi-Fi Access Points (Tab 2) | Bluetooth & Peripheral Devices (Tab 3) |
 |:---:|:---:|
-| ![Bluetooth Management](assets/screenshots/tab3_bluetooth.png) | ![Storage Management](assets/screenshots/storage.png) |
+| ![Network Management](assets/screenshots/network.png) | ![Bluetooth Management](assets/screenshots/bluetooth.png) |
 
-| Audio Mixer & Per-App Streams (Tab 5) | Displays & Monitors / Auto-Expand (Tab 6) |
+| Storage, Drives & Partitions (Tab 4) | Native Disk Space Analyzer (Tab 4 `[a]`) |
 |:---:|:---:|
-| ![Audio Mixer](assets/screenshots/tab5_audio.png) | ![Displays Management](assets/screenshots/tab6_display.png) |
+| ![Storage Management](assets/screenshots/storage.png) | ![Disk Space Analyzer](assets/screenshots/tab4_disk_analyzer.png) |
+
+| PipeWire & PulseAudio Mixer (Tab 5) | Displays & Virtual Canvas Auto-Expand (Tab 6) |
+|:---:|:---:|
+| ![Audio Mixer](assets/screenshots/audio_mixer.png) | ![Displays Management](assets/screenshots/displays.png) |
 
 ---
 
