@@ -66,14 +66,16 @@ pub fn draw(app: &App, f: &mut Frame) {
 
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
-    let is_compact = area.width < 72;
+    let width = area.width;
 
     let titles: Vec<Line> = Tab::ALL
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let label = if is_compact {
-                match t {
+            let label = if width >= 75 {
+                format!("{} {}", i + 1, t.title_in(app.lang))
+            } else if width >= 58 {
+                let short = match t {
                     Tab::Overview => "Visão",
                     Tab::Network => "Rede",
                     Tab::Bluetooth => "BT",
@@ -82,20 +84,39 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
                     Tab::Displays => "Tela",
                     Tab::Files => "Arq",
                     Tab::Terminal => "Term",
-                }
+                };
+                format!("{} {short}", i + 1)
             } else {
-                t.title_in(app.lang)
+                // Modo ultra-compacto para celular / telas estreitas:
+                // Exibe o nome apenas na aba ativa e apenas o número nas demais!
+                if app.active == *t {
+                    let short = match t {
+                        Tab::Overview => "Visão",
+                        Tab::Network => "Rede",
+                        Tab::Bluetooth => "BT",
+                        Tab::Storage => "Disco",
+                        Tab::Audio => "Som",
+                        Tab::Displays => "Tela",
+                        Tab::Files => "Arq",
+                        Tab::Terminal => "Term",
+                    };
+                    format!("{}:{}", i + 1, short)
+                } else {
+                    format!("{}", i + 1)
+                }
             };
-            Line::from(vec![
-                Span::styled(format!("{} ", i + 1), Style::default().fg(pal.dim)),
-                Span::raw(label),
-            ])
+            Line::from(Span::raw(label))
         })
         .collect();
 
     // Título da janela: nome do assistente + SO/arch (ou simplificado em telas estreitas).
-    let title = if is_compact {
+    let title = if width < 50 {
         " HAL-9001 ".to_string()
+    } else if width < 75 {
+        match &app.system {
+            Some(s) => format!(" HAL-9001 ({}) ", s.os),
+            None => " HAL-9001 ".to_string(),
+        }
     } else {
         match &app.system {
             Some(s) => {
@@ -161,8 +182,13 @@ fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
-    let hints =
-        " [1-8/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair ";
+    let hints = if area.width < 50 {
+        " [1-8] Abas  [?] Ajuda  [q] Sair "
+    } else if area.width < 68 {
+        " [1-8/Tab] abas  [j/k] nav  [Enter] ação  [?] ajuda "
+    } else {
+        " [1-8/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair "
+    };
     let line = Line::from(Span::styled(hints, Style::default().fg(pal.dim)));
     f.render_widget(Paragraph::new(line), area);
 }

@@ -171,7 +171,7 @@ fn draw_single_column(app: &App, s: &SystemSnapshot, pal: &Palette, f: &mut Fram
 
     let content_h = (lines.len() as u16).min(area.height).max(1);
     let vband = Layout::vertical([Constraint::Length(content_h)])
-        .flex(Flex::Start)
+        .flex(Flex::Center)
         .split(area)[0];
 
     let info_w = info_w.min(area.width);
@@ -210,30 +210,46 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ]
     };
     let mut spans = Vec::new();
-    let details_label = if app.lang == crate::i18n::Language::EnUs {
-        "Details:"
-    } else if app.lang == crate::i18n::Language::EsEs {
-        "Detalles:"
+
+    if area.width < 50 {
+        // Modo ultra-compacto para celular
+        spans.extend(hint(".", "Det"));
+        spans.extend(hint("p", "Perfil"));
+        spans.extend(hint("c", "Config"));
+    } else if area.width < 68 {
+        // Modo médio
+        spans.extend(hint(".", "Detalhe"));
+        spans.extend(hint("p", m.label_power_profile));
+        spans.extend(hint("b/v", "Brilho/Vol"));
+        spans.extend(hint("c", "Config"));
     } else {
-        "Detalhes:"
-    };
-    spans.extend(hint(".", details_label));
-    spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
-    let mute_label = match app.lang {
-        crate::i18n::Language::EnUs => "Mute",
-        crate::i18n::Language::EsEs => "Mudo",
-        crate::i18n::Language::PtBr => "Mudo",
-    };
-    let config_label = match app.lang {
-        crate::i18n::Language::EnUs => "Config",
-        crate::i18n::Language::EsEs => "Config",
-        crate::i18n::Language::PtBr => "Config",
-    };
-    spans.extend(hint("p", m.label_power_profile));
-    spans.extend(hint("b/B", m.label_brightness));
-    spans.extend(hint("v/V", m.label_volume));
-    spans.extend(hint("m", mute_label));
-    spans.extend(hint("c", config_label));
+        // Modo tela cheia
+        let details_label = if app.lang == crate::i18n::Language::EnUs {
+            "Details:"
+        } else if app.lang == crate::i18n::Language::EsEs {
+            "Detalles:"
+        } else {
+            "Detalhes:"
+        };
+        spans.extend(hint(".", details_label));
+        spans.push(Span::styled(format!("{mode} "), Style::default().fg(pal.fg)));
+        let mute_label = match app.lang {
+            crate::i18n::Language::EnUs => "Mute",
+            crate::i18n::Language::EsEs => "Mudo",
+            crate::i18n::Language::PtBr => "Mudo",
+        };
+        let config_label = match app.lang {
+            crate::i18n::Language::EnUs => "Config",
+            crate::i18n::Language::EsEs => "Config",
+            crate::i18n::Language::PtBr => "Config",
+        };
+        spans.extend(hint("p", m.label_power_profile));
+        spans.extend(hint("b/B", m.label_brightness));
+        spans.extend(hint("v/V", m.label_volume));
+        spans.extend(hint("m", mute_label));
+        spans.extend(hint("c", config_label));
+    }
+
     // Trunca a linha inteira à largura disponível para nunca vazar.
     let mut line = Line::from(spans);
     if line_width(&line) > area.width as usize {
