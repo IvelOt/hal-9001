@@ -96,13 +96,18 @@ impl AudioSnapshot {
     }
 }
 
-pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
+pub async fn run(
+    poll_interval_ms: u64,
+    lang: crate::i18n::SharedLang,
+    tx: EventTx,
+    mut action_rx: broadcast::Receiver<Action>,
+) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(500)));
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Ok(snap) = fetch_audio_snapshot().await {
+                if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                     let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                 }
             }
@@ -111,35 +116,35 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                 match action {
                     Action::AudioSetVolume { node_id, volume } => {
                         let _ = set_volume(node_id, volume).await;
-                        if let Ok(snap) = fetch_audio_snapshot().await {
+                        if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                             let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                         }
                     }
 
                     Action::AudioVolumeUp(node_id, delta) => {
                         let _ = adjust_volume(node_id, delta).await;
-                        if let Ok(snap) = fetch_audio_snapshot().await {
+                        if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                             let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                         }
                     }
 
                     Action::AudioVolumeDown(node_id, delta) => {
                         let _ = adjust_volume(node_id, -delta).await;
-                        if let Ok(snap) = fetch_audio_snapshot().await {
+                        if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                             let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                         }
                     }
 
                     Action::AudioToggleMute(node_id) => {
                         let _ = toggle_mute(node_id).await;
-                        if let Ok(snap) = fetch_audio_snapshot().await {
+                        if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                             let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                         }
                     }
 
                     Action::AudioSetDefault(node_id) => {
                         let _ = set_default_node(node_id).await;
-                        if let Ok(snap) = fetch_audio_snapshot().await {
+                        if let Ok(snap) = fetch_audio_snapshot(lang.get()).await {
                             let _ = tx.send(AppEvent::Audio(Box::new(snap)));
                         }
                     }
@@ -151,7 +156,7 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
     }
 }
 
-pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
+pub async fn fetch_audio_snapshot(lang: crate::i18n::Language) -> anyhow::Result<AudioSnapshot> {
     if let Ok(output) = tokio::process::Command::new("wpctl")
         .arg("status")
         .output()
@@ -159,7 +164,7 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(snap) = parse_wpctl_status(&stdout) {
+            if let Ok(snap) = parse_wpctl_status(&stdout, lang) {
                 return Ok(snap);
             }
         }
@@ -190,7 +195,7 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
     }
 
     Ok(AudioSnapshot {
-        server_name: "Áudio Indisponível".to_string(),
+        server_name: lang.messages().audio_server_unavailable.to_string(),
         sinks: Vec::new(),
         apps: Vec::new(),
         sources: Vec::new(),
@@ -199,7 +204,10 @@ pub async fn fetch_audio_snapshot() -> anyhow::Result<AudioSnapshot> {
     })
 }
 
-pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
+pub fn parse_wpctl_status(
+    output: &str,
+    lang: crate::i18n::Language,
+) -> anyhow::Result<AudioSnapshot> {
     let mut sinks = Vec::new();
     let mut apps = Vec::new();
     let mut sources = Vec::new();
@@ -232,7 +240,7 @@ pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
 
         match current_section {
             Section::Sinks | Section::Sources | Section::Streams => {
-                if let Some(node) = parse_wpctl_line(line, &current_section) {
+                if let Some(node) = parse_wpctl_line(line, &current_section, lang) {
                     if node.is_default {
                         match node.category {
                             AudioCategory::Sink => default_sink_id = Some(node.id),
@@ -261,7 +269,11 @@ pub fn parse_wpctl_status(output: &str) -> anyhow::Result<AudioSnapshot> {
     })
 }
 
-fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
+fn parse_wpctl_line(
+    line: &str,
+    section: &Section,
+    lang: crate::i18n::Language,
+) -> Option<AudioNode> {
     let clean = line.replace(['│', '└', '─', '├'], " ");
     let trimmed = clean.trim();
     if trimmed.is_empty() {
@@ -313,7 +325,7 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
         Section::None => return None,
     };
 
-    let name = clean_node_name(name_part);
+    let name = clean_node_name(name_part, lang);
 
     Some(AudioNode {
         id,
@@ -327,10 +339,10 @@ fn parse_wpctl_line(line: &str, section: &Section) -> Option<AudioNode> {
     })
 }
 
-fn clean_node_name(raw: &str) -> String {
+fn clean_node_name(raw: &str, lang: crate::i18n::Language) -> String {
     let s = raw.trim();
     if s.is_empty() {
-        return "Dispositivo de Áudio".to_string();
+        return lang.messages().audio_generic_device.to_string();
     }
     s.to_string()
 }

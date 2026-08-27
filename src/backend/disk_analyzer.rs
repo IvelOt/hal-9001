@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::events::{AppEvent, EventTx};
+use crate::i18n::Language;
 
 const SKIPPED_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run", "/tmp", "/sys/kernel/debug"];
 
@@ -87,13 +88,12 @@ fn dir_size_recursive(path: &Path, progress: &mut ScanProgress) -> u64 {
     total
 }
 
-fn friendly_scan_error(err: &std::io::Error) -> String {
+fn friendly_scan_error(err: &std::io::Error, lang: Language) -> String {
+    let m = lang.messages();
     match err.kind() {
-        std::io::ErrorKind::PermissionDenied => {
-            "Permissão negada para acessar este diretório".to_string()
-        }
-        std::io::ErrorKind::NotFound => "Diretório não encontrado".to_string(),
-        _ => format!("Falha ao escanear: {err}"),
+        std::io::ErrorKind::PermissionDenied => m.err_dir_permission_denied.to_string(),
+        std::io::ErrorKind::NotFound => m.err_dir_not_found.to_string(),
+        _ => format!("{}: {err}", m.err_scan_failed),
     }
 }
 
@@ -145,7 +145,7 @@ pub fn scan_dir(path: &Path, tx: &EventTx) -> std::io::Result<DiskUsageSnapshot>
     })
 }
 
-pub async fn scan(path: PathBuf, tx: EventTx) {
+pub async fn scan(path: PathBuf, lang: Language, tx: EventTx) {
     let result = tokio::task::spawn_blocking({
         let tx = tx.clone();
         move || scan_dir(&path, &tx)
@@ -158,7 +158,7 @@ pub async fn scan(path: PathBuf, tx: EventTx) {
         Ok(Err(e)) => {
             let _ = tx.send(AppEvent::StorageAnalyzerError {
                 path: PathBuf::new(),
-                message: friendly_scan_error(&e),
+                message: friendly_scan_error(&e, lang),
             });
         }
         Err(e) => {

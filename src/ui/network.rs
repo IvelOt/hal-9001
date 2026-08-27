@@ -11,19 +11,20 @@ use super::storage::modal_block;
 use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let Some(snap) = &app.network else {
         super::draw_pending(
             app,
             pal,
             f,
             area,
-            "Wi-Fi / Rede",
+            m.network_pending_title,
             "network",
             &[
-                "[Enter] conectar (modal de senha)",
-                "[d] desconectar   [f] esquecer",
-                "[r] rescan   [t] ligar/desligar rádio",
-                "IP local, gateway e taxa ↓/↑",
+                m.network_pending_connect,
+                m.network_pending_disconnect_forget,
+                m.network_pending_rescan_radio,
+                m.network_pending_telemetry,
             ],
         );
         return;
@@ -35,9 +36,9 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             pal,
             f,
             area,
-            "Wi-Fi / Rede",
+            m.network_pending_title,
             "network",
-            &["NetworkManager não disponível ou serviço D-Bus indisponível"],
+            &[m.network_err_nm_unavailable],
         );
         return;
     }
@@ -53,34 +54,35 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
 
     draw_header(snap, app, pal, f, chunks[0]);
     draw_ap_list(snap, app, pal, f, chunks[1]);
-    draw_footer(snap, pal, f, chunks[2]);
+    draw_footer(snap, app.lang.messages(), pal, f, chunks[2]);
 
     if let Some(prompt) = &app.wifi_prompt {
-        draw_wifi_prompt(pal, f, prompt);
+        draw_wifi_prompt(app.lang.messages(), pal, f, prompt);
     }
 }
 
 fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let radio_style = if snap.wireless_enabled {
         Style::default().fg(pal.ok).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(pal.err).add_modifier(Modifier::BOLD)
     };
     let radio_text = if snap.wireless_enabled {
-        "[● LIGADO]"
+        m.network_radio_on
     } else {
-        "[○ DESLIGADO]"
+        m.network_radio_off
     };
 
     let iface = snap
         .wifi_device
         .as_ref()
         .map(|d| d.iface.as_str())
-        .unwrap_or("nenhum");
+        .unwrap_or(m.network_none);
 
     let scanning_badge = if app.network_scanning {
         Span::styled(
-            " [BUSCANDO...] ",
+            m.network_scanning_badge,
             Style::default().fg(pal.warn).add_modifier(Modifier::BOLD),
         )
     } else {
@@ -89,20 +91,29 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
 
     let active_desc = if let Some(act) = &snap.active {
         Span::styled(
-            format!(" Conectado: {} ", act.ssid),
+            format!(" {} {} ", m.network_connected_prefix, act.ssid),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(" Desconectado ", Style::default().fg(pal.dim))
+        Span::styled(
+            format!(" {} ", m.network_disconnected),
+            Style::default().fg(pal.dim),
+        )
     };
 
     let header_line = Line::from(vec![
-        Span::styled(" Adaptador: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!(" {} ", m.network_label_adapter),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             iface,
             Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  Rádio Wi-Fi: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("  {} ", m.network_label_radio),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(radio_text, radio_style),
         Span::raw("  "),
         active_desc,
@@ -113,7 +124,7 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.accent))
         .title(Span::styled(
-            " Wi-Fi & Conexões ",
+            m.network_title_header,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ));
 
@@ -121,26 +132,27 @@ fn draw_header(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, 
 }
 
 fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            "SSID",
+            m.network_col_ssid,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Sinal",
+            m.network_col_signal,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Banda",
+            m.network_col_band,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Segurança",
+            m.network_col_security,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Status",
+            m.network_col_status,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
     ])
@@ -149,9 +161,9 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
 
     if snap.access_points.is_empty() {
         let empty_msg = if !snap.wireless_enabled {
-            "O rádio Wi-Fi está desligado. Pressione [t] para ligar."
+            m.network_empty_radio_off
         } else {
-            "Nenhuma rede sem fio encontrada. Pressione [r] para escanear."
+            m.network_empty_no_networks
         };
         let p = Paragraph::new(Line::from(Span::styled(
             empty_msg,
@@ -161,7 +173,7 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(pal.dim))
-                .title(" Redes Disponíveis "),
+                .title(format!(" {} ", m.network_title_available)),
         );
         f.render_widget(p, area);
         return;
@@ -177,7 +189,7 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
         .enumerate()
         .map(|(i, ap)| {
             let is_sel = i == selected_idx;
-            format_ap_row(ap, is_sel, pal)
+            format_ap_row(ap, is_sel, pal, m)
         })
         .collect();
 
@@ -195,7 +207,11 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
             .borders(Borders::ALL)
             .border_style(Style::default().fg(pal.accent))
             .title(Span::styled(
-                format!(" Redes Disponíveis ({}) ", snap.access_points.len()),
+                format!(
+                    " {} ({}) ",
+                    m.network_title_available,
+                    snap.access_points.len()
+                ),
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )),
     );
@@ -203,7 +219,12 @@ fn draw_ap_list(snap: &NetworkSnapshot, app: &App, pal: &Palette, f: &mut Frame,
     f.render_widget(table, area);
 }
 
-fn format_ap_row<'a>(ap: &AccessPoint, is_sel: bool, pal: &Palette) -> Row<'a> {
+fn format_ap_row<'a>(
+    ap: &AccessPoint,
+    is_sel: bool,
+    pal: &Palette,
+    m: &'static crate::i18n::Messages,
+) -> Row<'a> {
     let bullet = if ap.is_active {
         Span::styled(
             "● ",
@@ -243,11 +264,11 @@ fn format_ap_row<'a>(ap: &AccessPoint, is_sel: bool, pal: &Palette) -> Row<'a> {
 
     let status_badge = if ap.is_active {
         Span::styled(
-            "Conectado",
+            m.network_status_connected,
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         )
     } else if ap.is_saved {
-        Span::styled("Salva", Style::default().fg(pal.accent))
+        Span::styled(m.network_status_saved, Style::default().fg(pal.accent))
     } else {
         Span::styled("-", Style::default().fg(pal.dim))
     };
@@ -294,7 +315,13 @@ fn format_signal_bar<'a>(strength: u8, pal: &Palette) -> Span<'a> {
     )
 }
 
-fn draw_footer(snap: &NetworkSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_footer(
+    snap: &NetworkSnapshot,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    area: Rect,
+) {
     let t = &snap.telemetry;
     let ip = t.ipv4.as_deref().unwrap_or("—");
     let gw = t.gateway.as_deref().unwrap_or("—");
@@ -303,11 +330,20 @@ fn draw_footer(snap: &NetworkSnapshot, pal: &Palette, f: &mut Frame, area: Rect)
     let tx_str = format_rate(t.tx_rate_kbps);
 
     let line1 = Line::from(vec![
-        Span::styled(" IP: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!(" {} ", m.network_label_ip),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(ip, Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
-        Span::styled("   Gateway: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.network_label_gateway),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(gw, Style::default().fg(pal.fg).add_modifier(Modifier::BOLD)),
-        Span::styled("   Taxa: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.network_label_rate),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             format!("↓ {rx_str}"),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
@@ -324,33 +360,45 @@ fn draw_footer(snap: &NetworkSnapshot, pal: &Palette, f: &mut Frame, area: Rect)
             " [Enter] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Conectar   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.network_hint_connect),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[d] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Desconectar   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.network_hint_disconnect),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[f] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Esquecer   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.network_hint_forget),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[r] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Escanear   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.network_hint_scan),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[t] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Ligar/Desligar Wi-Fi", Style::default().fg(pal.dim)),
+        Span::styled(m.network_hint_toggle_radio, Style::default().fg(pal.dim)),
     ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.dim))
-        .title(" Telemetria & Atalhos ");
+        .title(m.network_footer_title);
 
     f.render_widget(Paragraph::new(vec![line1, line2]).block(block), area);
 }
@@ -363,17 +411,25 @@ fn format_rate(rate_kbps: f64) -> String {
     }
 }
 
-pub fn draw_wifi_prompt(pal: &Palette, f: &mut Frame, prompt: &WifiPasswordPromptState) {
+pub fn draw_wifi_prompt(
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    prompt: &WifiPasswordPromptState,
+) {
     let area = super::centered(54, 28, f.area());
     f.render_widget(Clear, area);
 
-    let block = modal_block("Autenticacao Wi-Fi", pal);
+    let block = modal_block(m.network_wifi_auth_title, pal);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled("Rede: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{} ", m.network_label_network),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             &prompt.ssid,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
@@ -384,7 +440,7 @@ pub fn draw_wifi_prompt(pal: &Palette, f: &mut Frame, prompt: &WifiPasswordPromp
     let masked = "*".repeat(prompt.password.chars().count());
     lines.push(Line::from(vec![
         Span::styled(
-            "Senha: ",
+            format!("{} ", m.network_label_password),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -403,7 +459,7 @@ pub fn draw_wifi_prompt(pal: &Palette, f: &mut Frame, prompt: &WifiPasswordPromp
     }
 
     lines.push(Line::from(Span::styled(
-        "[Enter] Conectar   [Esc] Cancelar",
+        m.network_hint_connect_cancel,
         Style::default().fg(pal.dim),
     )));
 

@@ -23,6 +23,8 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         },
     };
 
+    let m = app.lang.messages();
+
     let theme_display = match app.config.theme.name.to_lowercase().as_str() {
         "catppuccin" | "mocha" => "Catppuccin (Mocha)",
         "tokyo-night" | "tokyonight" => "Tokyo Night",
@@ -30,28 +32,22 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         "gruvbox" => "Gruvbox (Dark)",
         "cyberpunk" => "Cyberpunk (Neon)",
         "dracula" => "Dracula",
-        "mono" => "Monocromático",
-        _ => "HAL-9001 (Âmbar Sci-Fi)",
+        "mono" => m.cfg_theme_mono,
+        _ => m.cfg_theme_default,
     };
 
     let logo_display = match app.config.overview.ascii.as_str() {
-        "main" | "a" => "main (Grande)",
-        "medium" | "c" => "medium (Média)",
-        "compact" | "b" => "compact (Compacta)",
-        "none" => "none (Sem logo)",
-        _ => "auto (Responsiva)",
+        "main" | "a" => m.cfg_logo_main,
+        "medium" | "c" => m.cfg_logo_medium,
+        "compact" | "b" => m.cfg_logo_compact,
+        "none" => m.cfg_logo_none,
+        _ => m.cfg_logo_auto,
     };
 
     let icons_display = if app.config.ui.icons {
-        if app.lang == Language::EnUs {
-            "Enabled (Nerd Fonts)"
-        } else {
-            "Ativado (Nerd Fonts)"
-        }
-    } else if app.lang == Language::EnUs {
-        "Disabled (ASCII)"
+        m.cfg_icons_enabled
     } else {
-        "Desativado (ASCII)"
+        m.cfg_icons_disabled
     };
 
     let fps_display = match app.config.ui.frame_ms {
@@ -61,39 +57,15 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     };
 
     let splash_display = if app.config.splash.enabled {
-        if app.lang == Language::EnUs {
-            "Enabled"
-        } else {
-            "Ativada"
-        }
-    } else if app.lang == Language::EnUs {
-        "Disabled"
+        m.cfg_splash_enabled
     } else {
-        "Desativada"
+        m.cfg_splash_disabled
     };
 
     let polling_display = match app.config.polling.system_ms {
-        750 => {
-            if app.lang == Language::EnUs {
-                "Performance (0.7s)"
-            } else {
-                "Desempenho (0.7s)"
-            }
-        }
-        3000 => {
-            if app.lang == Language::EnUs {
-                "Eco / Battery (3.0s)"
-            } else {
-                "Econômico (3.0s)"
-            }
-        }
-        _ => {
-            if app.lang == Language::EnUs {
-                "Balanced (1.5s)"
-            } else {
-                "Equilibrado (1.5s)"
-            }
-        }
+        750 => m.cfg_polling_performance,
+        3000 => m.cfg_polling_eco,
+        _ => m.cfg_polling_balanced,
     };
 
     let labels = match app.lang {

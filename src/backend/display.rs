@@ -40,6 +40,17 @@ impl DisplayLayoutMode {
         }
     }
 
+    pub fn title_in(&self, m: &crate::i18n::Messages) -> &'static str {
+        match self {
+            Self::ExtendRight => m.display_mode_extend_right,
+            Self::ExtendLeft => m.display_mode_extend_left,
+            Self::Mirror => m.display_mode_mirror,
+            Self::ExternalOnly => m.display_mode_external_only,
+            Self::InternalOnly => m.display_mode_internal_only,
+            Self::Custom => m.display_mode_custom,
+        }
+    }
+
     pub fn ascii_badge(&self) -> &'static str {
         match self {
             Self::ExtendRight => "[EXPAND-DIR]",
@@ -92,12 +103,16 @@ pub struct DisplayNode {
 
 impl DisplayNode {
     pub fn resolution_str(&self) -> String {
+        self.resolution_str_in(crate::i18n::Language::default().messages())
+    }
+
+    pub fn resolution_str_in(&self, m: &crate::i18n::Messages) -> String {
         if let Some(mode) = &self.current_mode {
             mode.label()
         } else if self.is_connected {
-            "Desativado".to_string()
+            m.display_status_disabled.to_string()
         } else {
-            "Desconectado".to_string()
+            m.display_status_disconnected.to_string()
         }
     }
 }

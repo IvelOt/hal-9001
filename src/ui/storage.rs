@@ -48,7 +48,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     }
 
     if let Some(analyzer) = &app.storage_analyzer {
-        draw_analyzer(analyzer, pal, f, area);
+        draw_analyzer(analyzer, app.lang.messages(), pal, f, area);
         return;
     }
 
@@ -59,12 +59,18 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     draw_details(app, pal, f, cols[1]);
 }
 
-fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_analyzer(
+    analyzer: &DiskAnalyzerState,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    area: Rect,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.dim))
         .title(Span::styled(
-            " [ANALISADOR] Espaço em Disco ",
+            m.analyzer_title,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -83,7 +89,11 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
             Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            format!("Total: {}", human_bytes(analyzer.total_bytes)),
+            format!(
+                "{} {}",
+                m.analyzer_total_label,
+                human_bytes(analyzer.total_bytes)
+            ),
             Style::default().fg(pal.dim),
         )),
     ];
@@ -92,7 +102,7 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
     if let Some(err) = &analyzer.error {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                format!("[ERRO] {err}"),
+                format!("{} {err}", m.analyzer_error_prefix),
                 Style::default().fg(pal.err),
             ))),
             rows[1],
@@ -101,16 +111,20 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
         let lines = vec![
             Line::from(Span::styled(
                 format!(
-                    "[ {} ] [ESCANEANDO...] {} itens processados . {} acumulados",
+                    "[ {} ] {} {} {} . {} {}",
                     spinner_glyph(analyzer.spinner_frame),
+                    m.analyzer_scanning_badge,
                     format_item_count(analyzer.files_scanned),
+                    m.analyzer_items_processed,
                     human_bytes(analyzer.total_bytes),
+                    m.analyzer_accumulated,
                 ),
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 format!(
-                    "Diretorio: {}",
+                    "{} {}",
+                    m.analyzer_dir_label,
                     analyzer
                         .current_scanning_item
                         .as_deref()
@@ -123,7 +137,7 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
     } else if analyzer.items.is_empty() {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "Diretório vazio",
+                m.filepicker_empty_dir,
                 Style::default().fg(pal.dim),
             ))),
             rows[1],
@@ -167,12 +181,12 @@ fn draw_analyzer(analyzer: &DiskAnalyzerState, pal: &Palette, f: &mut Frame, are
 
     let hints = if analyzer.is_scanning {
         Line::from(Span::styled(
-            "[Esc] Cancelar varredura",
+            m.storage_hint_cancel_scan,
             Style::default().fg(pal.dim),
         ))
     } else {
         Line::from(Span::styled(
-            "[Enter] Entrar  [Backspace/h] Voltar  [r] Re-escanear  [Esc] Fechar",
+            m.analyzer_hint_nav,
             Style::default().fg(pal.dim),
         ))
     };
@@ -509,21 +523,22 @@ pub fn draw_modal(app: &App, pal: &Palette, f: &mut Frame) {
     }
 }
 
-pub fn draw_sudo_prompt(_app: &App, pal: &Palette, f: &mut Frame, s: &SudoPromptState) {
+pub fn draw_sudo_prompt(app: &App, pal: &Palette, f: &mut Frame, s: &SudoPromptState) {
+    let m = app.lang.messages();
     let area = super::centered(56, 30, f.area());
     f.render_widget(Clear, area);
-    let block = modal_block("Autenticacao sudo", pal);
+    let block = modal_block(m.sudo_auth_title, pal);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(kv("Operacao", &s.label, pal));
+    lines.push(kv(m.sudo_label_operation, &s.label, pal));
     lines.push(Line::from(""));
 
     let masked: String = "*".repeat(s.password.chars().count());
     lines.push(Line::from(vec![
         Span::styled(
-            "Senha sudo: ",
+            format!("{} ", m.sudo_label_password),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -542,7 +557,7 @@ pub fn draw_sudo_prompt(_app: &App, pal: &Palette, f: &mut Frame, s: &SudoPrompt
     }
 
     lines.push(Line::from(Span::styled(
-        "[Enter] Confirmar   [Esc] Cancelar",
+        m.sudo_hint_confirm_cancel,
         Style::default().fg(pal.dim),
     )));
 

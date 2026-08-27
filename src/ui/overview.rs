@@ -546,22 +546,27 @@ fn section_power(
             if detailed {
                 let mut parts: Vec<String> = Vec::new();
                 if let Some(h) = b.health {
-                    parts.push(format!("saúde {:.0}%", h * 100.0));
+                    parts.push(format!("{} {:.0}%", m.overview_health_label, h * 100.0));
                 }
                 if let Some(c) = b.cycle_count {
-                    parts.push(format!("{c} ciclos"));
+                    parts.push(format!("{c} {}", m.overview_cycles_suffix));
                 }
                 if let Some(tech) = &b.technology {
                     parts.push(tech.clone());
                 }
                 if !parts.is_empty() {
-                    out.push(kv_line("Bateria+", parts.join(" · "), cols.width, pal));
+                    out.push(kv_line(
+                        m.overview_battery_extra_label,
+                        parts.join(" · "),
+                        cols.width,
+                        pal,
+                    ));
                 }
             }
         }
         None => out.push(kv_line(
             m.label_battery,
-            "N/A (Desktop)".into(),
+            m.overview_desktop_na.into(),
             cols.width,
             pal,
         )),

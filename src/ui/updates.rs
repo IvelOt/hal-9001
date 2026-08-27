@@ -8,10 +8,11 @@ use crate::backend::updates::Distro;
 use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let distro = match Distro::detect() {
-        Distro::Arch => "Arch (checkupdates / yay / paru)",
-        Distro::Debian => "Debian/Ubuntu (apt)",
-        Distro::Unknown => "desconhecida",
+        Distro::Arch => m.updates_distro_arch,
+        Distro::Debian => m.updates_distro_debian,
+        Distro::Unknown => m.updates_distro_unknown,
     };
 
     super::draw_pending(
@@ -19,12 +20,12 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         pal,
         f,
         area,
-        "Atualizações do Sistema",
+        m.updates_pending_title,
         "updates",
         &[
-            "Contagem de pacotes pendentes",
-            "Lista pacote: versão atual → nova",
-            "[U] rodar atualização em PTY (visível)",
+            m.updates_pending_count,
+            m.updates_pending_list,
+            m.updates_pending_run,
         ],
     );
 
@@ -35,7 +36,10 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         height: 1,
     };
     let line = Line::from(vec![
-        Span::styled("Distro detectada: ", style_dim(pal)),
+        Span::styled(
+            format!("{} ", m.updates_label_detected_distro),
+            style_dim(pal),
+        ),
         Span::styled(distro.to_string(), style_fg(pal)),
     ]);
     f.render_widget(ratatui::widgets::Paragraph::new(line), footer);

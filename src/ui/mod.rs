@@ -57,8 +57,20 @@ pub fn draw(app: &App, f: &mut Frame) {
     }
 }
 
+fn tab_short_label(t: &Tab, m: &'static crate::i18n::Messages) -> &'static str {
+    match t {
+        Tab::Overview => m.tabbar_short_overview,
+        Tab::Network => m.tabbar_short_network,
+        Tab::Bluetooth => m.tabbar_short_bluetooth,
+        Tab::Storage => m.tabbar_short_storage,
+        Tab::Audio => m.tabbar_short_audio,
+        Tab::Displays => m.tabbar_short_displays,
+    }
+}
+
 fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let width = area.width;
+    let m = app.lang.messages();
 
     let titles: Vec<Line> = Tab::ALL
         .iter()
@@ -67,29 +79,11 @@ fn draw_tabbar(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
             let label = if width >= 75 {
                 format!("{} {}", i + 1, t.title_in(app.lang))
             } else if width >= 58 {
-                let short = match t {
-                    Tab::Overview => "Visão",
-                    Tab::Network => "Rede",
-                    Tab::Bluetooth => "BT",
-                    Tab::Storage => "Disco",
-                    Tab::Audio => "Som",
-                    Tab::Displays => "Tela",
-                };
-                format!("{} {short}", i + 1)
+                format!("{} {}", i + 1, tab_short_label(t, m))
+            } else if app.active == *t {
+                format!("{}:{}", i + 1, tab_short_label(t, m))
             } else {
-                if app.active == *t {
-                    let short = match t {
-                        Tab::Overview => "Visão",
-                        Tab::Network => "Rede",
-                        Tab::Bluetooth => "BT",
-                        Tab::Storage => "Disco",
-                        Tab::Audio => "Som",
-                        Tab::Displays => "Tela",
-                    };
-                    format!("{}:{}", i + 1, short)
-                } else {
-                    format!("{}", i + 1)
-                }
+                format!("{}", i + 1)
             };
             Line::from(Span::raw(label))
         })
@@ -159,12 +153,13 @@ fn draw_statusline(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
+    let m = app.lang.messages();
     let hints = if area.width < 50 {
-        " [1-6] Abas  [?] Ajuda  [q] Sair "
+        m.statusline_hints_narrow
     } else if area.width < 68 {
-        " [1-6/Tab] abas  [j/k] nav  [Enter] ação  [?] ajuda "
+        m.statusline_hints_medium
     } else {
-        " [1-6/Tab] abas   [j/k] navegar   [Enter] ação   [r] refresh   [?] ajuda   [q] sair "
+        m.statusline_hints_wide
     };
     let line = Line::from(Span::styled(hints, Style::default().fg(pal.dim)));
     f.render_widget(Paragraph::new(line), area);
@@ -174,23 +169,28 @@ fn draw_help(app: &App, pal: &Palette, f: &mut Frame) {
     let area = centered(60, 40, f.area());
     f.render_widget(Clear, area);
 
+    let m = app.lang.messages();
     let text = vec![
         Line::from(Span::styled(
-            "HAL-9001 — Ajuda",
+            m.help_title,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("1..6 / Tab / Shift-Tab   trocar de aba"),
-        Line::from("j / k / ↑ / ↓            navegar listas"),
-        Line::from("Enter                   ação primária do item"),
-        Line::from("r                       refresh / rescan"),
-        Line::from(".                       Overview: detalhes normal/expandido"),
-        Line::from("c / F2                  abrir configurações / settings"),
-        Line::from("?                       abrir/fechar esta ajuda"),
-        Line::from("q / Ctrl-c              sair"),
+        Line::from(m.help_line_tabs),
+        Line::from(m.help_line_nav),
+        Line::from(m.help_line_enter),
+        Line::from(m.help_line_refresh),
+        Line::from(m.help_line_detail),
+        Line::from(m.help_line_config),
+        Line::from(m.help_line_help),
+        Line::from(m.help_line_quit),
         Line::from(""),
         Line::from(Span::styled(
-            format!("Aba ativa: {}", app.active.title()),
+            format!(
+                "{} {}",
+                m.help_active_tab_prefix,
+                app.active.title_in(app.lang)
+            ),
             Style::default().fg(pal.dim),
         )),
     ];
@@ -233,6 +233,7 @@ pub(crate) fn draw_pending(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    let m = app.lang.messages();
     let mut lines: Vec<Line> = Vec::new();
     match app
         .services
@@ -244,13 +245,13 @@ pub(crate) fn draw_pending(
             Span::styled(reason, Style::default().fg(pal.warn)),
         ])),
         None => lines.push(Line::from(Span::styled(
-            "● inicializando serviço…",
+            m.pending_initializing,
             Style::default().fg(pal.dim),
         ))),
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Ações previstas:",
+        m.pending_actions_label,
         Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
     )));
     for a in actions {

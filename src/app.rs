@@ -382,6 +382,7 @@ pub struct App {
     pub config: Config,
 
     pub lang: Language,
+    pub shared_lang: crate::i18n::SharedLang,
     pub should_quit: bool,
     pub phase: Phase,
     pub active: Tab,
@@ -440,9 +441,11 @@ impl App {
             Phase::Running
         };
         let lang = config.ui.resolved_language();
+        let shared_lang = crate::i18n::SharedLang::new(lang);
         Self {
             config,
             lang,
+            shared_lang,
             should_quit: false,
             phase,
             active: Tab::Overview,
@@ -518,18 +521,19 @@ impl App {
                     snap.battery.as_ref(),
                 ) {
                     use crate::backend::system::BatteryStatus;
+                    let m = self.lang.messages();
                     if old.status != BatteryStatus::Charging
                         && new.status == BatteryStatus::Charging
                     {
                         self.toast = Some((
-                            Toast::info("[ENERGIA] Carregador conectado".to_string()),
+                            Toast::info(format!("{} {}", m.tag_power, m.toast_charger_connected)),
                             Instant::now(),
                         ));
                     } else if old.status == BatteryStatus::Charging
                         && new.status != BatteryStatus::Charging
                     {
                         self.toast = Some((
-                            Toast::info("[ENERGIA] Em bateria".to_string()),
+                            Toast::info(format!("{} {}", m.tag_power, m.toast_on_battery)),
                             Instant::now(),
                         ));
                     }
@@ -539,8 +543,11 @@ impl App {
                     {
                         self.toast = Some((
                             Toast::warn(format!(
-                                "[BATERIA] Nível crítico: {:.0}% restante",
-                                new.percent
+                                "{} {}: {:.0}% {}",
+                                m.tag_battery,
+                                m.toast_battery_critical_label,
+                                new.percent,
+                                m.toast_battery_remaining_suffix
                             )),
                             Instant::now(),
                         ));
@@ -550,14 +557,15 @@ impl App {
             }
             AppEvent::Storage(snap) => {
                 if let Some(old_snap) = self.storage.as_ref() {
+                    let m = self.lang.messages();
                     for new_drv in &snap.drives {
                         if new_drv.removable {
                             let was_present = old_snap.drives.iter().any(|d| d.id == new_drv.id);
                             if !was_present {
                                 self.toast = Some((
                                     Toast::success(format!(
-                                        "[DISCO] Dispositivo conectado: {}",
-                                        new_drv.dev_node
+                                        "{} {} {}",
+                                        m.tag_disk, m.toast_device_connected, new_drv.dev_node
                                     )),
                                     Instant::now(),
                                 ));
@@ -569,6 +577,7 @@ impl App {
             }
             AppEvent::Network(snap) => {
                 if let Some(old_snap) = self.network.as_ref() {
+                    let m = self.lang.messages();
                     let old_has_ip = old_snap.active.is_some() && old_snap.telemetry.ipv4.is_some();
                     let new_has_ip = snap.active.is_some() && snap.telemetry.ipv4.is_some();
 
@@ -576,15 +585,18 @@ impl App {
                         if let (Some(active), Some(ip)) = (&snap.active, &snap.telemetry.ipv4) {
                             self.toast = Some((
                                 Toast::success(format!(
-                                    "[REDE] Conectado em '{}' (IP: {})",
-                                    active.ssid, ip
+                                    "{} {} '{}' (IP: {})",
+                                    m.tag_network, m.toast_connected_at, active.ssid, ip
                                 )),
                                 Instant::now(),
                             ));
                         }
                     } else if old_has_ip && !new_has_ip {
                         self.toast = Some((
-                            Toast::warn("[REDE] Desconectado".to_string()),
+                            Toast::warn(format!(
+                                "{} {}",
+                                m.tag_network, m.toast_network_disconnected
+                            )),
                             Instant::now(),
                         ));
                     }
@@ -598,25 +610,31 @@ impl App {
             AppEvent::NetworkScanning(flag) => self.network_scanning = flag,
             AppEvent::Bluetooth(snap) => {
                 if let Some(old_snap) = self.bluetooth.as_ref() {
+                    let m = self.lang.messages();
                     for new_dev in &snap.devices {
                         if let Some(old_dev) = old_snap.devices.iter().find(|d| d.id == new_dev.id)
                         {
                             if !old_dev.connected && new_dev.connected {
                                 let bat_str = match new_dev.battery_percentage {
-                                    Some(b) => format!(" (Bateria: {}%)", b),
+                                    Some(b) => format!(" ({}: {}%)", m.label_battery, b),
                                     None => "".to_string(),
                                 };
                                 self.toast = Some((
                                     Toast::success(format!(
-                                        "[BLUETOOTH] Conectado: {}{}",
-                                        new_dev.name, bat_str
+                                        "{} {} {}{}",
+                                        m.tag_bluetooth,
+                                        m.toast_bt_connected_prefix,
+                                        new_dev.name,
+                                        bat_str
                                     )),
                                     Instant::now(),
                                 ));
                             } else if old_dev.connected && !new_dev.connected {
                                 self.toast = Some((
                                     Toast::info(format!(
-                                        "[BLUETOOTH] Desconectado: {}",
+                                        "{} {} {}",
+                                        m.tag_bluetooth,
+                                        m.toast_bt_disconnected_prefix,
                                         new_dev.name
                                     )),
                                     Instant::now(),
@@ -702,24 +720,21 @@ impl App {
             AppEvent::StorageFlashDone { device_id, result } => {
                 if let StorageModal::Flasher(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
+                        let m = self.lang.messages();
                         s.stage = match result {
                             Ok(_msg) => {
-                                self.toast = Some((
-                                    Toast::success(
-                                        "[GRAVADOR] Gravação de ISO concluída com sucesso"
-                                            .to_string(),
-                                    ),
-                                    Instant::now(),
-                                ));
-                                FlasherStage::Done {
-                                    ok: true,
-                                    message: "[GRAVADOR] Gravação de ISO concluída com sucesso"
-                                        .to_string(),
-                                }
+                                let message =
+                                    format!("{} {}", m.tag_flasher, m.storage_flash_success);
+                                self.toast =
+                                    Some((Toast::success(message.clone()), Instant::now()));
+                                FlasherStage::Done { ok: true, message }
                             }
                             Err(err) => {
                                 self.toast = Some((
-                                    Toast::error("[GRAVADOR] Erro na gravação de ISO".to_string()),
+                                    Toast::error(format!(
+                                        "{} {}",
+                                        m.tag_flasher, m.storage_flash_failed
+                                    )),
                                     Instant::now(),
                                 ));
                                 FlasherStage::Done {
@@ -869,6 +884,7 @@ impl App {
                 };
                 self.config.ui.language = options[next].to_string();
                 self.lang = self.config.ui.resolved_language();
+                self.shared_lang.set(self.lang);
             }
             1 => {
                 let options = [
@@ -1707,7 +1723,11 @@ impl App {
                 self.toast = Some((Toast::info(msg), Instant::now()));
             }
             Err(e) => {
-                self.toast = Some((Toast::error(format!("Erro ao salvar: {e}")), Instant::now()));
+                let m = self.lang.messages();
+                self.toast = Some((
+                    Toast::error(format!("{}: {e}", m.err_save_config_prefix)),
+                    Instant::now(),
+                ));
             }
         }
     }
@@ -1759,10 +1779,11 @@ impl App {
                         unsafe {
                             libc::kill(top.pid as libc::pid_t, libc::SIGTERM);
                         }
+                        let m = self.lang.messages();
                         self.toast = Some((
                             Toast::info(format!(
-                                "[PROCESSO] Sinal de finalização enviado para PID: {} ({})",
-                                top.pid, top.name
+                                "{} {} {} ({})",
+                                m.tag_process, m.toast_kill_signal_sent, top.pid, top.name
                             )),
                             Instant::now(),
                         ));
