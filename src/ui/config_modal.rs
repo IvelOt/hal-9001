@@ -12,14 +12,16 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     let area = centered(68, 62, f.area());
     f.render_widget(Clear, area);
 
+    let m = app.lang.messages();
+
     let lang_display = match app.config.ui.language.to_lowercase().as_str() {
-        "pt-br" | "pt" => "Português (Brasil)",
-        "en-us" | "en" => "English (US)",
-        "es-es" | "es" => "Español",
+        "pt-br" | "pt" => m.cfg_lang_pt_br,
+        "en-us" | "en" => m.cfg_lang_en_us,
+        "es-es" | "es" => m.cfg_lang_es_es,
         _ => match app.lang {
-            Language::PtBr => "Auto (Português)",
-            Language::EnUs => "Auto (English)",
-            Language::EsEs => "Auto (Español)",
+            Language::PtBr => m.cfg_lang_auto_pt,
+            Language::EnUs => m.cfg_lang_auto_en,
+            Language::EsEs => m.cfg_lang_auto_es,
         },
     };
 
@@ -30,28 +32,22 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         "gruvbox" => "Gruvbox (Dark)",
         "cyberpunk" => "Cyberpunk (Neon)",
         "dracula" => "Dracula",
-        "mono" => "Monocromático",
-        _ => "HAL-9001 (Âmbar Sci-Fi)",
+        "mono" => m.cfg_theme_mono,
+        _ => m.cfg_theme_default,
     };
 
     let logo_display = match app.config.overview.ascii.as_str() {
-        "main" | "a" => "main (Grande)",
-        "medium" | "c" => "medium (Média)",
-        "compact" | "b" => "compact (Compacta)",
-        "none" => "none (Sem logo)",
-        _ => "auto (Responsiva)",
+        "main" | "a" => m.cfg_logo_main,
+        "medium" | "c" => m.cfg_logo_medium,
+        "compact" | "b" => m.cfg_logo_compact,
+        "none" => m.cfg_logo_none,
+        _ => m.cfg_logo_auto,
     };
 
     let icons_display = if app.config.ui.icons {
-        if app.lang == Language::EnUs {
-            "Enabled (Nerd Fonts)"
-        } else {
-            "Ativado (Nerd Fonts)"
-        }
-    } else if app.lang == Language::EnUs {
-        "Disabled (ASCII)"
+        m.cfg_icons_enabled
     } else {
-        "Desativado (ASCII)"
+        m.cfg_icons_disabled
     };
 
     let fps_display = match app.config.ui.frame_ms {
@@ -61,70 +57,26 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     };
 
     let splash_display = if app.config.splash.enabled {
-        if app.lang == Language::EnUs {
-            "Enabled"
-        } else {
-            "Ativada"
-        }
-    } else if app.lang == Language::EnUs {
-        "Disabled"
+        m.cfg_splash_enabled
     } else {
-        "Desativada"
+        m.cfg_splash_disabled
     };
 
     let polling_display = match app.config.polling.system_ms {
-        750 => {
-            if app.lang == Language::EnUs {
-                "Performance (0.7s)"
-            } else {
-                "Desempenho (0.7s)"
-            }
-        }
-        3000 => {
-            if app.lang == Language::EnUs {
-                "Eco / Battery (3.0s)"
-            } else {
-                "Econômico (3.0s)"
-            }
-        }
-        _ => {
-            if app.lang == Language::EnUs {
-                "Balanced (1.5s)"
-            } else {
-                "Equilibrado (1.5s)"
-            }
-        }
+        750 => m.cfg_polling_performance,
+        3000 => m.cfg_polling_eco,
+        _ => m.cfg_polling_balanced,
     };
 
-    let labels = match app.lang {
-        Language::EnUs => [
-            "Language",
-            "Theme Palette",
-            "ASCII Logo",
-            "Nerd Font Icons",
-            "Frame Rate",
-            "Splash Screen",
-            "Hardware Polling",
-        ],
-        Language::EsEs => [
-            "Idioma",
-            "Paleta de Tema",
-            "Logo ASCII",
-            "Iconos Nerd Font",
-            "Tasa de Cuadros",
-            "Pantalla de Inicio",
-            "Sondeo de Hardware",
-        ],
-        Language::PtBr => [
-            "Idioma",
-            "Paleta de Tema",
-            "Logo ASCII",
-            "Ícones Nerd Font",
-            "Taxa de Quadros",
-            "Splash Screen",
-            "Telemetria / Polling",
-        ],
-    };
+    let labels = [
+        m.cfg_lbl_language,
+        m.cfg_lbl_theme,
+        m.cfg_lbl_ascii,
+        m.cfg_lbl_icons,
+        m.cfg_lbl_fps,
+        m.cfg_lbl_splash,
+        m.cfg_lbl_polling,
+    ];
 
     let values = [
         lang_display,
@@ -165,7 +117,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     }
 
     lines.push(Line::from(vec![
-        Span::styled(" Amostra da Paleta: ", Style::default().fg(pal.dim)),
+        Span::styled(m.cfg_palette_sample, Style::default().fg(pal.dim)),
         Span::styled(
             " [● ACCENT] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
@@ -185,22 +137,14 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     ]));
     lines.push(Line::from(""));
 
-    let footer_text = match app.lang {
-        Language::EnUs => "[↑/↓] Navigate  [←/→/Enter] Change  [s] Save to disk  [Esc/c] Close",
-        Language::EsEs => "[↑/↓] Navegar  [←/→/Enter] Cambiar  [s] Guardar  [Esc/c] Cerrar",
-        Language::PtBr => "[↑/↓] Navegar  [←/→/Enter] Alterar  [s] Salvar no disco  [Esc/c] Fechar",
-    };
+    let footer_text = m.cfg_modal_footer;
 
     lines.push(Line::from(Span::styled(
         footer_text,
         Style::default().fg(pal.dim),
     )));
 
-    let modal_title = match app.lang {
-        Language::EnUs => " Settings & Theme Preferences ",
-        Language::EsEs => " Configuración y Preferencias de Tema ",
-        Language::PtBr => " Configurações & Preferências de Tema ",
-    };
+    let modal_title = m.cfg_modal_title;
 
     let block = Block::default()
         .borders(Borders::ALL)

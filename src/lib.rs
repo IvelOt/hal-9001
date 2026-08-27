@@ -23,9 +23,15 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
     let (action_tx, _action_rx) = broadcast::channel::<Action>(64);
     let (sudo_tx, mut sudo_rx) = mpsc::unbounded_channel::<SudoPasswordRequest>();
 
-    backend::spawn_all(&config, event_tx.clone(), &action_tx, sudo_tx);
-
     let mut app = App::new(config);
+    backend::spawn_all(
+        &app.config,
+        app.shared_lang.clone(),
+        event_tx.clone(),
+        &action_tx,
+        sudo_tx,
+    );
+
     let mut input = InputStream::new();
     let mut render_tick = tokio::time::interval(Duration::from_millis(250));
     render_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

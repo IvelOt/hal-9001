@@ -11,19 +11,20 @@ use crate::ui::widgets::truncate_str;
 use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let Some(snap) = &app.audio else {
         super::draw_pending(
             app,
             pal,
             f,
             area,
-            "Mixer de Áudio",
+            m.audio_pending_title,
             "audio",
             &[
-                "[Tab/Shift+Tab] alternar foco entre painéis",
-                "[j/k] navegar   [+/- ou h/l] volume",
-                "[m] alternar mudo",
-                "[Enter] definir como dispositivo padrão",
+                m.audio_pending_focus,
+                m.audio_pending_nav_volume,
+                m.audio_pending_mute,
+                m.audio_pending_default,
             ],
         );
         return;
@@ -47,12 +48,13 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let focus = app.audio_category.min(2);
     let selected = app.audio_selected;
 
-    draw_header(snap, pal, f, chunks[0]);
+    draw_header(snap, m, pal, f, chunks[0]);
     draw_card_panel(
         snap.nodes_for_category(AudioCategory::Sink),
         AudioCategory::Sink,
         focus == 0,
         selected,
+        m,
         pal,
         f,
         top_cols[0],
@@ -62,6 +64,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         AudioCategory::AppStream,
         focus == 1,
         selected,
+        m,
         pal,
         f,
         top_cols[1],
@@ -70,36 +73,52 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         snap.nodes_for_category(AudioCategory::Source),
         focus == 2,
         selected,
+        m,
         pal,
         f,
         chunks[2],
     );
-    draw_footer(pal, f, chunks[3]);
+    draw_footer(m, pal, f, chunks[3]);
 }
 
 fn default_node_name(nodes: &[AudioNode]) -> Option<&str> {
     nodes.iter().find(|n| n.is_default).map(|n| n.name.as_str())
 }
 
-fn draw_header(snap: &AudioSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
-    let output = default_node_name(&snap.sinks).unwrap_or("Nenhuma saída padrão");
-    let mic = default_node_name(&snap.sources).unwrap_or("Nenhum microfone padrão");
+fn draw_header(
+    snap: &AudioSnapshot,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    area: Rect,
+) {
+    let output = default_node_name(&snap.sinks).unwrap_or(m.audio_none_output);
+    let mic = default_node_name(&snap.sources).unwrap_or(m.audio_none_mic);
 
     let avail = area.width.saturating_sub(2) as usize;
     let seg = avail / 3;
 
     let line = Line::from(vec![
-        Span::styled(" Servidor: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!(" {} ", m.audio_label_server),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             truncate_str(&snap.server_name, seg),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   Saída: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.audio_label_output),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             truncate_str(output, seg),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   Mic: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.audio_label_mic),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             truncate_str(mic, seg),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
@@ -110,7 +129,7 @@ fn draw_header(snap: &AudioSnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.accent))
         .title(Span::styled(
-            " Mixer de Áudio & Dispositivos ",
+            m.audio_title_header,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ));
 
@@ -155,19 +174,29 @@ fn panel_title(icon: &str, label: &str, count: usize, start: usize, end: usize) 
     )
 }
 
-fn empty_message(cat: AudioCategory) -> &'static str {
+fn empty_message(cat: AudioCategory, m: &'static crate::i18n::Messages) -> &'static str {
     match cat {
-        AudioCategory::Sink => "Nenhum dispositivo de saída de áudio detectado.",
-        AudioCategory::AppStream => "Nenhum aplicativo reproduzindo áudio no momento.",
-        AudioCategory::Source => "Nenhum microfone ou dispositivo de entrada detectado.",
+        AudioCategory::Sink => m.audio_empty_sink,
+        AudioCategory::AppStream => m.audio_empty_appstream,
+        AudioCategory::Source => m.audio_empty_source,
     }
 }
 
+fn cat_title(cat: AudioCategory, m: &'static crate::i18n::Messages) -> &'static str {
+    match cat {
+        AudioCategory::Sink => m.audio_cat_sink,
+        AudioCategory::AppStream => m.audio_cat_appstream,
+        AudioCategory::Source => m.audio_cat_source,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_card_panel(
     nodes: &[AudioNode],
     cat: AudioCategory,
     focused: bool,
     selected: usize,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -182,7 +211,7 @@ fn draw_card_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
-            panel_title(icon, cat.title(), nodes.len(), start, end),
+            panel_title(icon, cat_title(cat, m), nodes.len(), start, end),
             Style::default()
                 .fg(border_color)
                 .add_modifier(Modifier::BOLD),
@@ -190,7 +219,7 @@ fn draw_card_panel(
 
     if nodes.is_empty() {
         let p = Paragraph::new(Line::from(Span::styled(
-            empty_message(cat),
+            empty_message(cat, m),
             Style::default().fg(pal.dim),
         )))
         .block(block);
@@ -205,7 +234,7 @@ fn draw_card_panel(
     for (i, node) in nodes.iter().enumerate().take(end).skip(start) {
         let is_sel = focused && i == sel_idx;
         lines.push(name_line(node, is_sel, inner_w, pal));
-        lines.push(bar_status_line(node, inner_w, pal));
+        lines.push(bar_status_line(node, inner_w, m, pal));
     }
 
     f.render_widget(Paragraph::new(lines).block(block), area);
@@ -248,15 +277,20 @@ fn name_line<'a>(node: &AudioNode, is_sel: bool, width: usize, pal: &Palette) ->
     .style(line_style)
 }
 
-fn bar_status_line<'a>(node: &AudioNode, width: usize, pal: &Palette) -> Line<'a> {
+fn bar_status_line<'a>(
+    node: &AudioNode,
+    width: usize,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+) -> Line<'a> {
     let status = if node.is_muted && node.is_default {
-        "[MUDO][PADRÃO]"
+        m.audio_tag_muted_default
     } else if node.is_muted {
-        "[MUDO]"
+        m.audio_tag_muted
     } else if node.is_default {
-        "[PADRÃO]"
+        m.audio_tag_default
     } else {
-        "Ativo"
+        m.audio_status_active
     };
     let status_color = if node.is_muted {
         pal.err
@@ -317,6 +351,7 @@ fn draw_source_panel(
     nodes: &[AudioNode],
     focused: bool,
     selected: usize,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -331,13 +366,7 @@ fn draw_source_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
-            panel_title(
-                icon,
-                "Dispositivos de Entrada / Microfones",
-                nodes.len(),
-                start,
-                end,
-            ),
+            panel_title(icon, m.audio_title_input_devices, nodes.len(), start, end),
             Style::default()
                 .fg(border_color)
                 .add_modifier(Modifier::BOLD),
@@ -345,7 +374,7 @@ fn draw_source_panel(
 
     if nodes.is_empty() {
         let p = Paragraph::new(Line::from(Span::styled(
-            empty_message(AudioCategory::Source),
+            empty_message(AudioCategory::Source, m),
             Style::default().fg(pal.dim),
         )))
         .block(block);
@@ -356,15 +385,15 @@ fn draw_source_panel(
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            "Dispositivo",
+            m.audio_col_device,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Nível",
+            m.audio_col_level,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Status",
+            m.audio_col_status,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
     ])
@@ -380,7 +409,7 @@ fn draw_source_panel(
         .enumerate()
         .take(end)
         .skip(start)
-        .map(|(i, node)| format_source_row(node, focused && i == sel_idx, name_w, pal))
+        .map(|(i, node)| format_source_row(node, focused && i == sel_idx, name_w, m, pal))
         .collect();
 
     let widths = [
@@ -394,7 +423,13 @@ fn draw_source_panel(
     f.render_widget(table, area);
 }
 
-fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Palette) -> Row<'a> {
+fn format_source_row<'a>(
+    node: &AudioNode,
+    is_sel: bool,
+    name_w: usize,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+) -> Row<'a> {
     let bullet = if is_sel {
         Span::styled(
             "▶ ",
@@ -423,21 +458,21 @@ fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Pa
 
     let status_span = if node.is_muted && node.is_default {
         Span::styled(
-            "[MUDO] [PADRÃO]",
+            m.audio_tag_muted_default,
             Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
         )
     } else if node.is_muted {
         Span::styled(
-            "[MUDO]",
+            m.audio_tag_muted,
             Style::default().fg(pal.err).add_modifier(Modifier::BOLD),
         )
     } else if node.is_default {
         Span::styled(
-            "[PADRÃO]",
+            m.audio_tag_default,
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled("Ativo", Style::default().fg(pal.dim))
+        Span::styled(m.audio_status_active, Style::default().fg(pal.dim))
     };
 
     let row_style = if is_sel {
@@ -457,44 +492,59 @@ fn format_source_row<'a>(node: &AudioNode, is_sel: bool, name_w: usize, pal: &Pa
     .style(row_style)
 }
 
-fn draw_footer(pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_footer(m: &'static crate::i18n::Messages, pal: &Palette, f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(
             " [Tab/⇧Tab] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Foco   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.audio_hint_focus),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[j/k] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Navegar   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.audio_hint_nav),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[+/- h/l] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Volume (±5%)   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.audio_hint_volume),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[m] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Mudo   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.audio_hint_mute),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[Enter] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Padrão/Mudo   ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}   ", m.audio_hint_default_mute),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[r] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Atualizar", Style::default().fg(pal.dim)),
+        Span::styled(m.audio_hint_refresh, Style::default().fg(pal.dim)),
     ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.dim))
-        .title(" Atalhos do Mixer ");
+        .title(m.audio_footer_title);
 
     f.render_widget(Paragraph::new(line).block(block), area);
 }

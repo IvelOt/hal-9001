@@ -40,6 +40,17 @@ impl DisplayLayoutMode {
         }
     }
 
+    pub fn title_in(&self, m: &crate::i18n::Messages) -> &'static str {
+        match self {
+            Self::ExtendRight => m.display_mode_extend_right,
+            Self::ExtendLeft => m.display_mode_extend_left,
+            Self::Mirror => m.display_mode_mirror,
+            Self::ExternalOnly => m.display_mode_external_only,
+            Self::InternalOnly => m.display_mode_internal_only,
+            Self::Custom => m.display_mode_custom,
+        }
+    }
+
     pub fn ascii_badge(&self) -> &'static str {
         match self {
             Self::ExtendRight => "[EXPAND-DIR]",
@@ -92,12 +103,16 @@ pub struct DisplayNode {
 
 impl DisplayNode {
     pub fn resolution_str(&self) -> String {
+        self.resolution_str_in(crate::i18n::Language::default().messages())
+    }
+
+    pub fn resolution_str_in(&self, m: &crate::i18n::Messages) -> String {
         if let Some(mode) = &self.current_mode {
             mode.label()
         } else if self.is_connected {
-            "Desativado".to_string()
+            m.display_status_disabled.to_string()
         } else {
-            "Desconectado".to_string()
+            m.display_status_disconnected.to_string()
         }
     }
 }
@@ -132,7 +147,12 @@ impl DisplaySnapshot {
     }
 }
 
-pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
+pub async fn run(
+    poll_interval_ms: u64,
+    lang: crate::i18n::SharedLang,
+    tx: EventTx,
+    mut action_rx: broadcast::Receiver<Action>,
+) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(1000)));
     let mut last_connected_names: Vec<String> = Vec::new();
     let mut is_first_run = true;
@@ -152,9 +172,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                         for name in &current_connected {
                             if !last_connected_names.contains(name) {
 
-                                let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                                    "Monitor {name} conectado. Ativando modo Expandir..."
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::success(
+                                    lang.messages().toast_monitor_connected.replace("{name}", name)
+                                )));
 
                                 if let (Some(internal), Some(external)) = (snap.internal_display(), snap.external_display()) {
                                     let _ = apply_layout(DisplayLayoutMode::ExtendRight, &internal.name, &external.name, &snap.server_type).await;
@@ -164,9 +184,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
 
                         for name in &last_connected_names {
                             if !current_connected.contains(name) {
-                                let _ = tx.send(AppEvent::Toast(Toast::info(format!(
-                                    "Monitor {name} desconectado."
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::info(
+                                    lang.messages().toast_monitor_disconnected.replace("{name}", name)
+                                )));
                             }
                         }
                     }
@@ -184,9 +204,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                         if let Ok(snap) = fetch_display_snapshot().await {
                             if let (Some(internal), Some(external)) = (snap.internal_display(), snap.external_display()) {
                                 let _ = apply_layout(layout, &internal.name, &external.name, &snap.server_type).await;
-                                let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                                    "Layout de telas: modo {} aplicado.", layout.title()
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::success(
+                                    lang.messages().toast_layout_applied.replace("{name}", layout.title_in(lang.messages()))
+                                )));
                             } else if let Some(internal) = snap.internal_display() {
                                 if layout == DisplayLayoutMode::InternalOnly {
                                     if snap.server_type.contains("wlr-randr") {
@@ -236,9 +256,11 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                                 let _ = tokio::process::Command::new("xrandr").args(&args).output().await;
                             }
                         }
-                        let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                            "{display} alterado para {mode}"
-                        ))));
+                        let m = lang.messages();
+                        let msg = m.toast_display_changed
+                            .replace("{display}", &display)
+                            .replace("{mode}", &mode);
+                        let _ = tx.send(AppEvent::Toast(Toast::success(msg)));
                         if let Ok(snap) = fetch_display_snapshot().await {
                             let _ = tx.send(AppEvent::Display(Box::new(snap)));
                         }
@@ -252,9 +274,10 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                                     .output().await;
                             }
                         }
-                        let _ = tx.send(AppEvent::Toast(Toast::info(format!(
-                            "{display} definido como tela principal."
-                        ))));
+                        let m = lang.messages();
+                        let msg = m.toast_display_primary
+                            .replace("{display}", &display);
+                        let _ = tx.send(AppEvent::Toast(Toast::info(msg)));
                         if let Ok(snap) = fetch_display_snapshot().await {
                             let _ = tx.send(AppEvent::Display(Box::new(snap)));
                         }

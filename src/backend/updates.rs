@@ -1,6 +1,7 @@
 use tokio::sync::broadcast;
 
 use crate::events::{Action, EventTx};
+use crate::i18n::SharedLang;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distro {
@@ -25,6 +26,10 @@ impl Distro {
     }
 }
 
-pub async fn run(tx: EventTx, _actions: broadcast::Receiver<Action>) -> anyhow::Result<()> {
-    super::pending_stub("updates", "Módulo 6 (checkupdates/apt)", tx).await
+pub async fn run(
+    lang: SharedLang,
+    tx: EventTx,
+    _actions: broadcast::Receiver<Action>,
+) -> anyhow::Result<()> {
+    super::pending_stub("updates", &lang, lang.messages().pending_module_updates, tx).await
 }

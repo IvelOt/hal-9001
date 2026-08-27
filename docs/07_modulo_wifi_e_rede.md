@@ -39,7 +39,7 @@ Regras herdadas que este módulo **deve** respeitar (idênticas às do Módulo 4
 4. **Degradação graciosa** — sem NetworkManager no host, ou com o rádio Wi-Fi
    desligado (soft/rfkill), a aba entra em modo "indisponível/rádio off", nunca
    derruba o app.
-5. **i18n** — todas as strings visíveis passam por `Language::messages()`
+5. **i18n** — todas as strings visíveis usam a política de internacionalização (veja `AGENTS.md`)
    (pt-BR / en-US / es-ES). A entrada `tab_network` já existe no catálogo.
 6. **Zero Emojis Policy** — nenhum emoji na base; ícones são Nerd Font quando
    `config.ui.icons == true`, com *fallback* ASCII (ex.: `[WPA2]`, `[LOCKED]`,

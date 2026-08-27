@@ -29,7 +29,7 @@ Regras herdadas que este módulo **deve** respeitar:
 2. **Estado único** — `App` é a fonte da verdade; a UI de storage é `fn(&App, &Palette, &mut Frame, Rect)`.
 3. **Sem `Arc<Mutex<...>>` entre UI e backend** — comunicação exclusivamente por canais.
 4. **Degradação graciosa** — sem UDisks2 no host, a aba entra em modo "indisponível", nunca derruba o app.
-5. **i18n** — todas as strings visíveis passam por `Language::messages()` (pt-BR / en-US / es-ES).
+5. **i18n** — todas as strings visíveis usam a política de internacionalização (veja `AGENTS.md`).
 6. **Sem warnings** — `cargo clippy -- -D warnings` limpo (Definição de Pronto do projeto).
 
 ---

@@ -292,13 +292,14 @@ fn is_missing_mkfs_error(err: &anyhow::Error) -> bool {
         || lower.contains("failed to execute")
 }
 
-fn format_error_message(fs_type: &str, err: &anyhow::Error) -> String {
+fn format_error_message(fs_type: &str, err: &anyhow::Error, lang: crate::i18n::Language) -> String {
+    let m = lang.messages();
     if is_missing_mkfs_error(err) {
         if let Some((bin, pkg)) = mkfs_hint(fs_type) {
-            return format!("{bin} ausente — instale {pkg}");
+            return format!("{bin} {} {pkg}", m.storage_err_mkfs_missing_suffix);
         }
     }
-    format!("Falha ao formatar: {err}")
+    format!("{}: {err}", m.storage_err_format_generic_prefix)
 }
 
 pub fn is_permission_denied_error(err: &anyhow::Error) -> bool {
@@ -519,13 +520,14 @@ async fn next_sudo_attempt(
     sudo_tx: &SudoPasswordTx,
     label: &str,
     retry_error: &mut Option<String>,
+    lang: crate::i18n::Language,
 ) -> Result<Option<String>, String> {
     if retry_error.is_none() && sudo_cached().await {
         return Ok(None);
     }
     match request_sudo_password(sudo_tx, label, retry_error.take()).await {
         Some(pw) => Ok(Some(pw)),
-        None => Err("operação cancelada pelo usuário".to_string()),
+        None => Err(lang.messages().storage_err_cancelled_by_user.to_string()),
     }
 }
 
@@ -1025,13 +1027,15 @@ async fn open_device_fd(conn: &Connection, block_path: &str) -> anyhow::Result<s
     Ok(std::fs::File::from(std_fd))
 }
 
-async fn checksum_task(iso_path: String, tx: EventTx) {
+async fn checksum_task(iso_path: String, lang: crate::i18n::Language, tx: EventTx) {
+    let m = lang.messages();
     let path_buf = std::path::PathBuf::from(&iso_path);
     let file = match tokio::fs::File::open(&path_buf).await {
         Ok(f) => f,
         Err(e) => {
             let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                "Falha ao abrir ISO para checksum: {e}"
+                "{}: {e}",
+                m.storage_err_checksum_open_failed
             ))));
             return;
         }
@@ -1049,7 +1053,8 @@ async fn checksum_task(iso_path: String, tx: EventTx) {
             Ok(n) => n,
             Err(e) => {
                 let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                    "Falha ao ler ISO: {e}"
+                    "{}: {e}",
+                    m.storage_err_checksum_read_failed
                 ))));
                 return;
             }
@@ -1120,6 +1125,7 @@ fn flash_sync(
     iso_path: &std::path::Path,
     dev_node: &str,
     cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
     let (is_gzip, total_bytes) = probe_image_sync(iso_path);
@@ -1141,7 +1147,7 @@ fn flash_sync(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!("gravação cancelada pelo usuário");
+            anyhow::bail!(lang.messages().storage_err_flash_cancelled);
         }
         let mut n = 0;
         while n < IO_BUFFER_SIZE {
@@ -1197,16 +1203,24 @@ async fn flash_inner(
     iso_path: &str,
     dev_node: &str,
     cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
     let path_buf = std::path::PathBuf::from(iso_path);
     let dev_owned = dev_node.to_string();
     let cancel = Arc::clone(cancel);
     let tx = tx.clone();
-    tokio::task::spawn_blocking(move || flash_sync(&path_buf, &dev_owned, &cancel, &tx)).await?
+    tokio::task::spawn_blocking(move || flash_sync(&path_buf, &dev_owned, &cancel, lang, &tx))
+        .await?
 }
 
-async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: EventTx) {
+async fn multiboot_prepare_task(
+    device_id: String,
+    mount_point: String,
+    lang: crate::i18n::Language,
+    tx: EventTx,
+) {
+    let m = lang.messages();
     let mp = std::path::PathBuf::from(&mount_point);
     let result =
         tokio::task::spawn_blocking(move || crate::backend::multiboot::prepare_multiboot(&mp))
@@ -1216,9 +1230,12 @@ async fn multiboot_prepare_task(device_id: String, mount_point: String, tx: Even
     let toast = match &result {
         Ok(()) => {
             let n = crate::backend::multiboot::count_isos(&mount_point);
-            Toast::info(format!("Multi-boot preparado com sucesso ({n} ISO(s))"))
+            Toast::info(
+                m.storage_toast_multiboot_prepared
+                    .replace("{n}", &n.to_string()),
+            )
         }
-        Err(e) => Toast::error(format!("Falha ao preparar multi-boot: {e}")),
+        Err(e) => Toast::error(format!("{}: {e}", m.storage_err_multiboot_prepare_failed)),
     };
     tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, ok = result.is_ok(), "preparação de multi-boot concluída");
     let _ = tx.send(AppEvent::Toast(toast));
@@ -1228,23 +1245,28 @@ async fn format_via_sudo(
     dev_node: &str,
     bin: &str,
     args: &[String],
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> Result<(), String> {
-    let label = format!("Formatar {dev_node} ({bin})");
-    run_sudo_command(&label, bin, args, sudo_tx, tx).await
+    let label = format!(
+        "{} {dev_node} ({bin})",
+        lang.messages().storage_sudo_label_format
+    );
+    run_sudo_command(&label, bin, args, lang, sudo_tx, tx).await
 }
 
 async fn run_sudo_command(
     label: &str,
     program: &str,
     args: &[String],
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> Result<(), String> {
     let mut retry_error: Option<String> = None;
     loop {
-        let password = match next_sudo_attempt(sudo_tx, label, &mut retry_error).await {
+        let password = match next_sudo_attempt(sudo_tx, label, &mut retry_error, lang).await {
             Ok(pw) => pw,
             Err(msg) => return Err(msg),
         };
@@ -1262,7 +1284,7 @@ async fn run_sudo_command(
             return Ok(());
         }
         if is_sudo_auth_failure(&stderr_text) {
-            retry_error = Some("Senha incorreta".to_string());
+            retry_error = Some(lang.messages().storage_err_wrong_password.to_string());
             continue;
         }
         return Err(format!("{status}: {stderr_text}"));
@@ -1278,17 +1300,23 @@ fn mkfs_vfat_available() -> bool {
 async fn format_fat32_elevated(
     dev_node: &str,
     label: &str,
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> Result<(), String> {
     let original_mode = std::fs::metadata(dev_node)
         .map(|m| m.permissions().mode() & 0o777)
         .map_err(|e| e.to_string())?;
-    let sudo_label = format!("Formatar {dev_node} (FAT32, sem mkfs.vfat)");
+    let m = lang.messages();
+    let sudo_label = format!(
+        "{} {dev_node} {}",
+        m.storage_sudo_label_format, m.storage_sudo_label_fat32_suffix
+    );
     run_sudo_command(
         &sudo_label,
         "chmod",
         &["666".to_string(), dev_node.to_string()],
+        lang,
         sudo_tx,
         tx,
     )
@@ -1303,7 +1331,7 @@ async fn format_fat32_elevated(
             .and_then(|r| r.map_err(|e| e.to_string()));
 
     let restore_args = vec![format!("{original_mode:o}"), dev_node.to_string()];
-    let _ = run_sudo_command(&sudo_label, "chmod", &restore_args, sudo_tx, tx).await;
+    let _ = run_sudo_command(&sudo_label, "chmod", &restore_args, lang, sudo_tx, tx).await;
 
     format_result
 }
@@ -1332,33 +1360,38 @@ async fn format_with_sudo_fallback(
     fs_type: &str,
     label: &str,
     original_err: &anyhow::Error,
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> Toast {
+    let m = lang.messages();
     let Some(dev_node) = snap.dev_node_for_block_path(block_path) else {
-        return Toast::error(format_error_message(fs_type, original_err));
+        return Toast::error(format_error_message(fs_type, original_err, lang));
     };
     if is_fat_fs_type(fs_type) && !mkfs_vfat_available() {
         tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — formatando FAT32 via fatfs com permissão elevada (sudo chmod)");
-        return match format_fat32_elevated(&dev_node, label, sudo_tx, tx).await {
+        return match format_fat32_elevated(&dev_node, label, lang, sudo_tx, tx).await {
             Ok(()) => {
                 let _ =
                     udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
-                Toast::info("Formatação concluída (FAT32 Rust puro, sudo)")
+                Toast::info(format!(
+                    "{}{}",
+                    m.storage_toast_format_done_pure_rust, ", sudo"
+                ))
             }
-            Err(msg) => Toast::error(format!("Falha ao formatar FAT32: {msg}")),
+            Err(msg) => Toast::error(format!("{}: {msg}", m.storage_err_format_fat32_failed)),
         };
     }
     let Some((bin, args)) = mkfs_command(fs_type, label, &dev_node) else {
-        return Toast::error(format_error_message(fs_type, original_err));
+        return Toast::error(format_error_message(fs_type, original_err, lang));
     };
     tracing::warn!(target: "hal9001::storage", device = %device_id, "Block.Format/OpenDevice recusado — usando fallback de mkfs via sudo");
-    match format_via_sudo(&dev_node, &bin, &args, sudo_tx, tx).await {
+    match format_via_sudo(&dev_node, &bin, &args, lang, sudo_tx, tx).await {
         Ok(()) => {
             let _ = udisks_call(conn, block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
-            Toast::info(format!("Formatação concluída ({bin}, sudo)"))
+            Toast::info(format!("{} ({bin}, sudo)", m.storage_toast_format_done))
         }
-        Err(msg) => Toast::error(format!("Falha ao formatar via {bin}: {msg}")),
+        Err(msg) => Toast::error(format!("{} {bin}: {msg}", m.storage_err_format_via_failed)),
     }
 }
 
@@ -1366,10 +1399,11 @@ async fn flash_elevated(
     iso_path: &str,
     dev_node: &str,
     total_bytes: u64,
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
-    let label = format!("Gravar ISO em {dev_node}");
+    let label = format!("{} {dev_node}", lang.messages().storage_sudo_label_flash);
     let args = vec![
         format!("if={iso_path}"),
         format!("of={dev_node}"),
@@ -1380,7 +1414,7 @@ async fn flash_elevated(
     let mut retry_error: Option<String> = None;
 
     loop {
-        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error, lang).await {
             Ok(pw) => pw,
             Err(msg) => anyhow::bail!(msg),
         };
@@ -1416,10 +1450,13 @@ async fn flash_elevated(
             break;
         }
         if is_sudo_auth_failure(&stderr_text) {
-            retry_error = Some("Senha incorreta".to_string());
+            retry_error = Some(lang.messages().storage_err_wrong_password.to_string());
             continue;
         }
-        anyhow::bail!("dd elevado terminou com {status}: {stderr_text}");
+        anyhow::bail!(
+            "{} {status}: {stderr_text}",
+            lang.messages().storage_err_dd_elevated_failed
+        );
     }
 
     let _ = tx.send(AppEvent::StorageFlashProgress {
@@ -1440,6 +1477,7 @@ fn flash_elevated_gzip_sync(
     dev_node: &str,
     password: Option<String>,
     cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
     tx: &EventTx,
     total_bytes: u64,
 ) -> anyhow::Result<(std::process::ExitStatus, String)> {
@@ -1504,7 +1542,7 @@ fn flash_elevated_gzip_sync(
         let mut window_bytes: u64 = 0;
         loop {
             if cancel.load(Ordering::Relaxed) {
-                anyhow::bail!("gravação cancelada pelo usuário");
+                anyhow::bail!(lang.messages().storage_err_flash_cancelled);
             }
             let mut n = 0;
             while n < IO_BUFFER_SIZE {
@@ -1561,14 +1599,18 @@ async fn flash_elevated_gzip(
     dev_node: &str,
     total_bytes: u64,
     cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
     sudo_tx: &SudoPasswordTx,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
-    let label = format!("Gravar ISO comprimida em {dev_node}");
+    let label = format!(
+        "{} {dev_node}",
+        lang.messages().storage_sudo_label_flash_gzip
+    );
     let mut retry_error: Option<String> = None;
 
     loop {
-        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error).await {
+        let password = match next_sudo_attempt(sudo_tx, &label, &mut retry_error, lang).await {
             Ok(pw) => pw,
             Err(msg) => anyhow::bail!(msg),
         };
@@ -1582,6 +1624,7 @@ async fn flash_elevated_gzip(
                 &dev_owned,
                 password,
                 &cancel_owned,
+                lang,
                 &tx_owned,
                 total_bytes,
             )
@@ -1591,10 +1634,13 @@ async fn flash_elevated_gzip(
             break;
         }
         if is_sudo_auth_failure(&stderr_text) {
-            retry_error = Some("Senha incorreta".to_string());
+            retry_error = Some(lang.messages().storage_err_wrong_password.to_string());
             continue;
         }
-        anyhow::bail!("dd elevado (streaming) terminou com {status}: {stderr_text}");
+        anyhow::bail!(
+            "{} {status}: {stderr_text}",
+            lang.messages().storage_err_dd_elevated_streaming_failed
+        );
     }
 
     let _ = tx.send(AppEvent::StorageFlashProgress {
@@ -1610,31 +1656,52 @@ async fn flash_elevated_gzip(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn flash_task(
     device_id: String,
     iso_path: String,
     dev_node: String,
     cancel: Arc<AtomicBool>,
+    lang: crate::i18n::Language,
     tx: EventTx,
     sudo_tx: SudoPasswordTx,
 ) {
+    let m = lang.messages();
     let (is_gzip, total_bytes) = probe_image(&iso_path).await;
-    let result = match flash_inner(&iso_path, &dev_node, &cancel, &tx).await {
-        Ok(()) => Ok("gravação concluída com sucesso".to_string()),
+    let result = match flash_inner(&iso_path, &dev_node, &cancel, lang, &tx).await {
+        Ok(()) => Ok(m.storage_toast_flash_success.to_string()),
         Err(e) if is_permission_denied_error(&e) => {
             tracing::warn!(target: "hal9001::storage", device = %device_id, "permissão negada ao abrir dispositivo de bloco — usando fallback de dd elevado");
             let _ = tx.send(AppEvent::Toast(Toast::info(
-                "permissão negada — solicitando elevação (sudo) para gravar o dispositivo",
+                m.storage_toast_perm_denied_elevating,
             )));
             if is_gzip {
-                flash_elevated_gzip(&iso_path, &dev_node, total_bytes, &cancel, &sudo_tx, &tx)
-                    .await
-                    .map(|()| "gravação concluída com sucesso (elevado, streaming)".to_string())
-                    .map_err(|e| e.to_string())
+                flash_elevated_gzip(
+                    &iso_path,
+                    &dev_node,
+                    total_bytes,
+                    &cancel,
+                    lang,
+                    &sudo_tx,
+                    &tx,
+                )
+                .await
+                .map(|()| {
+                    format!(
+                        "{}{}",
+                        m.storage_toast_flash_success, m.storage_suffix_elevated_streaming
+                    )
+                })
+                .map_err(|e| e.to_string())
             } else {
-                flash_elevated(&iso_path, &dev_node, total_bytes, &sudo_tx, &tx)
+                flash_elevated(&iso_path, &dev_node, total_bytes, lang, &sudo_tx, &tx)
                     .await
-                    .map(|()| "gravação concluída com sucesso (elevado)".to_string())
+                    .map(|()| {
+                        format!(
+                            "{}{}",
+                            m.storage_toast_flash_success, m.storage_suffix_elevated
+                        )
+                    })
                     .map_err(|e| e.to_string())
             }
         }
@@ -1676,13 +1743,15 @@ async fn multiboot_list_isos_task(
     device_id: String,
     part_path: String,
     existing_mount: Option<String>,
+    lang: crate::i18n::Language,
     tx: EventTx,
 ) {
     match ensure_mounted(&conn, &part_path, existing_mount).await {
         Ok(mount_point) => list_and_emit(&mount_point, device_id, &tx).await,
         Err(e) => {
             let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                "Falha ao montar partição de dados: {e}"
+                "{}: {e}",
+                lang.messages().storage_err_mount_data_partition
             ))));
             let _ = tx.send(AppEvent::StorageMultibootIsoList {
                 device_id,
@@ -1742,14 +1811,16 @@ async fn multiboot_add_iso_task(
     part_path: String,
     existing_mount: Option<String>,
     src_path: String,
+    lang: crate::i18n::Language,
     tx: EventTx,
 ) {
+    let m = lang.messages();
     let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
         Ok(mp) => mp,
         Err(e) => {
             let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
                 device_id,
-                result: Err(format!("falha ao montar partição de dados: {e}")),
+                result: Err(format!("{}: {e}", m.storage_err_mount_data_partition)),
             });
             return;
         }
@@ -1758,7 +1829,7 @@ async fn multiboot_add_iso_task(
     if let Err(e) = tokio::fs::create_dir_all(&isos_dir).await {
         let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
             device_id,
-            result: Err(format!("falha ao criar diretório ISOs/: {e}")),
+            result: Err(format!("{}: {e}", m.storage_err_create_isos_dir)),
         });
         return;
     }
@@ -1785,6 +1856,7 @@ async fn multiboot_remove_iso_task(
     part_path: String,
     existing_mount: Option<String>,
     file_name: String,
+    lang: crate::i18n::Language,
     tx: EventTx,
 ) {
     let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
@@ -1792,7 +1864,10 @@ async fn multiboot_remove_iso_task(
         Err(e) => {
             let _ = tx.send(AppEvent::StorageMultibootIsoRemoveDone {
                 device_id,
-                result: Err(format!("falha ao montar partição de dados: {e}")),
+                result: Err(format!(
+                    "{}: {e}",
+                    lang.messages().storage_err_mount_data_partition
+                )),
             });
             return;
         }
@@ -1809,9 +1884,14 @@ async fn multiboot_remove_iso_task(
     list_and_emit(&mount_point, device_id, &tx).await;
 }
 
-async fn refresh_snapshot(conn: &Option<Connection>) -> anyhow::Result<StorageSnapshot> {
+async fn refresh_snapshot(
+    conn: &Option<Connection>,
+    lang: crate::i18n::Language,
+) -> anyhow::Result<StorageSnapshot> {
     let Some(c) = conn else {
-        return Err(anyhow::anyhow!("sem conexão D-Bus"));
+        return Err(anyhow::anyhow!(
+            lang.messages().storage_err_no_dbus_connection
+        ));
     };
     let objects = get_managed_objects(c).await?;
     let swaps = std::fs::read_to_string("/proc/swaps").unwrap_or_default();
@@ -1821,6 +1901,7 @@ async fn refresh_snapshot(conn: &Option<Connection>) -> anyhow::Result<StorageSn
 
 pub async fn run(
     poll_ms: u64,
+    lang: crate::i18n::SharedLang,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
     sudo_tx: SudoPasswordTx,
@@ -1839,7 +1920,7 @@ pub async fn run(
                 if conn.is_none() {
                     conn = Connection::system().await.ok();
                 }
-                match refresh_snapshot(&conn).await {
+                match refresh_snapshot(&conn, lang.get()).await {
                     Ok(snap) => {
                         last_snapshot = Some(snap.clone());
                         if tx.send(AppEvent::Storage(Box::new(snap))).is_err() {
@@ -1850,7 +1931,7 @@ pub async fn run(
                         conn = None;
                         let _ = tx.send(AppEvent::ServiceDegraded {
                             name: "storage",
-                            reason: format!("UDisks2 indisponível: {e}"),
+                            reason: format!("{}: {e}", lang.messages().storage_err_udisks_unavailable),
                         });
                     }
                 }
@@ -1858,11 +1939,15 @@ pub async fn run(
             res = actions.recv() => match res {
                 Ok(Action::StorageAnalyzerScan(path)) => {
 
-                    tokio::spawn(crate::backend::disk_analyzer::scan(path, tx.clone()));
+                    tokio::spawn(crate::backend::disk_analyzer::scan(
+                        path,
+                        lang.get(),
+                        tx.clone(),
+                    ));
                 }
                 Ok(action) => {
                     if let Some(c) = &conn {
-                        handle_action(c, action, &last_snapshot, &tx, &mut flash_cancels, &sudo_tx).await;
+                        handle_action(c, action, lang.get(), &last_snapshot, &tx, &mut flash_cancels, &sudo_tx).await;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -1873,14 +1958,17 @@ pub async fn run(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_action(
     conn: &Connection,
     action: Action,
+    lang: crate::i18n::Language,
     snapshot: &Option<StorageSnapshot>,
     tx: &EventTx,
     flash_cancels: &mut HashMap<String, Arc<AtomicBool>>,
     sudo_tx: &SudoPasswordTx,
 ) {
+    let m = lang.messages();
     match action {
         Action::StorageMount(id) => {
             let toast = if let Some(drive) = snapshot.as_ref().and_then(|s| s.drive_by_id(&id)) {
@@ -1896,21 +1984,20 @@ async fn handle_action(
                     }
                 }
                 match (mount_points.as_slice(), last_err) {
-                    ([], Some(e)) => Toast::error(format!("Falha ao montar: {e}")),
-                    ([], None) => {
-                        Toast::error("Dispositivo sem partição montável — formate com [f] primeiro")
-                    }
-                    ([mp], _) => Toast::info(format!("Partição montada em {mp}")),
+                    ([], Some(e)) => Toast::error(format!("{}: {e}", m.storage_err_mount_prefix)),
+                    ([], None) => Toast::error(m.storage_err_no_mountable_partition),
+                    ([mp], _) => Toast::info(format!("{} {mp}", m.storage_toast_mounted_at_prefix)),
                     (mps, _) => Toast::info(format!(
-                        "{} partição(ões) montada(s) em: {}",
+                        "{} {} {}",
                         mps.len(),
+                        m.storage_toast_mounted_count_suffix,
                         mps.join(", ")
                     )),
                 }
             } else {
                 match mount_and_get_path(conn, &id.0).await {
-                    Ok(mp) => Toast::info(format!("Partição montada em {mp}")),
-                    Err(e) => Toast::error(format!("Falha ao montar: {e}")),
+                    Ok(mp) => Toast::info(format!("{} {mp}", m.storage_toast_mounted_at_prefix)),
+                    Err(e) => Toast::error(format!("{}: {e}", m.storage_err_mount_prefix)),
                 }
             };
             let _ = tx.send(AppEvent::Toast(toast));
@@ -1929,18 +2016,16 @@ async fn handle_action(
                     }
                 }
                 match (unmounted, last_err) {
-                    (0, Some(e)) => {
-                        Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}"))
+                    (0, Some(e)) => Toast::error(format!("{}: {e}", m.storage_err_unmount_failed)),
+                    (0, None) => Toast::info(m.storage_toast_none_mounted),
+                    (n, _) => {
+                        Toast::info(format!("{n} {}", m.storage_toast_unmounted_count_suffix))
                     }
-                    (0, None) => Toast::info("nenhuma partição montada"),
-                    (n, _) => Toast::info(format!("{n} partição(ões) desmontada(s)")),
                 }
             } else {
                 match unmount(conn, &id.0).await {
-                    Ok(()) => Toast::info("Dispositivo desmontado"),
-                    Err(e) => {
-                        Toast::error(format!("Falha ao desmontar (dispositivo em uso?): {e}"))
-                    }
+                    Ok(()) => Toast::info(m.storage_toast_device_unmounted),
+                    Err(e) => Toast::error(format!("{}: {e}", m.storage_err_unmount_failed)),
                 }
             };
             let _ = tx.send(AppEvent::Toast(toast));
@@ -1952,14 +2037,12 @@ async fn handle_action(
                 .cloned()
             else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo não encontrado para ejeção",
+                    m.storage_err_device_not_found_eject,
                 )));
                 return;
             };
             if drive.is_system {
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de disco de sistema recusada");
                 return;
             }
@@ -1974,14 +2057,15 @@ async fn handle_action(
             }
             if let Some(e) = unmount_err {
                 let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                    "Falha ao desmontar (dispositivo em uso?): {e}"
+                    "{}: {e}",
+                    m.storage_err_unmount_failed
                 ))));
                 return;
             }
 
             let toast = match eject(conn, &drive).await {
-                Ok(()) => Toast::success("[DISCO] Ejeção segura concluída".to_string()),
-                Err(e) => Toast::error(format!("Falha ao ejetar: {e}")),
+                Ok(()) => Toast::success(m.storage_toast_eject_success.to_string()),
+                Err(e) => Toast::error(format!("{}: {e}", m.storage_err_eject_failed_prefix)),
             };
             tracing::warn!(target: "hal9001::storage", drive = %id.0, "ejeção de dispositivo executada");
             let _ = tx.send(AppEvent::Toast(toast));
@@ -1999,24 +2083,20 @@ async fn handle_action(
                 .unwrap_or(true)
             {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "formatação de disco de sistema recusada");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 return;
             }
 
             let Some(snap) = snapshot.as_ref() else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
 
             let Some(block_path) = resolve_block_object_path(snap, &id) else {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "bloco de dispositivo não encontrado para formatação");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo de bloco não encontrado para formatação",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_block_not_found)));
                 return;
             };
 
@@ -2025,7 +2105,7 @@ async fn handle_action(
             }
             tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
-                Ok(()) => Toast::info("Formatação concluída"),
+                Ok(()) => Toast::info(m.storage_toast_format_done),
                 Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {
                     tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — tentando formatador FAT32 Rust puro via Block.OpenDevice");
                     match try_pure_rust_fat32(conn, &block_path, &label).await {
@@ -2037,7 +2117,7 @@ async fn handle_action(
                                 "Rescan",
                             )
                             .await;
-                            Toast::info("Formatação concluída (FAT32 Rust puro)")
+                            Toast::info(m.storage_toast_format_done_pure_rust)
                         }
                         Err(_) => {
                             format_with_sudo_fallback(
@@ -2048,6 +2128,7 @@ async fn handle_action(
                                 &fs_type,
                                 &label,
                                 &e,
+                                lang,
                                 sudo_tx,
                                 tx,
                             )
@@ -2064,6 +2145,7 @@ async fn handle_action(
                         &fs_type,
                         &label,
                         &e,
+                        lang,
                         sudo_tx,
                         tx,
                     )
@@ -2074,7 +2156,7 @@ async fn handle_action(
         }
         Action::StorageChecksumIso(iso_path) => {
             let txc = tx.clone();
-            tokio::spawn(checksum_task(iso_path, txc));
+            tokio::spawn(checksum_task(iso_path, lang, txc));
         }
         Action::StorageFlashIso {
             device_id,
@@ -2083,20 +2165,18 @@ async fn handle_action(
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
             if snap.is_system_target(&id) {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "gravação de ISO em disco de sistema recusada");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 return;
             }
             let Some(dev_node) = snap.drive_dev_node(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "dispositivo alvo não encontrado",
+                    m.storage_err_target_partition_not_found,
                 )));
                 return;
             };
@@ -2109,7 +2189,7 @@ async fn handle_action(
             let txc = tx.clone();
             let sudo_txc = sudo_tx.clone();
             tokio::spawn(flash_task(
-                device_id, iso_path, dev_node, cancel, txc, sudo_txc,
+                device_id, iso_path, dev_node, cancel, lang, txc, sudo_txc,
             ));
         }
         Action::StorageFlashCancel { device_id } => {
@@ -2121,28 +2201,25 @@ async fn handle_action(
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
             if snap.is_system_target(&id) {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "preparação de multi-boot em disco de sistema recusada");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 return;
             }
             let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição alvo não encontrada",
+                    m.storage_err_target_partition_not_found,
                 )));
                 return;
             };
             if !matches!(part.fs, FsKind::Vfat) {
-                let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                    "a partição precisa estar formatada como FAT32 para multi-boot (atual: {}) — formate primeiro com [f]",
-                    part.fs.label()
-                ))));
+                let _ = tx.send(AppEvent::Toast(Toast::error(
+                    m.storage_err_needs_fat32.replace("{fs}", part.fs.label()),
+                )));
                 return;
             }
             let part_path = part.id.0.clone();
@@ -2151,26 +2228,27 @@ async fn handle_action(
                 Ok(mp) => mp,
                 Err(e) => {
                     let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                        "falha ao montar partição de dados: {e}"
+                        "{}: {e}",
+                        m.storage_err_mount_data_partition
                     ))));
                     return;
                 }
             };
             tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, "preparação de multi-boot solicitada");
             let txc = tx.clone();
-            tokio::spawn(multiboot_prepare_task(device_id, mount_point, txc));
+            tokio::spawn(multiboot_prepare_task(device_id, mount_point, lang, txc));
         }
         Action::StorageMultibootListIsos { device_id } => {
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
             let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição alvo não encontrada",
+                    m.storage_err_target_partition_not_found,
                 )));
                 return;
             };
@@ -2183,6 +2261,7 @@ async fn handle_action(
                 device_id,
                 part_path,
                 existing_mount,
+                lang,
                 txc,
             ));
         }
@@ -2193,20 +2272,18 @@ async fn handle_action(
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
             if snap.is_system_target(&id) {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "escrita de ISO em disco de sistema recusada (gerenciador multi-boot)");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 return;
             }
             let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição alvo não encontrada",
+                    m.storage_err_target_partition_not_found,
                 )));
                 return;
             };
@@ -2221,6 +2298,7 @@ async fn handle_action(
                 part_path,
                 existing_mount,
                 src_path,
+                lang,
                 txc,
             ));
         }
@@ -2231,20 +2309,18 @@ async fn handle_action(
             let id = DeviceId(device_id.clone());
             let Some(snap) = snapshot else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "árvore de discos indisponível",
+                    m.storage_err_tree_unavailable,
                 )));
                 return;
             };
             if snap.is_system_target(&id) {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "remoção de ISO em disco de sistema recusada (gerenciador multi-boot)");
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "operação bloqueada: disco de sistema",
-                )));
+                let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
                 return;
             }
             let Some(part) = snap.partition_by_id(&id) else {
                 let _ = tx.send(AppEvent::Toast(Toast::error(
-                    "partição alvo não encontrada",
+                    m.storage_err_target_partition_not_found,
                 )));
                 return;
             };
@@ -2259,6 +2335,7 @@ async fn handle_action(
                 part_path,
                 existing_mount,
                 file_name,
+                lang,
                 txc,
             ));
         }

@@ -10,18 +10,19 @@ use crate::backend::display::{DisplayLayoutMode, DisplayNode, DisplaySnapshot};
 use super::theme::Palette;
 
 pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
+    let m = app.lang.messages();
     let Some(snap) = &app.displays else {
         super::draw_pending(
             app,
             pal,
             f,
             area,
-            "Telas & Monitores",
+            m.display_pending_title,
             "display",
             &[
-                "[e] Expandir à Direita   [E] Expandir à Esquerda",
-                "[m] Espelhar Telas       [x] Somente Externo",
-                "[i] Somente Notebook     [p] Definir Monitor Primário",
+                m.display_pending_extend,
+                m.display_pending_mirror_ext,
+                m.display_pending_notebook_primary,
             ],
         );
         return;
@@ -37,39 +38,57 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         ])
         .split(area);
 
-    draw_header(snap, pal, f, chunks[0]);
-    draw_monitor_canvas(snap, app, pal, f, chunks[1]);
-    draw_inspector_and_modes(snap, app, pal, f, chunks[2]);
-    draw_footer(pal, f, chunks[3]);
+    draw_header(snap, m, pal, f, chunks[0]);
+    draw_monitor_canvas(snap, app, m, pal, f, chunks[1]);
+    draw_inspector_and_modes(snap, app, m, pal, f, chunks[2]);
+    draw_footer(m, pal, f, chunks[3]);
 }
 
-fn draw_header(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_header(
+    snap: &DisplaySnapshot,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    area: Rect,
+) {
     let layout_badge = if let Some(l) = snap.current_layout {
-        l.title()
+        l.title_in(m)
     } else {
-        "Individual / Custom"
+        m.display_mode_custom
     };
 
     let spans = vec![
-        Span::styled(" Conectados: ", Style::default().fg(pal.dim)),
         Span::styled(
-            format!("{} tela(s)", snap.connected_count),
+            format!(" {} ", m.display_label_connected),
+            Style::default().fg(pal.dim),
+        ),
+        Span::styled(
+            format!("{} {}", snap.connected_count, m.display_screens_suffix),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   Arranjo Atual: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.display_label_layout),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             format!("[ {layout_badge} ]"),
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   Monitor Primário: ", Style::default().fg(pal.dim)),
         Span::styled(
-            snap.primary_name.as_deref().unwrap_or("Nenhum"),
+            format!("   {} ", m.display_label_primary),
+            Style::default().fg(pal.dim),
+        ),
+        Span::styled(
+            snap.primary_name.as_deref().unwrap_or(m.display_none),
             Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("   Servidor: ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("   {} ", m.display_label_server),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             if snap.server_type.is_empty() {
-                "X11 (RandR)"
+                m.display_x11_fallback
             } else {
                 &snap.server_type
             },
@@ -81,7 +100,7 @@ fn draw_header(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.accent))
         .title(Span::styled(
-            " Gerenciador de Telas & Monitores (Canvas 2D) ",
+            m.display_title_header,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ));
 
@@ -91,6 +110,7 @@ fn draw_header(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect)
 fn draw_monitor_canvas(
     snap: &DisplaySnapshot,
     app: &App,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -98,10 +118,10 @@ fn draw_monitor_canvas(
     let connected = snap.connected_displays();
 
     if connected.is_empty() {
-        let p = Paragraph::new("Nenhuma saída de vídeo ativa conectada.").block(
+        let p = Paragraph::new(m.display_no_video_output).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Canvas de Telas "),
+                .title(m.display_title_canvas),
         );
         f.render_widget(p, area);
         return;
@@ -121,13 +141,14 @@ fn draw_monitor_canvas(
 
     for (i, d) in connected.iter().enumerate() {
         let is_selected = i == sel_idx;
-        draw_single_monitor_box(d, is_selected, pal, f, monitor_cols[i]);
+        draw_single_monitor_box(d, is_selected, m, pal, f, monitor_cols[i]);
     }
 }
 
 fn draw_single_monitor_box(
     d: &DisplayNode,
     is_selected: bool,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -135,9 +156,9 @@ fn draw_single_monitor_box(
     let border_color = if is_selected { pal.accent } else { pal.dim };
 
     let title_badge = if is_selected {
-        format!(" ▶ {} [SELECIONADO] ", d.name)
+        format!(" ▶ {} {} ", d.name, m.display_selected_badge)
     } else if d.is_primary {
-        format!(" ● {} [PRIMÁRIO] ", d.name)
+        format!(" ● {} {} ", d.name, m.display_primary_badge)
     } else {
         format!(" {} ", d.name)
     };
@@ -163,52 +184,74 @@ fn draw_single_monitor_box(
         ));
 
     let type_str = if d.is_internal {
-        "Tela Interna (Notebook)"
+        m.display_type_internal
     } else {
-        "Monitor Externo"
+        m.display_type_external
     };
 
     let status_span = if d.is_primary {
         Span::styled(
-            "[● PRIMÁRIO] ",
+            format!(
+                "[● {}] ",
+                m.display_primary_badge
+                    .trim_matches(|c| c == '[' || c == ']')
+            ),
             Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
         )
     } else if d.is_active {
-        Span::styled("[ATIVO] ", Style::default().fg(pal.accent))
+        Span::styled(
+            format!("{} ", m.display_active_badge),
+            Style::default().fg(pal.accent),
+        )
     } else {
-        Span::styled("[DESATIVADO] ", Style::default().fg(pal.warn))
+        Span::styled(
+            format!("{} ", m.display_disabled_badge),
+            Style::default().fg(pal.warn),
+        )
     };
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Tipo: ", Style::default().fg(pal.dim)),
+            Span::styled(
+                format!(" {} ", m.display_label_type),
+                Style::default().fg(pal.dim),
+            ),
             Span::styled(type_str, Style::default().fg(pal.fg)),
             Span::raw("   "),
             status_span,
         ]),
         Line::from(vec![
-            Span::styled(" Resolução: ", Style::default().fg(pal.dim)),
             Span::styled(
-                d.resolution_str(),
+                format!(" {} ", m.display_label_resolution),
+                Style::default().fg(pal.dim),
+            ),
+            Span::styled(
+                d.resolution_str_in(m),
                 Style::default()
                     .fg(if is_selected { pal.ok } else { pal.fg })
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" Posição Virtual: ", Style::default().fg(pal.dim)),
+            Span::styled(
+                format!(" {} ", m.display_label_virtual_pos),
+                Style::default().fg(pal.dim),
+            ),
             Span::styled(
                 format!("X: {}, Y: {}", d.pos_x, d.pos_y),
                 Style::default().fg(pal.dim),
             ),
-            Span::styled("   Rotação: ", Style::default().fg(pal.dim)),
+            Span::styled(
+                format!("   {} ", m.display_label_rotation),
+                Style::default().fg(pal.dim),
+            ),
             Span::styled(&d.rotation, Style::default().fg(pal.fg)),
         ]),
         Line::from(vec![Span::styled(
             if is_selected {
-                " [h/l] Trocar Foco de Tela   [p] Definir Primário "
+                m.display_hint_switch_focus
             } else {
-                " Use [h/l] para selecionar esta tela "
+                m.display_hint_select_this
             },
             Style::default().fg(pal.dim),
         )]),
@@ -220,6 +263,7 @@ fn draw_single_monitor_box(
 fn draw_inspector_and_modes(
     snap: &DisplaySnapshot,
     app: &App,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -229,34 +273,47 @@ fn draw_inspector_and_modes(
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(area);
 
-    draw_modes_card(snap, pal, f, sub_chunks[0]);
-    draw_resolutions_inspector(snap, app, pal, f, sub_chunks[1]);
+    draw_modes_card(snap, m, pal, f, sub_chunks[0]);
+    draw_resolutions_inspector(snap, app, m, pal, f, sub_chunks[1]);
 }
 
-fn draw_modes_card(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_modes_card(
+    snap: &DisplaySnapshot,
+    m: &'static crate::i18n::Messages,
+    pal: &Palette,
+    f: &mut Frame,
+    area: Rect,
+) {
     let current = snap.current_layout;
 
     let modes = [
         (
             DisplayLayoutMode::ExtendRight,
             "[e]",
-            "Expandir à Direita (Padrão)",
+            format!(
+                "{}{}",
+                m.display_mode_extend_right, m.display_default_suffix
+            ),
         ),
-        (DisplayLayoutMode::ExtendLeft, "[E]", "Expandir à Esquerda"),
+        (
+            DisplayLayoutMode::ExtendLeft,
+            "[E]",
+            m.display_mode_extend_left.to_string(),
+        ),
         (
             DisplayLayoutMode::Mirror,
             "[m]",
-            "Espelhar Telas (Duplicar)",
+            format!("{}{}", m.display_mode_mirror, m.display_duplicate_suffix),
         ),
         (
             DisplayLayoutMode::ExternalOnly,
             "[x]",
-            "Apenas Monitor Externo",
+            m.display_mode_external_only.to_string(),
         ),
         (
             DisplayLayoutMode::InternalOnly,
             "[i]",
-            "Apenas Tela do Notebook",
+            m.display_mode_internal_only.to_string(),
         ),
     ];
 
@@ -279,7 +336,7 @@ fn draw_modes_card(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: R
             Span::styled(format!("{:<28}", desc), style),
             if is_active {
                 Span::styled(
-                    "[ATIVO]",
+                    m.display_active_tag,
                     Style::default().fg(pal.ok).add_modifier(Modifier::BOLD),
                 )
             } else {
@@ -292,7 +349,7 @@ fn draw_modes_card(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: R
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.dim))
         .title(Span::styled(
-            " Modos de Arranjo (Atalhos Rápidos) ",
+            m.display_title_modes,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ));
 
@@ -302,6 +359,7 @@ fn draw_modes_card(snap: &DisplaySnapshot, pal: &Palette, f: &mut Frame, area: R
 fn draw_resolutions_inspector(
     snap: &DisplaySnapshot,
     app: &App,
+    m: &'static crate::i18n::Messages,
     pal: &Palette,
     f: &mut Frame,
     area: Rect,
@@ -310,10 +368,10 @@ fn draw_resolutions_inspector(
     let sel_idx = app.display_selected.min(connected.len().saturating_sub(1));
 
     let Some(selected_display) = connected.get(sel_idx) else {
-        let p = Paragraph::new("Nenhum monitor selecionado.").block(
+        let p = Paragraph::new(m.display_title_no_monitor).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Resoluções Suportadas "),
+                .title(m.display_title_resolutions),
         );
         f.render_widget(p, area);
         return;
@@ -325,15 +383,15 @@ fn draw_resolutions_inspector(
     let header = Row::new(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            "Resolução",
+            m.display_col_resolution,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Taxa (Hz)",
+            m.display_col_rate,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Status",
+            m.display_col_status,
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
     ])
@@ -343,28 +401,28 @@ fn draw_resolutions_inspector(
     let rows: Vec<Row> = modes
         .iter()
         .enumerate()
-        .map(|(i, m)| {
+        .map(|(i, mode)| {
             let is_sel = i == sel_res_idx;
             let bullet = if is_sel {
                 Span::styled(
                     "▶ ",
                     Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
                 )
-            } else if m.is_current {
+            } else if mode.is_current {
                 Span::styled("● ", Style::default().fg(pal.ok))
             } else {
                 Span::raw("  ")
             };
 
-            let res_str = format!("{}x{}", m.width, m.height);
-            let rate_str = format!("{:.2} Hz", m.rate);
+            let res_str = format!("{}x{}", mode.width, mode.height);
+            let rate_str = format!("{:.2} Hz", mode.rate);
 
             let mut badges = Vec::new();
-            if m.is_current {
-                badges.push("[ATUAL]");
+            if mode.is_current {
+                badges.push(m.display_tag_current);
             }
-            if m.is_preferred {
-                badges.push("[PREFERIDA]");
+            if mode.is_preferred {
+                badges.push(m.display_tag_preferred);
             }
             let badge_str = badges.join(" ");
 
@@ -372,7 +430,7 @@ fn draw_resolutions_inspector(
                 Style::default()
                     .fg(pal.accent)
                     .add_modifier(Modifier::REVERSED)
-            } else if m.is_current {
+            } else if mode.is_current {
                 Style::default().fg(pal.ok)
             } else {
                 Style::default().fg(pal.fg)
@@ -400,11 +458,9 @@ fn draw_resolutions_inspector(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(pal.accent))
             .title(Span::styled(
-                format!(
-                    " Resoluções de {} ({} modos) — [j/k] Selecionar [Enter] Aplicar ",
-                    selected_display.name,
-                    modes.len()
-                ),
+                m.display_title_resolutions_of
+                    .replace("{name}", &selected_display.name)
+                    .replace("{count}", &modes.len().to_string()),
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )),
     );
@@ -412,59 +468,83 @@ fn draw_resolutions_inspector(
     f.render_widget(table, area);
 }
 
-fn draw_footer(pal: &Palette, f: &mut Frame, area: Rect) {
+fn draw_footer(m: &'static crate::i18n::Messages, pal: &Palette, f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(
             " [e] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Expandir Dir  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_extend_right),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[E] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Expandir Esq  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_extend_left),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[m] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Espelhar  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_mirror),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[x] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Só Ext  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_ext_only),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[i] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Só Int  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_int_only),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[p] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Primário  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_label_primary.trim_end_matches(':')),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[h/l] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Tela  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_screen),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[j/k] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Modo  ", Style::default().fg(pal.dim)),
+        Span::styled(
+            format!("{}  ", m.display_footer_mode),
+            Style::default().fg(pal.dim),
+        ),
         Span::styled(
             "[Enter] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Aplicar", Style::default().fg(pal.dim)),
+        Span::styled(m.display_footer_apply, Style::default().fg(pal.dim)),
     ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(pal.dim))
-        .title(" Controles & Atalhos ");
+        .title(m.display_footer_title);
 
     f.render_widget(Paragraph::new(line).block(block), area);
 }

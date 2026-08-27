@@ -6,6 +6,7 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::Connection;
 
 use crate::events::{Action, AppEvent, DeviceId, EventTx, Toast};
+use crate::i18n::SharedLang;
 
 const NM_SERVICE: &str = "org.freedesktop.NetworkManager";
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
@@ -216,6 +217,7 @@ impl ThroughputTracker {
 
 pub async fn run(
     polling_ms: u64,
+    lang: SharedLang,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
 ) -> anyhow::Result<()> {
@@ -256,13 +258,14 @@ pub async fn run(
                 }
             }
             Ok(action) = actions.recv() => {
+                let m = lang.messages();
                 match action {
                     Action::NetworkRescan => {
                         let _ = tx.send(AppEvent::NetworkScanning(true));
                         if let Err(e) = trigger_rescan().await {
-                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("Falha no rescan: {e}"))));
+                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("{}: {e}", m.net_err_rescan_failed))));
                         } else {
-                            let _ = tx.send(AppEvent::Toast(Toast::info("Escanear redes Wi-Fi iniciado...")));
+                            let _ = tx.send(AppEvent::Toast(Toast::info(m.net_toast_scan_started)));
                         }
                         tokio::time::sleep(Duration::from_millis(1500)).await;
                         if let Ok(snap) = collect_snapshot(&mut throughput).await {
@@ -274,26 +277,26 @@ pub async fn run(
                     Action::NetworkToggleRadio => {
                         match toggle_wireless_radio().await {
                             Ok(new_state) => {
-                                let label = if new_state { "ligado" } else { "desligado" };
-                                let _ = tx.send(AppEvent::Toast(Toast::info(format!("Wi-Fi {label}"))));
+                                let label = if new_state { m.net_toast_radio_on_state } else { m.net_toast_radio_off_state };
+                                let _ = tx.send(AppEvent::Toast(Toast::info(format!("{} {label}", m.net_toast_radio_prefix))));
                                 if let Ok(snap) = collect_snapshot(&mut throughput).await {
                                     let _ = tx.send(AppEvent::Network(Box::new(snap.clone())));
                                     last_snapshot = Some(snap);
                                 }
                             }
                             Err(e) => {
-                                let _ = tx.send(AppEvent::Toast(Toast::error(format!("Erro ao alterar rádio Wi-Fi: {e}"))));
+                                let _ = tx.send(AppEvent::Toast(Toast::error(format!("{}: {e}", m.net_err_radio_toggle))));
                             }
                         }
                     }
                     Action::NetworkConnect { ap_id, ssid, password } => {
-                        let _ = tx.send(AppEvent::Toast(Toast::info(format!("Conectando a {ssid}..."))));
-                        match connect_network(&ap_id, &ssid, password.as_deref()).await {
+                        let _ = tx.send(AppEvent::Toast(Toast::info(format!("{} {ssid}...", m.net_toast_connecting))));
+                        match connect_network(&ap_id, &ssid, password.as_deref(), lang.get()).await {
                             Ok(_) => {
-                                let _ = tx.send(AppEvent::Toast(Toast::info(format!("Conexão iniciada com {ssid}"))));
+                                let _ = tx.send(AppEvent::Toast(Toast::info(format!("{} {ssid}", m.net_toast_connect_started))));
                             }
                             Err(e) => {
-                                let _ = tx.send(AppEvent::Toast(Toast::error(format!("Erro ao conectar: {e}"))));
+                                let _ = tx.send(AppEvent::Toast(Toast::error(format!("{}: {e}", m.net_err_connect))));
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -304,9 +307,9 @@ pub async fn run(
                     }
                     Action::NetworkDisconnect(dev_id) => {
                         if let Err(e) = disconnect_network(&dev_id.0).await {
-                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("Erro ao desconectar: {e}"))));
+                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("{}: {e}", m.net_err_disconnect))));
                         } else {
-                            let _ = tx.send(AppEvent::Toast(Toast::info("Wi-Fi desconectado")));
+                            let _ = tx.send(AppEvent::Toast(Toast::info(m.net_toast_disconnected)));
                         }
                         if let Ok(snap) = collect_snapshot(&mut throughput).await {
                             let _ = tx.send(AppEvent::Network(Box::new(snap.clone())));
@@ -315,9 +318,9 @@ pub async fn run(
                     }
                     Action::NetworkForget(conn_path) => {
                         if let Err(e) = forget_network(&conn_path).await {
-                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("Erro ao esquecer rede: {e}"))));
+                            let _ = tx.send(AppEvent::Toast(Toast::error(format!("{}: {e}", m.net_err_forget))));
                         } else {
-                            let _ = tx.send(AppEvent::Toast(Toast::info("Rede esquecida com sucesso")));
+                            let _ = tx.send(AppEvent::Toast(Toast::info(m.net_toast_forgotten)));
                         }
                         if let Ok(snap) = collect_snapshot(&mut throughput).await {
                             let _ = tx.send(AppEvent::Network(Box::new(snap.clone())));
@@ -647,7 +650,12 @@ async fn forget_network(conn_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn connect_network(ap_path: &str, ssid: &str, password: Option<&str>) -> anyhow::Result<()> {
+async fn connect_network(
+    ap_path: &str,
+    ssid: &str,
+    password: Option<&str>,
+    lang: crate::i18n::Language,
+) -> anyhow::Result<()> {
     let conn = Connection::system().await?;
     let nm_proxy = zbus::Proxy::new(&conn, NM_SERVICE, NM_PATH, NM_IFACE).await?;
     let ap_obj = ObjectPath::try_from(ap_path)?;
@@ -705,5 +713,5 @@ async fn connect_network(ap_path: &str, ssid: &str, password: Option<&str>) -> a
         }
     }
 
-    anyhow::bail!("Dispositivo Wi-Fi não encontrado")
+    anyhow::bail!(lang.messages().net_err_device_not_found)
 }

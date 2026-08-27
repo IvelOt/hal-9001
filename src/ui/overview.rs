@@ -35,9 +35,10 @@ fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
+    let m = app.lang.messages();
     let Some(s) = &app.system else {
         let msg = Paragraph::new(Line::from(Span::styled(
-            "coletando dados do sistema…",
+            m.overview_collecting,
             Style::default().fg(pal.dim),
         )));
         f.render_widget(msg, area);
@@ -176,13 +177,9 @@ fn draw_identity(f: &mut Frame, area: Rect, size: LogoSize, meta: Vec<Line>, pha
 fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let m = app.lang.messages();
     let mode = if app.detailed_overview {
-        if app.lang == crate::i18n::Language::EnUs {
-            "Expanded"
-        } else {
-            "Expandido"
-        }
+        m.overview_mode_expanded
     } else {
-        "Normal"
+        m.overview_mode_normal
     };
     let hint = |key: &'static str, label: &'static str| {
         [
@@ -193,42 +190,25 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
     if area.width < 50 {
-        spans.extend(hint(".", "Det"));
-        spans.extend(hint("p", "Perfil"));
-        spans.extend(hint("c", "Config"));
-    } else if area.width < 68 {
-        spans.extend(hint(".", "Detalhe"));
+        spans.extend(hint(".", m.overview_hint_det));
         spans.extend(hint("p", m.label_power_profile));
-        spans.extend(hint("b/v", "Brilho/Vol"));
-        spans.extend(hint("c", "Config"));
+        spans.extend(hint("c", m.overview_hint_config));
+    } else if area.width < 68 {
+        spans.extend(hint(".", m.overview_hint_detalhe));
+        spans.extend(hint("p", m.label_power_profile));
+        spans.extend(hint("b/v", m.overview_hint_brilho_vol));
+        spans.extend(hint("c", m.overview_hint_config));
     } else {
-        let details_label = if app.lang == crate::i18n::Language::EnUs {
-            "Details:"
-        } else if app.lang == crate::i18n::Language::EsEs {
-            "Detalles:"
-        } else {
-            "Detalhes:"
-        };
-        spans.extend(hint(".", details_label));
+        spans.extend(hint(".", m.overview_hint_details));
         spans.push(Span::styled(
             format!("{mode} "),
             Style::default().fg(pal.fg),
         ));
-        let mute_label = match app.lang {
-            crate::i18n::Language::EnUs => "Mute",
-            crate::i18n::Language::EsEs => "Mudo",
-            crate::i18n::Language::PtBr => "Mudo",
-        };
-        let config_label = match app.lang {
-            crate::i18n::Language::EnUs => "Config",
-            crate::i18n::Language::EsEs => "Config",
-            crate::i18n::Language::PtBr => "Config",
-        };
         spans.extend(hint("p", m.label_power_profile));
         spans.extend(hint("b/B", m.label_brightness));
         spans.extend(hint("v/V", m.label_volume));
-        spans.extend(hint("m", mute_label));
-        spans.extend(hint("c", config_label));
+        spans.extend(hint("m", m.overview_hint_mute));
+        spans.extend(hint("c", m.overview_hint_config));
     }
 
     let mut line = Line::from(spans);
@@ -546,22 +526,27 @@ fn section_power(
             if detailed {
                 let mut parts: Vec<String> = Vec::new();
                 if let Some(h) = b.health {
-                    parts.push(format!("saúde {:.0}%", h * 100.0));
+                    parts.push(format!("{} {:.0}%", m.overview_health_label, h * 100.0));
                 }
                 if let Some(c) = b.cycle_count {
-                    parts.push(format!("{c} ciclos"));
+                    parts.push(format!("{c} {}", m.overview_cycles_suffix));
                 }
                 if let Some(tech) = &b.technology {
                     parts.push(tech.clone());
                 }
                 if !parts.is_empty() {
-                    out.push(kv_line("Bateria+", parts.join(" · "), cols.width, pal));
+                    out.push(kv_line(
+                        m.overview_battery_extra_label,
+                        parts.join(" · "),
+                        cols.width,
+                        pal,
+                    ));
                 }
             }
         }
         None => out.push(kv_line(
             m.label_battery,
-            "N/A (Desktop)".into(),
+            m.overview_desktop_na.into(),
             cols.width,
             pal,
         )),

@@ -35,7 +35,7 @@ Audio
 
 #[test]
 fn test_parse_wpctl_status_sinks_sources_and_streams() {
-    let snap = parse_wpctl_status(WPCTL_STATUS_SAMPLE).unwrap();
+    let snap = parse_wpctl_status(WPCTL_STATUS_SAMPLE, hal9001::i18n::Language::PtBr).unwrap();
 
     assert_eq!(snap.server_name, "PipeWire (WirePlumber)");
     assert_eq!(snap.sinks.len(), 2);
@@ -81,7 +81,8 @@ Audio
 
 #[test]
 fn test_parse_wpctl_filters_channel_links() {
-    let snap = parse_wpctl_status(WPCTL_STATUS_WITH_PORT_LINKS).unwrap();
+    let snap =
+        parse_wpctl_status(WPCTL_STATUS_WITH_PORT_LINKS, hal9001::i18n::Language::PtBr).unwrap();
     assert_eq!(snap.apps.len(), 1);
     assert_eq!(snap.apps[0].id, 90);
     assert_eq!(snap.apps[0].name, "Firefox");
@@ -130,7 +131,7 @@ fn test_audio_mixer_navigation_and_actions() {
 
     let (action_tx, mut action_rx) = broadcast::channel(16);
 
-    let snap = parse_wpctl_status(WPCTL_STATUS_SAMPLE).unwrap();
+    let snap = parse_wpctl_status(WPCTL_STATUS_SAMPLE, hal9001::i18n::Language::PtBr).unwrap();
     let follow_ups = app.handle_event(AppEvent::Audio(Box::new(snap)));
     assert!(follow_ups.is_empty());
     assert!(app.audio.is_some());

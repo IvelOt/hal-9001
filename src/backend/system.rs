@@ -5,6 +5,7 @@ use sysinfo::{Disks, System};
 use tokio::sync::broadcast;
 
 use crate::events::{Action, AppEvent, EventTx, Toast};
+use crate::i18n::{Language, SharedLang};
 
 #[derive(Debug, Clone, Default)]
 pub struct Packages {
@@ -843,7 +844,7 @@ pub fn pactl_delta_arg(delta: i32) -> String {
     }
 }
 
-async fn run_ok(cmd: &str, args: &[&str]) -> Result<(), String> {
+async fn run_ok(cmd: &str, args: &[&str], lang: Language) -> Result<(), String> {
     let out = tokio::process::Command::new(cmd)
         .args(args)
         .output()
@@ -852,27 +853,33 @@ async fn run_ok(cmd: &str, args: &[&str]) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("{cmd} falhou (status {:?})", out.status.code()))
+        Err(format!(
+            "{cmd} {} (status {:?})",
+            lang.messages().word_failed,
+            out.status.code()
+        ))
     }
 }
 
-pub async fn adjust_brightness(delta: i32) -> Result<u8, String> {
-    run_ok("brightnessctl", &["set", &delta_arg(delta)]).await?;
+pub async fn adjust_brightness(delta: i32, lang: Language) -> Result<u8, String> {
+    run_ok("brightnessctl", &["set", &delta_arg(delta)], lang).await?;
     read_brightness(Path::new("/sys/class/backlight"))
         .map(|r| (r * 100.0).round() as u8)
-        .ok_or_else(|| "brilho indisponível".to_string())
+        .ok_or_else(|| lang.messages().err_brightness_unavailable.to_string())
 }
 
-pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
+pub async fn adjust_kbd_brightness(delta: i32, lang: Language) -> Result<u8, String> {
     let applied = run_ok(
         "brightnessctl",
         &["--device", "*kbd*", "set", &delta_arg(delta)],
+        lang,
     )
     .await
     .is_ok()
         || run_ok(
             "brightnessctl",
             &["--device", "*::kbd_backlight", "set", &delta_arg(delta)],
+            lang,
         )
         .await
         .is_ok();
@@ -907,48 +914,59 @@ pub async fn adjust_kbd_brightness(delta: i32) -> Result<u8, String> {
 
     read_kbd_backlight(Path::new("/sys/class/leds"))
         .map(|r| (r * 100.0).round() as u8)
-        .ok_or_else(|| "teclado indisponível".to_string())
+        .ok_or_else(|| lang.messages().err_kbd_unavailable.to_string())
 }
 
-pub async fn adjust_volume(delta: i32) -> Result<u8, String> {
+pub async fn adjust_volume(delta: i32, lang: Language) -> Result<u8, String> {
     let rel = delta_arg(delta);
-    let applied = run_ok("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &rel])
+    let applied = run_ok("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &rel], lang)
         .await
         .is_ok()
-        || run_ok("amixer", &["sset", "Master", &rel]).await.is_ok()
+        || run_ok("amixer", &["sset", "Master", &rel], lang)
+            .await
+            .is_ok()
         || run_ok(
             "pactl",
             &["set-sink-volume", "@DEFAULT_SINK@", &pactl_delta_arg(delta)],
+            lang,
         )
         .await
         .is_ok();
     if !applied {
-        return Err("nenhum backend de áudio disponível".to_string());
+        return Err(lang.messages().err_no_audio_backend.to_string());
     }
     read_volume()
         .map(|v| (v.ratio() * 100.0).round() as u8)
-        .ok_or_else(|| "volume indisponível".to_string())
+        .ok_or_else(|| lang.messages().err_volume_unavailable.to_string())
 }
 
-pub async fn toggle_mute() -> Result<bool, String> {
-    let applied = run_ok("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-        .await
-        .is_ok()
-        || run_ok("amixer", &["sset", "Master", "toggle"])
+pub async fn toggle_mute(lang: Language) -> Result<bool, String> {
+    let applied = run_ok(
+        "wpctl",
+        &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"],
+        lang,
+    )
+    .await
+    .is_ok()
+        || run_ok("amixer", &["sset", "Master", "toggle"], lang)
             .await
             .is_ok()
-        || run_ok("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "toggle"])
-            .await
-            .is_ok();
+        || run_ok(
+            "pactl",
+            &["set-sink-mute", "@DEFAULT_SINK@", "toggle"],
+            lang,
+        )
+        .await
+        .is_ok();
     if !applied {
-        return Err("nenhum backend de áudio disponível".to_string());
+        return Err(lang.messages().err_no_audio_backend.to_string());
     }
     read_volume()
         .map(|v| v.muted)
-        .ok_or_else(|| "volume indisponível".to_string())
+        .ok_or_else(|| lang.messages().err_volume_unavailable.to_string())
 }
 
-async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
+async fn apply_power_profile(profile: PowerProfile, lang: Language) -> Result<(), String> {
     if run_ok(
         "busctl",
         &[
@@ -960,6 +978,7 @@ async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
             "s",
             profile.id(),
         ],
+        lang,
     )
     .await
     .is_ok()
@@ -980,6 +999,7 @@ async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
             "string:ActiveProfile",
             &variant,
         ],
+        lang,
     )
     .await
     .is_ok()
@@ -988,7 +1008,7 @@ async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
     }
 
     for bin in ["powerprofilesctl", "/usr/sbin/powerprofilesctl"] {
-        if run_ok(bin, &["set", profile.id()]).await.is_ok() {
+        if run_ok(bin, &["set", profile.id()], lang).await.is_ok() {
             return Ok(());
         }
     }
@@ -997,7 +1017,7 @@ async fn apply_power_profile(profile: PowerProfile) -> Result<(), String> {
         return Ok(());
     }
 
-    Err("nenhum backend de perfil de energia disponível".to_string())
+    Err(lang.messages().err_no_power_backend.to_string())
 }
 
 fn write_scaling_governor(governor: &str) -> bool {
@@ -1023,7 +1043,7 @@ fn write_scaling_governor(governor: &str) -> bool {
     applied
 }
 
-pub async fn toggle_airplane_mode() -> Result<bool, String> {
+pub async fn toggle_airplane_mode(lang: Language) -> Result<bool, String> {
     let mut wifi_on = false;
     if let Ok(out) = std::process::Command::new("nmcli")
         .args(["radio", "wifi"])
@@ -1047,62 +1067,63 @@ pub async fn toggle_airplane_mode() -> Result<bool, String> {
     let turn_off = wifi_on || bt_on;
 
     if turn_off {
-        let _ = run_ok("nmcli", &["radio", "wifi", "off"]).await;
-        let _ = run_ok("rfkill", &["block", "bluetooth"]).await;
+        let _ = run_ok("nmcli", &["radio", "wifi", "off"], lang).await;
+        let _ = run_ok("rfkill", &["block", "bluetooth"], lang).await;
     } else {
-        let _ = run_ok("nmcli", &["radio", "wifi", "on"]).await;
-        let _ = run_ok("rfkill", &["unblock", "bluetooth"]).await;
+        let _ = run_ok("nmcli", &["radio", "wifi", "on"], lang).await;
+        let _ = run_ok("rfkill", &["unblock", "bluetooth"], lang).await;
     }
 
     Ok(turn_off)
 }
 
-pub async fn cycle_power_profile() -> Result<PowerProfile, String> {
+pub async fn cycle_power_profile(lang: Language) -> Result<PowerProfile, String> {
     let current = read_power_profile().unwrap_or(PowerProfile::Balanced);
     let next = current.next();
-    apply_power_profile(next).await?;
+    apply_power_profile(next, lang).await?;
     Ok(next)
 }
 
-async fn apply_control(action: &Action, tx: &EventTx) -> bool {
+async fn apply_control(action: &Action, lang: Language, tx: &EventTx) -> bool {
+    let m = lang.messages();
     let toast = match action {
-        Action::BrightnessUp => match adjust_brightness(CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("Brilho: {p}%")),
-            Err(e) => Toast::error(format!("Brilho: {e}")),
+        Action::BrightnessUp => match adjust_brightness(CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_brightness_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_brightness_prefix)),
         },
-        Action::BrightnessDown => match adjust_brightness(-CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("Brilho: {p}%")),
-            Err(e) => Toast::error(format!("Brilho: {e}")),
+        Action::BrightnessDown => match adjust_brightness(-CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_brightness_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_brightness_prefix)),
         },
-        Action::VolumeUp => match adjust_volume(CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("Volume: {p}%")),
-            Err(e) => Toast::error(format!("Volume: {e}")),
+        Action::VolumeUp => match adjust_volume(CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_volume_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_volume_prefix)),
         },
-        Action::VolumeDown => match adjust_volume(-CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("Volume: {p}%")),
-            Err(e) => Toast::error(format!("Volume: {e}")),
+        Action::VolumeDown => match adjust_volume(-CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_volume_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_volume_prefix)),
         },
-        Action::ToggleMute => match toggle_mute().await {
-            Ok(true) => Toast::info("Áudio: Mudo"),
-            Ok(false) => Toast::info("Áudio: Ativo"),
-            Err(e) => Toast::error(format!("Áudio: {e}")),
+        Action::ToggleMute => match toggle_mute(lang).await {
+            Ok(true) => Toast::info(m.toast_muted),
+            Ok(false) => Toast::info(m.toast_unmuted),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_volume_prefix)),
         },
-        Action::CyclePowerProfile => match cycle_power_profile().await {
-            Ok(p) => Toast::info(format!("Perfil de Energia: {}", p.label())),
-            Err(e) => Toast::error(format!("Perfil de Energia: {e}")),
+        Action::CyclePowerProfile => match cycle_power_profile(lang).await {
+            Ok(p) => Toast::info(format!("{}: {}", m.toast_profile_prefix, p.label_in(lang))),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_profile_prefix)),
         },
-        Action::KbdBrightnessUp => match adjust_kbd_brightness(CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("[TECLADO] Brilho: {p}%")),
-            Err(e) => Toast::error(format!("[TECLADO] Brilho: {e}")),
+        Action::KbdBrightnessUp => match adjust_kbd_brightness(CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_kbd_brightness_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_kbd_brightness_prefix)),
         },
-        Action::KbdBrightnessDown => match adjust_kbd_brightness(-CONTROL_STEP).await {
-            Ok(p) => Toast::info(format!("[TECLADO] Brilho: {p}%")),
-            Err(e) => Toast::error(format!("[TECLADO] Brilho: {e}")),
+        Action::KbdBrightnessDown => match adjust_kbd_brightness(-CONTROL_STEP, lang).await {
+            Ok(p) => Toast::info(format!("{}: {p}%", m.toast_kbd_brightness_prefix)),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_kbd_brightness_prefix)),
         },
-        Action::ToggleAirplaneMode => match toggle_airplane_mode().await {
-            Ok(true) => Toast::info("[MODO AVIÃO] Rádios desativados (Wi-Fi & Bluetooth OFF)"),
-            Ok(false) => Toast::info("[MODO AVIÃO] Rádios reativados (Wi-Fi & Bluetooth ON)"),
-            Err(e) => Toast::error(format!("[MODO AVIÃO] Erro: {e}")),
+        Action::ToggleAirplaneMode => match toggle_airplane_mode(lang).await {
+            Ok(true) => Toast::info(m.toast_airplane_off),
+            Ok(false) => Toast::info(m.toast_airplane_on),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_airplane_error_prefix)),
         },
         _ => return false,
     };
@@ -1112,6 +1133,7 @@ async fn apply_control(action: &Action, tx: &EventTx) -> bool {
 
 pub async fn run(
     poll_ms: u64,
+    lang: SharedLang,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
 ) -> anyhow::Result<()> {
@@ -1157,10 +1179,8 @@ pub async fn run(
                     p.pending_updates = Some(n);
                 }
                 if n > 0 && prev != Some(n) {
-                    let _ = tx.send(AppEvent::Toast(Toast::warn(format!(
-                        "[SISTEMA] {} atualizações de pacotes disponíveis! [U: Detalhes]",
-                        n
-                    ))));
+                    let msg = lang.messages().toast_updates_available.replace("{n}", &n.to_string());
+                    let _ = tx.send(AppEvent::Toast(Toast::warn(msg)));
                 }
                 let snap = refresh(&mut sys, &mut disks, &stat);
                 let _ = tx.send(AppEvent::System(snap));
@@ -1177,15 +1197,16 @@ pub async fn run(
                     if action == Action::CheckUpdates {
                         let _ = trigger_tx.try_send(());
                         let pending = stat.packages.as_ref().and_then(|p| p.pending_updates);
+                        let m = lang.messages();
                         let msg = match pending {
-                            Some(0) => "Sistema atualizado.".to_string(),
-                            Some(n) => format!("Existem {} atualizações pendentes. Execute a atualização no terminal.", n),
-                            None => "Verificando atualizações...".to_string(),
+                            Some(0) => m.toast_system_updated.to_string(),
+                            Some(n) => m.toast_updates_pending.replace("{n}", &n.to_string()),
+                            None => m.toast_checking_updates.to_string(),
                         };
                         let _ = tx.send(AppEvent::Toast(Toast::info(msg)));
                     }
 
-                    if apply_control(&action, &tx).await {
+                    if apply_control(&action, lang.get(), &tx).await {
                         let snap = refresh(&mut sys, &mut disks, &stat);
                         if tx.send(AppEvent::System(snap)).is_err() {
                             break;
