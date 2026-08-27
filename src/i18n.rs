@@ -169,6 +169,19 @@ pub struct Messages {
     pub hint_quit: &'static str,
     pub hint_help: &'static str,
 
+    pub overview_mode_expanded: &'static str,
+    pub overview_mode_normal: &'static str,
+    pub overview_hint_det: &'static str,
+    pub overview_hint_detalhe: &'static str,
+    pub overview_hint_details: &'static str,
+    pub overview_hint_brilho_vol: &'static str,
+    pub overview_hint_mute: &'static str,
+    pub overview_hint_config: &'static str,
+
+    pub toast_display_changed: &'static str,
+    pub toast_display_primary: &'static str,
+    pub toast_settings_saved: &'static str,
+
     pub toast_profile_prefix: &'static str,
     pub toast_brightness_prefix: &'static str,
     pub toast_volume_prefix: &'static str,
@@ -732,6 +745,19 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     hint_quit: "[q] Sair",
     hint_help: "[?] Ajuda",
 
+    overview_mode_expanded: "Expandido",
+    overview_mode_normal: "Normal",
+    overview_hint_det: "Det",
+    overview_hint_detalhe: "Detalhe",
+    overview_hint_details: "Detalhes:",
+    overview_hint_brilho_vol: "Brilho/Vol",
+    overview_hint_mute: "Mudo",
+    overview_hint_config: "Config",
+
+    toast_display_changed: "{display} alterado para {mode}",
+    toast_display_primary: "{display} definido como tela principal.",
+    toast_settings_saved: "Configurações salvas em {path}",
+
     toast_profile_prefix: "Perfil de Energia",
     toast_brightness_prefix: "Brilho",
     toast_volume_prefix: "Volume",
@@ -1270,6 +1296,19 @@ pub static MESSAGES_EN_US: Messages = Messages {
     hint_quit: "[q] Quit",
     hint_help: "[?] Help",
 
+    overview_mode_expanded: "Expanded",
+    overview_mode_normal: "Normal",
+    overview_hint_det: "Det",
+    overview_hint_detalhe: "Detail",
+    overview_hint_details: "Details:",
+    overview_hint_brilho_vol: "Bright/Vol",
+    overview_hint_mute: "Mute",
+    overview_hint_config: "Config",
+
+    toast_display_changed: "{display} changed to {mode}",
+    toast_display_primary: "{display} set as primary display.",
+    toast_settings_saved: "Settings saved to {path}",
+
     toast_profile_prefix: "Power Profile",
     toast_brightness_prefix: "Brightness",
     toast_volume_prefix: "Volume",
@@ -1807,6 +1846,19 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     hint_config: "[c] Config",
     hint_quit: "[q] Salir",
     hint_help: "[?] Ayuda",
+
+    overview_mode_expanded: "Expandido",
+    overview_mode_normal: "Normal",
+    overview_hint_det: "Det",
+    overview_hint_detalhe: "Detalle",
+    overview_hint_details: "Detalles:",
+    overview_hint_brilho_vol: "Brillo/Vol",
+    overview_hint_mute: "Silenciar",
+    overview_hint_config: "Config",
+
+    toast_display_changed: "{display} cambiado a {mode}",
+    toast_display_primary: "{display} establecido como pantalla principal.",
+    toast_settings_saved: "Configuración guardada en {path}",
 
     toast_profile_prefix: "Perfil de Energía",
     toast_brightness_prefix: "Brillo",

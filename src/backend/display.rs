@@ -251,9 +251,11 @@ pub async fn run(poll_interval_ms: u64, lang: crate::i18n::SharedLang, tx: Event
                                 let _ = tokio::process::Command::new("xrandr").args(&args).output().await;
                             }
                         }
-                        let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                            "{display} alterado para {mode}"
-                        ))));
+                        let m = lang.messages();
+                        let msg = m.toast_display_changed
+                            .replace("{display}", &display)
+                            .replace("{mode}", &mode);
+                        let _ = tx.send(AppEvent::Toast(Toast::success(msg)));
                         if let Ok(snap) = fetch_display_snapshot().await {
                             let _ = tx.send(AppEvent::Display(Box::new(snap)));
                         }
@@ -267,9 +269,10 @@ pub async fn run(poll_interval_ms: u64, lang: crate::i18n::SharedLang, tx: Event
                                     .output().await;
                             }
                         }
-                        let _ = tx.send(AppEvent::Toast(Toast::info(format!(
-                            "{display} definido como tela principal."
-                        ))));
+                        let m = lang.messages();
+                        let msg = m.toast_display_primary
+                            .replace("{display}", &display);
+                        let _ = tx.send(AppEvent::Toast(Toast::info(msg)));
                         if let Ok(snap) = fetch_display_snapshot().await {
                             let _ = tx.send(AppEvent::Display(Box::new(snap)));
                         }
