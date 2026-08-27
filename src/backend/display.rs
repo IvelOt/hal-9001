@@ -147,7 +147,12 @@ impl DisplaySnapshot {
     }
 }
 
-pub async fn run(poll_interval_ms: u64, lang: crate::i18n::SharedLang, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
+pub async fn run(
+    poll_interval_ms: u64,
+    lang: crate::i18n::SharedLang,
+    tx: EventTx,
+    mut action_rx: broadcast::Receiver<Action>,
+) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(1000)));
     let mut last_connected_names: Vec<String> = Vec::new();
     let mut is_first_run = true;

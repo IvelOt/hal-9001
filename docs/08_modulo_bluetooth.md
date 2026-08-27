@@ -45,7 +45,7 @@ backend workers ──AppEvent(mpsc)──▶ App (estado) ──Action(broadcas
 7. **Zero Emojis Policy** — nenhum emoji hardcoded no binário; ícones usam Nerd
    Fonts quando `config.ui.icons == true`, com fallback ASCII textual rígido
    (ex.: `[FONE]`, `[PAD]`, `[TECL]`, `[MOUS]`, `[CEL]`, `[DEV]`).
-8. **i18n** — strings da interface passam pelo catálogo `Language::messages()`
+8. **i18n** — strings da interface usam a política de internacionalização (veja `AGENTS.md`)
    (pt-BR / en-US / es-ES).
 9. **Zero Warnings** — `cargo clippy -- -D warnings` limpo como critério de aceite.
 
@@ -703,5 +703,5 @@ Action::Enter if self.active == Tab::Bluetooth => {
    - `[t]`: Ligar / Desligar rádio
    - `[b]`: Bloquear / Desbloquear dispositivo
 5. **Degradação graciosa completa** em cenários sem BlueZ, sem adaptadores ou com rádio desligado.
-6. **Todas as strings visíveis internacionalizadas** através de `Language::messages()`.
+6. **Todas as strings visíveis internacionalizadas** através da política definida em `AGENTS.md`.
 7. **Suíte de testes automatizados** cobrindo derivação de tipos, formatação de telemetria, máquinas de estado e manuseio de sinais.

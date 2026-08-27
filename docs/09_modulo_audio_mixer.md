@@ -38,7 +38,7 @@ backend workers ──AppEvent(mpsc)──▶ App (estado) ──Action(broadcas
 5. **Sem `Arc<Mutex<...>>` Compartilhado com a UI:** Toda mutação é disparada via canal `Action` e refletida de volta via `AppEvent`.
 6. **Zero Emojis Policy:** Proibido o uso de emojis hardcoded no binário. Ícones usam glifos Nerd Fonts quando `config.ui.icons == true`, com fallback textual rígido em ASCII (ex.: `[SAID]`, `[MIC ]`, `[APP ]`, `[HDMI]`, `[FONE]`, `[USB ]`).
 7. **Suporte a Overdrive (0..=150%):** O mixer permite ajuste seguro acima de 100% até 150% (amplificação por software), com indicação visual de cor distinta (alerta/amarelo/magenta).
-8. **Internacionalização (i18n):** Todas as strings da interface passam pelo catálogo `Language::messages()` (pt-BR / en-US / es-ES).
+8. **Internacionalização (i18n):** Todas as strings da interface usam a política de internacionalização (veja `AGENTS.md`).
 9. **Zero Warnings:** Compilação limpa com `cargo clippy -- -D warnings` como critério mandatório de aceite.
 
 ---

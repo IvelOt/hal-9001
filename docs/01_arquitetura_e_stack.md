@@ -120,7 +120,7 @@ Cada backend segue o *trait*:
 #[async_trait-like] // ver backend/mod.rs (usamos async fn nativo)
 trait Service {
     fn name(&self) -> &'static str;
-    async fn run(self, tx: EventTx, actions: ActionRx) -> anyhow::Result<()>;
+    async fn run(self, lang: SharedLang, tx: EventTx, actions: ActionRx) -> anyhow::Result<()>;
 }
 ```
 

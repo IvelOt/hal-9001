@@ -1716,7 +1716,9 @@ impl App {
         match self.config.save() {
             Ok(path) => {
                 let m = self.lang.messages();
-                let msg = m.toast_settings_saved.replace("{path}", &path.display().to_string());
+                let msg = m
+                    .toast_settings_saved
+                    .replace("{path}", &path.display().to_string());
                 self.toast = Some((Toast::info(msg), Instant::now()));
             }
             Err(e) => {
