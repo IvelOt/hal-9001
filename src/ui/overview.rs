@@ -35,9 +35,10 @@ fn draw_center(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         return;
     }
 
+    let m = app.lang.messages();
     let Some(s) = &app.system else {
         let msg = Paragraph::new(Line::from(Span::styled(
-            "coletando dados do sistema…",
+            m.overview_collecting,
             Style::default().fg(pal.dim),
         )));
         f.render_widget(msg, area);

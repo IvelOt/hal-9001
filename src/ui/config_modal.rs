@@ -12,18 +12,18 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     let area = centered(68, 62, f.area());
     f.render_widget(Clear, area);
 
+    let m = app.lang.messages();
+
     let lang_display = match app.config.ui.language.to_lowercase().as_str() {
-        "pt-br" | "pt" => "Português (Brasil)",
-        "en-us" | "en" => "English (US)",
-        "es-es" | "es" => "Español",
+        "pt-br" | "pt" => m.cfg_lang_pt_br,
+        "en-us" | "en" => m.cfg_lang_en_us,
+        "es-es" | "es" => m.cfg_lang_es_es,
         _ => match app.lang {
-            Language::PtBr => "Auto (Português)",
-            Language::EnUs => "Auto (English)",
-            Language::EsEs => "Auto (Español)",
+            Language::PtBr => m.cfg_lang_auto_pt,
+            Language::EnUs => m.cfg_lang_auto_en,
+            Language::EsEs => m.cfg_lang_auto_es,
         },
     };
-
-    let m = app.lang.messages();
 
     let theme_display = match app.config.theme.name.to_lowercase().as_str() {
         "catppuccin" | "mocha" => "Catppuccin (Mocha)",
@@ -68,35 +68,15 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
         _ => m.cfg_polling_balanced,
     };
 
-    let labels = match app.lang {
-        Language::EnUs => [
-            "Language",
-            "Theme Palette",
-            "ASCII Logo",
-            "Nerd Font Icons",
-            "Frame Rate",
-            "Splash Screen",
-            "Hardware Polling",
-        ],
-        Language::EsEs => [
-            "Idioma",
-            "Paleta de Tema",
-            "Logo ASCII",
-            "Iconos Nerd Font",
-            "Tasa de Cuadros",
-            "Pantalla de Inicio",
-            "Sondeo de Hardware",
-        ],
-        Language::PtBr => [
-            "Idioma",
-            "Paleta de Tema",
-            "Logo ASCII",
-            "Ícones Nerd Font",
-            "Taxa de Quadros",
-            "Splash Screen",
-            "Telemetria / Polling",
-        ],
-    };
+    let labels = [
+        m.cfg_lbl_language,
+        m.cfg_lbl_theme,
+        m.cfg_lbl_ascii,
+        m.cfg_lbl_icons,
+        m.cfg_lbl_fps,
+        m.cfg_lbl_splash,
+        m.cfg_lbl_polling,
+    ];
 
     let values = [
         lang_display,
@@ -137,7 +117,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     }
 
     lines.push(Line::from(vec![
-        Span::styled(" Amostra da Paleta: ", Style::default().fg(pal.dim)),
+        Span::styled(m.cfg_palette_sample, Style::default().fg(pal.dim)),
         Span::styled(
             " [● ACCENT] ",
             Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
@@ -157,22 +137,14 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame) {
     ]));
     lines.push(Line::from(""));
 
-    let footer_text = match app.lang {
-        Language::EnUs => "[↑/↓] Navigate  [←/→/Enter] Change  [s] Save to disk  [Esc/c] Close",
-        Language::EsEs => "[↑/↓] Navegar  [←/→/Enter] Cambiar  [s] Guardar  [Esc/c] Cerrar",
-        Language::PtBr => "[↑/↓] Navegar  [←/→/Enter] Alterar  [s] Salvar no disco  [Esc/c] Fechar",
-    };
+    let footer_text = m.cfg_modal_footer;
 
     lines.push(Line::from(Span::styled(
         footer_text,
         Style::default().fg(pal.dim),
     )));
 
-    let modal_title = match app.lang {
-        Language::EnUs => " Settings & Theme Preferences ",
-        Language::EsEs => " Configuración y Preferencias de Tema ",
-        Language::PtBr => " Configurações & Preferências de Tema ",
-    };
+    let modal_title = m.cfg_modal_title;
 
     let block = Block::default()
         .borders(Borders::ALL)

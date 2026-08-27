@@ -306,6 +306,11 @@ pub struct Messages {
     pub toast_system_updated: &'static str,
     pub toast_checking_updates: &'static str,
 
+    // Display backend
+    pub toast_monitor_connected: &'static str,
+    pub toast_monitor_disconnected: &'static str,
+    pub toast_layout_applied: &'static str,
+
     // Storage backend
     pub storage_err_mount_prefix: &'static str,
     pub storage_err_no_mountable_partition: &'static str,
@@ -597,7 +602,27 @@ pub struct Messages {
     pub cfg_logo_none: &'static str,
     pub cfg_logo_auto: &'static str,
 
+    pub cfg_lang_pt_br: &'static str,
+    pub cfg_lang_en_us: &'static str,
+    pub cfg_lang_es_es: &'static str,
+    pub cfg_lang_auto_pt: &'static str,
+    pub cfg_lang_auto_en: &'static str,
+    pub cfg_lang_auto_es: &'static str,
+
+    pub cfg_lbl_language: &'static str,
+    pub cfg_lbl_theme: &'static str,
+    pub cfg_lbl_ascii: &'static str,
+    pub cfg_lbl_icons: &'static str,
+    pub cfg_lbl_fps: &'static str,
+    pub cfg_lbl_splash: &'static str,
+    pub cfg_lbl_polling: &'static str,
+
+    pub cfg_modal_footer: &'static str,
+    pub cfg_modal_title: &'static str,
+    pub cfg_palette_sample: &'static str,
+
     // Overview
+    pub overview_collecting: &'static str,
     pub overview_health_label: &'static str,
     pub overview_cycles_suffix: &'static str,
     pub overview_battery_extra_label: &'static str,
@@ -643,6 +668,10 @@ pub struct Messages {
 }
 
 pub static MESSAGES_PT_BR: Messages = Messages {
+    toast_monitor_connected: "Monitor {name} conectado. Ativando modo Expandir...",
+    toast_monitor_disconnected: "Monitor {name} desconectado.",
+    toast_layout_applied: "Layout de telas: modo {name} aplicado.",
+
     app_title_suffix: "Assistente de Sistema",
     splash_title: "HAL-9001 · Assistente de Sistema",
     splash_loading: "CARREGANDO",
@@ -1115,6 +1144,26 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     cfg_logo_none: "none (Sem logo)",
     cfg_logo_auto: "auto (Responsiva)",
 
+    cfg_lang_pt_br: "Português (Brasil)",
+    cfg_lang_en_us: "English (US)",
+    cfg_lang_es_es: "Español",
+    cfg_lang_auto_pt: "Auto (Português)",
+    cfg_lang_auto_en: "Auto (English)",
+    cfg_lang_auto_es: "Auto (Español)",
+
+    cfg_lbl_language: "Idioma",
+    cfg_lbl_theme: "Paleta de Tema",
+    cfg_lbl_ascii: "Logo ASCII",
+    cfg_lbl_icons: "Ícones Nerd Font",
+    cfg_lbl_fps: "Taxa de Quadros",
+    cfg_lbl_splash: "Splash Screen",
+    cfg_lbl_polling: "Telemetria / Polling",
+
+    cfg_modal_footer: "[↑/↓] Navegar  [←/→/Enter] Alterar  [s] Salvar no disco  [Esc/c] Fechar",
+    cfg_modal_title: " Configurações & Preferências de Tema ",
+    cfg_palette_sample: " Amostra da Paleta: ",
+
+    overview_collecting: "coletando dados do sistema…",
     overview_health_label: "saúde",
     overview_cycles_suffix: "ciclos",
     overview_battery_extra_label: "Bateria+",
@@ -1157,6 +1206,10 @@ pub static MESSAGES_PT_BR: Messages = Messages {
 };
 
 pub static MESSAGES_EN_US: Messages = Messages {
+    toast_monitor_connected: "Monitor {name} connected. Activating Extend mode...",
+    toast_monitor_disconnected: "Monitor {name} disconnected.",
+    toast_layout_applied: "Display layout: {name} mode applied.",
+
     app_title_suffix: "System Assistant",
     splash_title: "HAL-9001 · System Assistant",
     splash_loading: "LOADING",
@@ -1629,6 +1682,26 @@ pub static MESSAGES_EN_US: Messages = Messages {
     cfg_logo_none: "none (No logo)",
     cfg_logo_auto: "auto (Responsive)",
 
+    cfg_lang_pt_br: "Português (Brasil)",
+    cfg_lang_en_us: "English (US)",
+    cfg_lang_es_es: "Español",
+    cfg_lang_auto_pt: "Auto (Português)",
+    cfg_lang_auto_en: "Auto (English)",
+    cfg_lang_auto_es: "Auto (Español)",
+
+    cfg_lbl_language: "Language",
+    cfg_lbl_theme: "Theme Palette",
+    cfg_lbl_ascii: "ASCII Logo",
+    cfg_lbl_icons: "Nerd Font Icons",
+    cfg_lbl_fps: "Frame Rate",
+    cfg_lbl_splash: "Splash Screen",
+    cfg_lbl_polling: "Hardware Polling",
+
+    cfg_modal_footer: "[↑/↓] Navigate  [←/→/Enter] Change  [s] Save to disk  [Esc/c] Close",
+    cfg_modal_title: " Settings & Theme Preferences ",
+    cfg_palette_sample: " Palette Sample: ",
+
+    overview_collecting: "collecting system data…",
     overview_health_label: "health",
     overview_cycles_suffix: "cycles",
     overview_battery_extra_label: "Battery+",
@@ -1671,6 +1744,10 @@ pub static MESSAGES_EN_US: Messages = Messages {
 };
 
 pub static MESSAGES_ES_ES: Messages = Messages {
+    toast_monitor_connected: "Monitor {name} conectado. Activando modo Expandir...",
+    toast_monitor_disconnected: "Monitor {name} desconectado.",
+    toast_layout_applied: "Distribución de pantallas: modo {name} aplicado.",
+
     app_title_suffix: "Asistente de Sistema",
     splash_title: "HAL-9001 · Asistente de Sistema",
     splash_loading: "CARGANDO",
@@ -2143,6 +2220,26 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     cfg_logo_none: "none (Sin logo)",
     cfg_logo_auto: "auto (Responsivo)",
 
+    cfg_lang_pt_br: "Português (Brasil)",
+    cfg_lang_en_us: "English (US)",
+    cfg_lang_es_es: "Español",
+    cfg_lang_auto_pt: "Auto (Português)",
+    cfg_lang_auto_en: "Auto (English)",
+    cfg_lang_auto_es: "Auto (Español)",
+
+    cfg_lbl_language: "Idioma",
+    cfg_lbl_theme: "Paleta de Tema",
+    cfg_lbl_ascii: "Logo ASCII",
+    cfg_lbl_icons: "Iconos Nerd Font",
+    cfg_lbl_fps: "Tasa de Cuadros",
+    cfg_lbl_splash: "Pantalla de Inicio",
+    cfg_lbl_polling: "Sondeo de Hardware",
+
+    cfg_modal_footer: "[↑/↓] Navegar  [←/→/Enter] Cambiar  [s] Guardar  [Esc/c] Cerrar",
+    cfg_modal_title: " Configuración y Preferencias de Tema ",
+    cfg_palette_sample: " Muestra de Paleta: ",
+
+    overview_collecting: "recolectando datos del sistema…",
     overview_health_label: "salud",
     overview_cycles_suffix: "ciclos",
     overview_battery_extra_label: "Batería+",

@@ -147,7 +147,7 @@ impl DisplaySnapshot {
     }
 }
 
-pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
+pub async fn run(poll_interval_ms: u64, lang: crate::i18n::SharedLang, tx: EventTx, mut action_rx: broadcast::Receiver<Action>) {
     let mut interval = tokio::time::interval(Duration::from_millis(poll_interval_ms.max(1000)));
     let mut last_connected_names: Vec<String> = Vec::new();
     let mut is_first_run = true;
@@ -167,9 +167,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                         for name in &current_connected {
                             if !last_connected_names.contains(name) {
 
-                                let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                                    "Monitor {name} conectado. Ativando modo Expandir..."
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::success(
+                                    lang.messages().toast_monitor_connected.replace("{name}", name)
+                                )));
 
                                 if let (Some(internal), Some(external)) = (snap.internal_display(), snap.external_display()) {
                                     let _ = apply_layout(DisplayLayoutMode::ExtendRight, &internal.name, &external.name, &snap.server_type).await;
@@ -179,9 +179,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
 
                         for name in &last_connected_names {
                             if !current_connected.contains(name) {
-                                let _ = tx.send(AppEvent::Toast(Toast::info(format!(
-                                    "Monitor {name} desconectado."
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::info(
+                                    lang.messages().toast_monitor_disconnected.replace("{name}", name)
+                                )));
                             }
                         }
                     }
@@ -199,9 +199,9 @@ pub async fn run(poll_interval_ms: u64, tx: EventTx, mut action_rx: broadcast::R
                         if let Ok(snap) = fetch_display_snapshot().await {
                             if let (Some(internal), Some(external)) = (snap.internal_display(), snap.external_display()) {
                                 let _ = apply_layout(layout, &internal.name, &external.name, &snap.server_type).await;
-                                let _ = tx.send(AppEvent::Toast(Toast::success(format!(
-                                    "Layout de telas: modo {} aplicado.", layout.title()
-                                ))));
+                                let _ = tx.send(AppEvent::Toast(Toast::success(
+                                    lang.messages().toast_layout_applied.replace("{name}", layout.title_in(lang.messages()))
+                                )));
                             } else if let Some(internal) = snap.internal_display() {
                                 if layout == DisplayLayoutMode::InternalOnly {
                                     if snap.server_type.contains("wlr-randr") {

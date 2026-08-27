@@ -59,6 +59,7 @@ pub fn spawn_all(
 
     tokio::spawn(display::run(
         config.polling.display_ms,
+        lang.clone(),
         tx.clone(),
         action_tx.subscribe(),
     ));
