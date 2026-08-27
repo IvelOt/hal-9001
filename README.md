@@ -129,60 +129,79 @@ HAL-9001 includes 8 built-in themes out of the box, switchable in real-time via 
 
 ---
 
-## Installation & Getting Started
+## Installation & Distribution Channels
 
-### Build from Source (Current Recommended Method)
+Choose your preferred method to install **HAL-9001**:
 
-Ensure you have Rust stable (1.80+) installed.
+### 1. Universal One-Line Installer (Recommended for any Linux)
 
-You can install it instantly with our universal script:
+Works out of the box on any Linux distribution (detects architecture, installs static binary and desktop shortcut):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/IvelOt/hal-9001/main/install.sh | bash
 ```
 
-Alternatively, to build manually:
+### 2. Arch Linux (AUR)
+
+Available on the **Arch User Repository** as both a precompiled binary (`hal-9001-bin`) and source build (`hal-9001`):
 ```bash
-# 1. Clone the repository
+# Instant precompiled binary (recommended):
+yay -S hal-9001-bin
+# or
+paru -S hal-9001-bin
+
+# Build from source:
+yay -S hal-9001
+```
+
+### 3. Cargo (Crates.io)
+
+Universal Rust installation via [crates.io/crates/hal-9001](https://crates.io/crates/hal-9001):
+```bash
+cargo install --locked hal-9001
+```
+
+### 4. NixOS & Nix Flakes
+
+Run directly via Nix Flakes without prior installation:
+```bash
+nix run github:IvelOt/hal-9001
+```
+Or add to your NixOS `configuration.nix` / Home Manager:
+```nix
+inputs.hal-9001.url = "github:IvelOt/hal-9001";
+```
+
+### 5. Debian / Ubuntu (.deb)
+
+Download the official Debian package from [GitHub Releases](https://github.com/IvelOt/hal-9001/releases/latest):
+```bash
+curl -sSL -O https://github.com/IvelOt/hal-9001/releases/download/v0.1.2/hal-9001_0.1.2_amd64.deb
+sudo apt install ./hal-9001_0.1.2_amd64.deb
+```
+
+### 6. Build from Source Manually
+
+Ensure you have Rust stable (1.80+) installed:
+```bash
 git clone https://github.com/IvelOt/hal-9001.git
 cd hal-9001
-
-# 2. Run the test suite (100+ unit and integration tests)
 cargo test
-
-# 3. Compile the optimized release binary
 cargo build --release
-
-# 4. Run HAL-9001
 ./target/release/hal9001
 ```
 
-### System Requirements & Graceful Degradation
-
-HAL-9001 interacts with system daemons directly over asynchronous D-Bus (`zbus`). If any service is absent or not running, the application gracefully degrades without panicking:
-
-| Subsystem | Required Daemon / Service | Fallback Behavior |
-|:---|:---|:---|
-| **System & Telemetry** | Linux `/proc` and `/sys` | Standard sysinfo metrics |
-| **Wi-Fi & Network** | `NetworkManager` (`org.freedesktop.NetworkManager`) | Shows network card info without active scan |
-| **Bluetooth** | BlueZ (`org.bluez`) | Displays "Bluetooth unavailable" badge |
-| **Storage & Disks** | UDisks2 (`org.freedesktop.UDisks2`) | Falls back to mount table inspection |
-| **Audio Mixer** | PipeWire (`wpctl`) or PulseAudio | Volume sliders disabled if daemon absent |
-| **Displays** | `wlr-randr` / `hyprctl` (Wayland) or `xrandr` (X11) | Reads DRM connector status |
-
 ---
 
-## Distribution Roadmap (Upcoming Packaging Pipelines)
+## Distribution Matrix
 
-Packaging configurations and specifications are currently prepared in `packaging/`. Public distribution channels are being deployed in the next milestone:
-
-| Channel / Package Manager | Target Platform | Target Installation Command | Status |
+| Channel / Package Manager | Target Platform | Installation Command | Status |
 |:---|:---|:---|:---:|
-| **Cargo (Crates.io)** | Universal (Linux x86_64, aarch64) | `cargo install --locked hal-9001` | Planned (Next Step) |
-| **Arch Linux (AUR)** | Arch, Manjaro, EndeavourOS | `paru -S hal-9001` / `hal-9001-bin` | Planned (Next Step) |
-| **Debian / Ubuntu (.deb)** | Debian 12+, Ubuntu 22.04+, Mint | `sudo dpkg -i hal-9001_amd64.deb` | Planned (Next Step) |
-| **NixOS & Flakes** | NixOS, Linux with Nix | `nix run github:IvelOt/hal-9001` | Planned (Next Step) |
-| **Fedora / RHEL (RPM)** | Fedora Copr, openSUSE | `sudo dnf install hal-9001` | Planned (Next Step) |
-| **Standalone Tarball** | Portable Musl Binary | GitHub Releases download | Planned (Next Step) |
+| **Universal Installer** | Any Linux (x86_64, aarch64) | `curl -fsSL https://raw.githubusercontent.com/IvelOt/hal-9001/main/install.sh \| bash` | ✅ **Live** |
+| **Arch Linux (AUR)** | Arch, Manjaro, EndeavourOS | `yay -S hal-9001-bin` / `paru -S hal-9001` | ✅ **Live** |
+| **Cargo (Crates.io)** | Universal (Linux, macOS, BSD) | `cargo install --locked hal-9001` | ✅ **Live** |
+| **NixOS & Flakes** | NixOS, Linux with Nix | `nix run github:IvelOt/hal-9001` | ✅ **Live** |
+| **Debian / Ubuntu (.deb)** | Debian 11/12+, Ubuntu 20.04+, Mint | `sudo apt install ./hal-9001_0.1.2_amd64.deb` | ✅ **Live** |
+| **GitHub Releases** | Static Musl & Gnu Tarballs | [Releases](https://github.com/IvelOt/hal-9001/releases/latest) | ✅ **Live** |
 
 ---
 
