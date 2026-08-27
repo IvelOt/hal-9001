@@ -1,7 +1,7 @@
-# 11 — Guia de Deploy, Empacotamento e Distribuição
+# 📦 Guia de Deploy & Matriz de Distribuição — HAL-9001
 
 > **HAL-9001** — Central TUI de Controle do Sistema & Assistente de Sistema  
-> **Versão:** `0.1.2` | **Licença:** `MIT` | **Repositório:** [https://github.com/IvelOt/hal-9001](https://github.com/IvelOt/hal-9001)
+> **Versão:** `0.1.3` | **Licença:** `MIT` | **Repositório:** [https://github.com/IvelOt/hal-9001](https://github.com/IvelOt/hal-9001)
 
 ---
 

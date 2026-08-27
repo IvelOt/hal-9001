@@ -52,7 +52,7 @@ print_ok "Arquitetura detectada: ${ARCH} (Target: ${TARGET})"
 # --- Version Detection ---
 print_msg "Verificando a ultima versao..."
 API_URL="https://api.github.com/repos/IvelOt/hal-9001/releases/latest"
-FALLBACK_VERSION="0.1.2"
+FALLBACK_VERSION="0.1.3"
 
 LATEST_VERSION=""
 if command -v curl >/dev/null 2>&1; then

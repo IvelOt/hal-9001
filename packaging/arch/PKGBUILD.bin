@@ -1,7 +1,7 @@
 # Maintainer: IvelOt <contact@ivelot.dev>
 pkgname=hal-9001-bin
 _pkgname=hal-9001
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Pure Rust TUI system control hub for Arch users (BTW) tired of 14 separate tools (No AI!) - binary release"
 arch=('x86_64' 'aarch64')
