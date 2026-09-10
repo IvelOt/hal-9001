@@ -7,6 +7,15 @@ const BOOTX64_EFI: &[u8] = include_bytes!("../../assets/multiboot/BOOTX64.EFI");
 
 const GRUB_CFG: &str = include_str!("../../assets/multiboot/grub.cfg");
 
+const THEME_TXT: &str = include_str!("../../assets/multiboot/themes/hal9001/theme.txt");
+const THEME_BACKGROUND: &[u8] =
+    include_bytes!("../../assets/multiboot/themes/hal9001/background.png");
+const THEME_ASCII: &[u8] = include_bytes!("../../assets/multiboot/themes/hal9001/ascii.pf2");
+const THEME_UNICODE: &[u8] = include_bytes!("../../assets/multiboot/themes/hal9001/unicode.pf2");
+const THEME_SELECT_C: &[u8] = include_bytes!("../../assets/multiboot/themes/hal9001/select_c.png");
+const THEME_SELECT_W: &[u8] = include_bytes!("../../assets/multiboot/themes/hal9001/select_w.png");
+const THEME_SELECT_E: &[u8] = include_bytes!("../../assets/multiboot/themes/hal9001/select_e.png");
+
 fn isos_dir(mount_point: &Path) -> PathBuf {
     mount_point.join(ISOS_DIR)
 }
@@ -43,6 +52,16 @@ pub fn prepare_multiboot(mount_point: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&grub_dir)?;
     std::fs::write(grub_dir.join("grub.cfg"), GRUB_CFG)?;
 
+    let theme_dir = grub_dir.join("themes").join("hal9001");
+    std::fs::create_dir_all(&theme_dir)?;
+    std::fs::write(theme_dir.join("theme.txt"), THEME_TXT)?;
+    std::fs::write(theme_dir.join("background.png"), THEME_BACKGROUND)?;
+    std::fs::write(theme_dir.join("ascii.pf2"), THEME_ASCII)?;
+    std::fs::write(theme_dir.join("unicode.pf2"), THEME_UNICODE)?;
+    std::fs::write(theme_dir.join("select_c.png"), THEME_SELECT_C)?;
+    std::fs::write(theme_dir.join("select_w.png"), THEME_SELECT_W)?;
+    std::fs::write(theme_dir.join("select_e.png"), THEME_SELECT_E)?;
+
     let marker = marker_path(mount_point);
     if !marker.is_file() {
         std::fs::write(&marker, b"")?;
@@ -73,6 +92,16 @@ mod tests {
         assert!(dir.path().join("EFI/BOOT/BOOTX64.EFI").is_file());
         assert!(dir.path().join("boot/grub/grub.cfg").is_file());
         assert!(dir.path().join("ISOs/.hal9001-multiboot").is_file());
+
+        // Theme files
+        let theme = dir.path().join("boot/grub/themes/hal9001");
+        assert!(theme.join("theme.txt").is_file());
+        assert!(theme.join("background.png").is_file());
+        assert!(theme.join("ascii.pf2").is_file());
+        assert!(theme.join("unicode.pf2").is_file());
+        assert!(theme.join("select_c.png").is_file());
+        assert!(theme.join("select_w.png").is_file());
+        assert!(theme.join("select_e.png").is_file());
     }
 
     #[test]

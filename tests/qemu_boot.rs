@@ -96,6 +96,56 @@ fn create_bootable_disk(disk_path: &std::path::Path, project_dir: &std::path::Pa
     let mut grub_file = boot_grub.create_file("grub.cfg").unwrap();
     grub_file.write_all(&grub_data).unwrap();
     drop(grub_file);
+
+    // Write theme files
+    let theme_dir = boot_grub
+        .create_dir("themes")
+        .unwrap()
+        .create_dir("hal9001")
+        .unwrap();
+    let theme_files = [
+        (
+            "theme.txt",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/theme.txt"))
+                .expect("read theme.txt")
+                .into(),
+        ),
+        (
+            "background.png",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/background.png"))
+                .expect("read background.png"),
+        ),
+        (
+            "ascii.pf2",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/ascii.pf2"))
+                .expect("read ascii.pf2"),
+        ),
+        (
+            "unicode.pf2",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/unicode.pf2"))
+                .expect("read unicode.pf2"),
+        ),
+        (
+            "select_c.png",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/select_c.png"))
+                .expect("read select_c.png"),
+        ),
+        (
+            "select_w.png",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/select_w.png"))
+                .expect("read select_w.png"),
+        ),
+        (
+            "select_e.png",
+            std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/select_e.png"))
+                .expect("read select_e.png"),
+        ),
+    ];
+    for (name, data) in theme_files {
+        let mut f = theme_dir.create_file(name).unwrap();
+        f.write_all(&data).unwrap();
+    }
+    drop(theme_dir);
     drop(boot_grub);
 
     let isos = root.create_dir("ISOs").unwrap();

@@ -1,0 +1,28 @@
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#08080a"
+
++ boot_menu {
+  left = 60
+  top = 210
+  width = 1160
+  height = 390
+  item_font = "ascii 16"
+  item_color = "#8f8f98"
+  selected_item_color = "#ffffff"
+  selected_item_pixmap_style = "select_*.png"
+  item_height = 36
+  item_padding = 8
+  item_spacing = 6
+}
+
++ progress_bar {
+  id = "__timeout__"
+  left = 40
+  top = 635
+  width = 450
+  height = 18
+  text = "AUTO-BOOT TIMEOUT: %d SECONDS"
+  text_color = "#ffb932"
+  font = "ascii 14"
+}

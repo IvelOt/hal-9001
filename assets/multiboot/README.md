@@ -19,6 +19,12 @@ Storage tab (key `B` — "Preparar Multi-Boot").
   search normal`. This binary boots on any UEFI firmware and loads the
   embedded `grub.cfg` to present the multi-boot ISO menu.
 
+- `themes/hal9001/` — **HAL-9001 retro-futuristic ASCII terminal theme**.
+  A custom GRUB boot menu theme with a terminal aesthetic inspired by
+  the HAL-9001 interface. All files are embedded at compile time via
+  `include_bytes!` / `include_str!` and written to the drive during
+  `prepare_multiboot`.
+
 ## MBR partition table
 
 When the user formats an **entire disk** (e.g. `/dev/sdb`) as FAT32 from the
@@ -32,11 +38,20 @@ optimal performance. See `create_mbr_fat32` in `src/backend/storage.rs`.
 
 ```
 <mount>/
-├── EFI/BOOT/BOOTX64.EFI     <- from assets/multiboot/BOOTX64.EFI
-├── boot/grub/grub.cfg       <- from assets/multiboot/grub.cfg
+├── EFI/BOOT/BOOTX64.EFI           <- from assets/multiboot/BOOTX64.EFI
+├── boot/grub/
+│   ├── grub.cfg                   <- from assets/multiboot/grub.cfg
+│   └── themes/hal9001/            <- retro-futuristic ASCII terminal theme
+│       ├── theme.txt
+│       ├── background.png
+│       ├── ascii.pf2
+│       ├── unicode.pf2
+│       ├── select_c.png
+│       ├── select_w.png
+│       └── select_e.png
 └── ISOs/
-    ├── .hal9001-multiboot   <- marker file, written by prepare_multiboot
-    └── *.iso / *.img        <- user-managed via the in-app ISO manager (key G)
+    ├── .hal9001-multiboot         <- marker file, written by prepare_multiboot
+    └── *.iso / *.img              <- user-managed via the in-app ISO manager (key G)
 ```
 
 `prepare_multiboot` never touches pre-existing files under `ISOs/` other
