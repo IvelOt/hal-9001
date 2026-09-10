@@ -107,8 +107,7 @@ fn create_bootable_disk(disk_path: &std::path::Path, project_dir: &std::path::Pa
         (
             "theme.txt",
             std::fs::read(project_dir.join("assets/multiboot/themes/hal9001/theme.txt"))
-                .expect("read theme.txt")
-                .into(),
+                .expect("read theme.txt"),
         ),
         (
             "background.png",
