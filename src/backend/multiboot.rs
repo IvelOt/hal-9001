@@ -76,6 +76,33 @@ mod tests {
     }
 
     #[test]
+    fn bootx64_efi_is_a_real_pe32_efi_binary() {
+        let efi = BOOTX64_EFI;
+        assert!(efi.len() > 100_000, "EFI binary too small ({}, expected >100KB)", efi.len());
+        // PE32+ EFI binaries start with "MZ" DOS header
+        assert_eq!(&efi[0..2], b"MZ", "BOOTX64.EFI does not start with MZ header");
+        // The PE signature offset is at byte 0x3C (60)
+        let pe_offset = u32::from_le_bytes([efi[0x3C], efi[0x3D], efi[0x3E], efi[0x3F]]) as usize;
+        assert!(pe_offset + 4 <= efi.len(), "PE offset out of bounds");
+        assert_eq!(
+            &efi[pe_offset..pe_offset + 4],
+            b"PE\0\0",
+            "PE signature not found at expected offset"
+        );
+    }
+
+    #[test]
+    fn grub_cfg_embedded_matches_source_file() {
+        let embedded = GRUB_CFG;
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/multiboot/grub.cfg"),
+        )
+        .expect("could not read assets/multiboot/grub.cfg");
+        assert_eq!(embedded, source);
+    }
+
+    #[test]
     fn count_isos_mixed_file_types() {
         let dir = temp_mount();
         let isos = dir.path().join("ISOs");

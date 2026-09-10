@@ -546,6 +546,65 @@ fn fat_volume_label(label: &str) -> [u8; 11] {
     buf
 }
 
+/// A file wrapper that presents a sub-region of a device as if it starts at
+/// position 0, used to let `fatfs` format/mount a FAT32 partition that begins
+/// at a byte offset within a whole-disk image (e.g. after an MBR).
+struct OffsetFile {
+    inner: std::fs::File,
+    offset: u64,
+}
+
+impl OffsetFile {
+    /// Wrap a file handle so that byte 0 of the wrapper maps to byte `offset`
+    /// of the underlying file. The inner file is seeked to `offset` immediately.
+    fn new(mut inner: std::fs::File, offset: u64) -> Self {
+        use std::io::Seek;
+        let _ = inner.seek(std::io::SeekFrom::Start(offset));
+        Self { inner, offset }
+    }
+}
+
+impl std::io::Read for OffsetFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl std::io::Write for OffsetFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl std::io::Seek for OffsetFile {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        // The inner file always sits at `logical_position + offset`.
+        // We report logical positions (0-based within the partition) to callers.
+        match pos {
+            std::io::SeekFrom::Start(n) => {
+                self.inner.seek(std::io::SeekFrom::Start(n + self.offset))?;
+                Ok(n)
+            }
+            std::io::SeekFrom::Current(n) => {
+                // Inner position = current_raw. Logical = current_raw - offset.
+                // Seek inner by n (Current doesn't need offset adjustment).
+                self.inner.seek(std::io::SeekFrom::Current(n))?;
+                let raw = self.inner.stream_position()?;
+                Ok(raw - self.offset)
+            }
+            std::io::SeekFrom::End(n) => {
+                // The "end" of the partition is not the end of the whole file.
+                // We let the inner file handle it — fatfs rarely uses End.
+                let raw = self.inner.seek(std::io::SeekFrom::End(n))?;
+                Ok(raw.saturating_sub(self.offset))
+            }
+        }
+    }
+}
+
 fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<()> {
     let options = fatfs::FormatVolumeOptions::new()
         .fat_type(fatfs::FatType::Fat32)
@@ -555,12 +614,116 @@ fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<
     Ok(())
 }
 
+/// Format a FAT32 volume starting at `offset` bytes into the given file.
+///
+/// This is used when writing an MBR partition table on a whole disk: the FAT32
+/// data area starts after the MBR (typically at sector 2048 = 1 MiB).
+fn format_fat32_on_file_at(
+    file: std::fs::File,
+    label: &str,
+    offset: u64,
+) -> anyhow::Result<()> {
+    let mut wrapper = OffsetFile::new(file, offset);
+    let options = fatfs::FormatVolumeOptions::new()
+        .fat_type(fatfs::FatType::Fat32)
+        .volume_label(fat_volume_label(label));
+    fatfs::format_volume(&mut wrapper, options)?;
+    wrapper.inner.sync_all()?;
+    Ok(())
+}
+
+/// Detect whether a device node points to a whole disk (e.g. `/dev/sdb`) rather
+/// than a partition (e.g. `/dev/sdb1`). Whole disks are the ones that need an
+/// MBR partition table to avoid the superfloppy problem.
+pub fn is_whole_disk(dev_node: &str) -> bool {
+    let name = dev_node.rsplit('/').next().unwrap_or("");
+
+    // NVMe: whole disk is `nvmeXnY`, partitions are `nvmeXnYpZ`
+    if name.starts_with("nvme") {
+        return !name.contains("p")
+            || name.rsplit_once('p')
+                .map(|(_, suffix)| !suffix.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(true);
+    }
+
+    // MMC: whole disk is `mmcblkN`, partitions are `mmcblkNpN`
+    if name.starts_with("mmcblk") {
+        return !name.contains("p")
+            || name.rsplit_once('p')
+                .map(|(_, suffix)| !suffix.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(true);
+    }
+
+    // SCSI/SATA/USB: whole disk is `sdX`, partitions are `sdXN`
+    // A whole disk name ends with a letter (e.g. `sdb`), not a digit.
+    name.chars().last().map(|c| !c.is_ascii_digit()).unwrap_or(false)
+}
+
+/// Write an MBR partition table with a single FAT32 bootable partition
+/// occupying the whole disk.
+///
+/// Returns the byte offset where the FAT32 data area begins (typically 1 MiB).
+/// The caller must then format the region `[offset .. disk_size)` as FAT32.
+pub fn create_mbr_fat32(dev_node: &str, disk_size: u64) -> anyhow::Result<u64> {
+    use std::io::{Seek, SeekFrom, Write};
+
+    const SECTOR_SIZE: u64 = 512;
+    const MIN_DISK_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB minimum for MBR + FAT32
+    const FAT32_LBA_TYPE: u8 = 0x0C;
+    const BOOTABLE_FLAG: u8 = 0x80;
+
+    if disk_size < MIN_DISK_SIZE {
+        anyhow::bail!("disk too small ({disk_size} bytes, need >= {MIN_DISK_SIZE})");
+    }
+
+    // Align the partition to 1 MiB (2048 sectors) for optimal performance.
+    let first_lba: u32 = 2048;
+    let last_lba: u32 = ((disk_size / SECTOR_SIZE) - 1) as u32;
+    let num_sectors = last_lba - first_lba + 1;
+
+    let mut mbr = [0u8; 512];
+
+    // Partition entry 1 at offset 446
+    mbr[446] = BOOTABLE_FLAG;
+    // CHS values set to 0xFE/0xFF/0xFF → "use LBA instead"
+    mbr[449] = FAT32_LBA_TYPE;
+    mbr[450] = 0xFE;
+    mbr[451] = 0xFF;
+    mbr[452] = 0xFF;
+    mbr[454..458].copy_from_slice(&first_lba.to_le_bytes());
+    mbr[458..462].copy_from_slice(&num_sectors.to_le_bytes());
+
+    // Boot signature at bytes 510–511
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dev_node)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&mbr)?;
+    file.sync_all()?;
+
+    Ok(first_lba as u64 * SECTOR_SIZE)
+}
+
 pub fn format_fat32_pure_rust(dev_node: &str, label: &str) -> anyhow::Result<()> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(dev_node)?;
     format_fat32_on_file(file, label)
+}
+
+/// Format a FAT32 partition at a byte offset within a whole disk device.
+/// Used after `create_mbr_fat32` has written the MBR partition table.
+pub fn format_fat32_partition(dev_node: &str, label: &str, offset: u64) -> anyhow::Result<()> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dev_node)?;
+    format_fat32_on_file_at(file, label, offset)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1368,6 +1531,45 @@ async fn format_with_sudo_fallback(
     let Some(dev_node) = snap.dev_node_for_block_path(block_path) else {
         return Toast::error(format_error_message(fs_type, original_err, lang));
     };
+
+    // Ensure an MBR partition table exists when formatting a whole disk as
+    // FAT32 via the sudo fallback (avoids the superfloppy problem).
+    if is_fat_fs_type(fs_type) {
+        if let Some(drv) = snap.drives.iter().find(|d| d.dev_node == dev_node) {
+            if is_whole_disk(&drv.dev_node) {
+                match create_mbr_fat32(&drv.dev_node, drv.size) {
+                    Ok(fat32_offset) => {
+                        tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, offset = fat32_offset, "MBR criado no fallback — formatando partição FAT32");
+                        let label_c = label.to_string();
+                        let dev_c = drv.dev_node.clone();
+                        let format_result = tokio::task::spawn_blocking(move || {
+                            format_fat32_partition(&dev_c, &label_c, fat32_offset)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.map_err(|e| e.to_string()));
+                        return match format_result {
+                            Ok(()) => {
+                                let _ = udisks_call(
+                                    conn,
+                                    block_path,
+                                    "org.freedesktop.UDisks2.Block",
+                                    "Rescan",
+                                )
+                                .await;
+                                Toast::info(format!("{} (MBR + FAT32, sudo)", m.storage_toast_format_done))
+                            }
+                            Err(msg) => Toast::error(format!("{}: {msg}", m.storage_err_format_fat32_failed)),
+                        };
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, error = %e, "falha ao criar MBR no fallback — continuando com formatação sem particionamento");
+                    }
+                }
+            }
+        }
+    }
+
     if is_fat_fs_type(fs_type) && !mkfs_vfat_available() {
         tracing::warn!(target: "hal9001::storage", device = %device_id, "mkfs.vfat ausente no host — formatando FAT32 via fatfs com permissão elevada (sudo chmod)");
         return match format_fat32_elevated(&dev_node, label, lang, sudo_tx, tx).await {
@@ -2104,6 +2306,50 @@ async fn handle_action(
                 let _ = unmount(conn, &part_path).await;
             }
             tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
+
+            // When formatting a whole disk as FAT32, first create an MBR
+            // partition table so the device is recognized as bootable by
+            // BIOS/UEFI firmware (avoids the "superfloppy" problem).
+            if is_fat_fs_type(&fs_type) {
+                if let Some(drv) = snap.dev_node_for_block_path(&block_path)
+                    .and_then(|dn| snap.drives.iter().find(|d| d.dev_node == dn))
+                {
+                    if is_whole_disk(&drv.dev_node) {
+                        match create_mbr_fat32(&drv.dev_node, drv.size) {
+                            Ok(fat32_offset) => {
+                                tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, offset = fat32_offset, "MBR criado — formatando partição FAT32");
+                                let label_c = label.clone();
+                                let dev_c = drv.dev_node.clone();
+                                let format_result = tokio::task::spawn_blocking(move || {
+                                    format_fat32_partition(&dev_c, &label_c, fat32_offset)
+                                })
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(|r| r.map_err(|e| e.to_string()));
+                                let toast = match format_result {
+                                    Ok(()) => {
+                                        let _ = udisks_call(
+                                            conn,
+                                            &block_path,
+                                            "org.freedesktop.UDisks2.Block",
+                                            "Rescan",
+                                        )
+                                        .await;
+                                        Toast::info(format!("{} (MBR + FAT32)", m.storage_toast_format_done))
+                                    }
+                                    Err(msg) => Toast::error(format!("{}: {msg}", m.storage_err_format_fat32_failed)),
+                                };
+                                let _ = tx.send(AppEvent::Toast(toast));
+                                return;
+                            }
+                            Err(e) => {
+                                tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, error = %e, "falha ao criar MBR — continuando com formatação sem particionamento");
+                            }
+                        }
+                    }
+                }
+            }
+
             let toast = match format_block(conn, &block_path, &fs_type, &label).await {
                 Ok(()) => Toast::info(m.storage_toast_format_done),
                 Err(e) if is_fat_fs_type(&fs_type) && is_missing_mkfs_error(&e) => {

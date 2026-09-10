@@ -12,25 +12,21 @@ Storage tab (key `B` — "Preparar Multi-Boot").
   extraction needed). See the comments inside the file for the exact
   boot strategy and how to add a per-distro override.
 
-- `BOOTX64.EFI` — **PLACEHOLDER, NOT A REAL BOOTLOADER**. This repository
-  cannot build/vendor a real signed GRUB UEFI binary (that requires the
-  GRUB toolchain, target platform images, and — for Secure Boot support —
-  a signing step outside the scope of this codebase). The file committed
-  here is a small stub so `prepare_multiboot`'s file-copy logic and its
-  tests have a concrete artifact to exercise.
-  **Before cutting a release, replace this file with a real
-  `grubx64.efi`/`BOOTX64.EFI`** built with, e.g.:
+- `BOOTX64.EFI` — **real GRUB UEFI standalone binary** (x86_64-efi,
+  PE32+ executable). Generated with `grub-mkstandalone` via Docker and
+  embedded at compile time via `include_bytes!`. Contains the following
+  GRUB modules: `part_gpt part_msdos fat iso9660 loopback chain regexp
+  search normal`. This binary boots on any UEFI firmware and loads the
+  embedded `grub.cfg` to present the multi-boot ISO menu.
 
-  ```sh
-  grub-mkstandalone \
-    --format=x86_64-efi \
-    --output=BOOTX64.EFI \
-    --modules="part_gpt part_msdos fat iso9660 loopback chain regexp search normal" \
-    "boot/grub/grub.cfg=assets/multiboot/grub.cfg"
-  ```
+## MBR partition table
 
-  or by copying the `grubx64.efi` shipped by your distro's `grub-efi-amd64`
-  / `grub2-efi-x64` package and renaming it to `BOOTX64.EFI`.
+When the user formats an **entire disk** (e.g. `/dev/sdb`) as FAT32 from the
+Storage tab, the HAL-9001 automatically writes an MBR partition table with a
+single bootable FAT32 (LBA) partition before formatting. This prevents the
+"superfloppy" problem where BIOS/UEFI firmware cannot recognize the device
+as bootable. The partition starts at sector 2048 (1 MiB aligned) for
+optimal performance. See `create_mbr_fat32` in `src/backend/storage.rs`.
 
 ## Deployed layout
 
