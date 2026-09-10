@@ -199,7 +199,7 @@ cargo build --release
 | **Arch User Repository (AUR - Fonte)** | Arch Linux, Manjaro, EndeavourOS | `paru -S hal-9001` ou `yay -S hal-9001` | ✅ **Live** |
 | **Arch User Repository (AUR - Binário)** | Arch Linux (x86_64, aarch64) | `paru -S hal-9001-bin` ou `yay -S hal-9001-bin` | ✅ **Live** |
 | **Crates.io (Rust Cargo)** | Linux Geral (qualquer distro com Rust) | `cargo install hal-9001` | ✅ **Live** |
-| **Debian / Ubuntu (.deb)** | Debian 11/12+, Ubuntu 20.04+, Mint | `sudo apt install ./hal-9001_0.1.3_amd64.deb` | ✅ **Live** |
+| **Debian / Ubuntu (.deb)** | Debian 11/12+, Ubuntu 20.04+, Mint | `sudo apt install ./hal-9001_0.1.4_amd64.deb` | ✅ **Live** |
 | **GitHub Releases** | Static Musl & Gnu Tarballs | [Releases](https://github.com/IvelOt/hal-9001/releases/latest) | ✅ **Live** |
 
 ---
