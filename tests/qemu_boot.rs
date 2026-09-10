@@ -77,14 +77,13 @@ fn create_bootable_disk(disk_path: &std::path::Path, project_dir: &std::path::Pa
         .unwrap();
     let mut wrapper = OffsetFile::new(file, fat32_offset);
 
-    let fs =
-        fatfs::FileSystem::new(&mut wrapper, fatfs::FsOptions::new()).expect("open FAT32");
+    let fs = fatfs::FileSystem::new(&mut wrapper, fatfs::FsOptions::new()).expect("open FAT32");
     let root = fs.root_dir();
 
     let efi_dir = root.create_dir("EFI").unwrap();
     let boot_dir = efi_dir.create_dir("BOOT").unwrap();
-    let efi_data = std::fs::read(project_dir.join("assets/multiboot/BOOTX64.EFI"))
-        .expect("read BOOTX64.EFI");
+    let efi_data =
+        std::fs::read(project_dir.join("assets/multiboot/BOOTX64.EFI")).expect("read BOOTX64.EFI");
     let mut efi_file = boot_dir.create_file("BOOTX64.EFI").unwrap();
     efi_file.write_all(&efi_data).unwrap();
     drop(efi_file);
@@ -92,8 +91,8 @@ fn create_bootable_disk(disk_path: &std::path::Path, project_dir: &std::path::Pa
     drop(efi_dir);
 
     let boot_grub = root.create_dir("boot").unwrap().create_dir("grub").unwrap();
-    let grub_data = std::fs::read(project_dir.join("assets/multiboot/grub.cfg"))
-        .expect("read grub.cfg");
+    let grub_data =
+        std::fs::read(project_dir.join("assets/multiboot/grub.cfg")).expect("read grub.cfg");
     let mut grub_file = boot_grub.create_file("grub.cfg").unwrap();
     grub_file.write_all(&grub_data).unwrap();
     drop(grub_file);

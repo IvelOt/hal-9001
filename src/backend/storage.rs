@@ -618,11 +618,7 @@ fn format_fat32_on_file(mut file: std::fs::File, label: &str) -> anyhow::Result<
 ///
 /// This is used when writing an MBR partition table on a whole disk: the FAT32
 /// data area starts after the MBR (typically at sector 2048 = 1 MiB).
-fn format_fat32_on_file_at(
-    file: std::fs::File,
-    label: &str,
-    offset: u64,
-) -> anyhow::Result<()> {
+fn format_fat32_on_file_at(file: std::fs::File, label: &str, offset: u64) -> anyhow::Result<()> {
     let mut wrapper = OffsetFile::new(file, offset);
     let options = fatfs::FormatVolumeOptions::new()
         .fat_type(fatfs::FatType::Fat32)
@@ -641,7 +637,8 @@ pub fn is_whole_disk(dev_node: &str) -> bool {
     // NVMe: whole disk is `nvmeXnY`, partitions are `nvmeXnYpZ`
     if name.starts_with("nvme") {
         return !name.contains("p")
-            || name.rsplit_once('p')
+            || name
+                .rsplit_once('p')
                 .map(|(_, suffix)| !suffix.chars().all(|c| c.is_ascii_digit()))
                 .unwrap_or(true);
     }
@@ -649,14 +646,18 @@ pub fn is_whole_disk(dev_node: &str) -> bool {
     // MMC: whole disk is `mmcblkN`, partitions are `mmcblkNpN`
     if name.starts_with("mmcblk") {
         return !name.contains("p")
-            || name.rsplit_once('p')
+            || name
+                .rsplit_once('p')
                 .map(|(_, suffix)| !suffix.chars().all(|c| c.is_ascii_digit()))
                 .unwrap_or(true);
     }
 
     // SCSI/SATA/USB: whole disk is `sdX`, partitions are `sdXN`
     // A whole disk name ends with a letter (e.g. `sdb`), not a digit.
-    name.chars().last().map(|c| !c.is_ascii_digit()).unwrap_or(false)
+    name.chars()
+        .last()
+        .map(|c| !c.is_ascii_digit())
+        .unwrap_or(false)
 }
 
 /// Write an MBR partition table with a single FAT32 bootable partition
@@ -1557,9 +1558,15 @@ async fn format_with_sudo_fallback(
                                     "Rescan",
                                 )
                                 .await;
-                                Toast::info(format!("{} (MBR + FAT32, sudo)", m.storage_toast_format_done))
+                                Toast::info(format!(
+                                    "{} (MBR + FAT32, sudo)",
+                                    m.storage_toast_format_done
+                                ))
                             }
-                            Err(msg) => Toast::error(format!("{}: {msg}", m.storage_err_format_fat32_failed)),
+                            Err(msg) => Toast::error(format!(
+                                "{}: {msg}",
+                                m.storage_err_format_fat32_failed
+                            )),
                         };
                     }
                     Err(e) => {
@@ -2311,7 +2318,8 @@ async fn handle_action(
             // partition table so the device is recognized as bootable by
             // BIOS/UEFI firmware (avoids the "superfloppy" problem).
             if is_fat_fs_type(&fs_type) {
-                if let Some(drv) = snap.dev_node_for_block_path(&block_path)
+                if let Some(drv) = snap
+                    .dev_node_for_block_path(&block_path)
                     .and_then(|dn| snap.drives.iter().find(|d| d.dev_node == dn))
                 {
                     if is_whole_disk(&drv.dev_node) {
@@ -2335,9 +2343,15 @@ async fn handle_action(
                                             "Rescan",
                                         )
                                         .await;
-                                        Toast::info(format!("{} (MBR + FAT32)", m.storage_toast_format_done))
+                                        Toast::info(format!(
+                                            "{} (MBR + FAT32)",
+                                            m.storage_toast_format_done
+                                        ))
                                     }
-                                    Err(msg) => Toast::error(format!("{}: {msg}", m.storage_err_format_fat32_failed)),
+                                    Err(msg) => Toast::error(format!(
+                                        "{}: {msg}",
+                                        m.storage_err_format_fat32_failed
+                                    )),
                                 };
                                 let _ = tx.send(AppEvent::Toast(toast));
                                 return;

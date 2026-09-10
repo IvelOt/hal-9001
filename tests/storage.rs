@@ -1556,15 +1556,16 @@ fn create_mbr_fat32_then_format_fat32_partition_produces_mountable_volume() {
 
     // Verify the FAT32 boot sector signature at the partition offset
     let data = std::fs::read(path).unwrap();
-    let boot_sig = u16::from_le_bytes([data[fat32_offset as usize + 510], data[fat32_offset as usize + 511]]);
+    let boot_sig = u16::from_le_bytes([
+        data[fat32_offset as usize + 510],
+        data[fat32_offset as usize + 511],
+    ]);
     assert_eq!(boot_sig, 0xAA55, "FAT32 boot sector signature");
 
     // Verify volume label in the FAT32 boot sector (at offset 71 from BPB)
     // Label is 11 bytes at BPB+71 (0x47), padded with spaces
     let label_bytes = &data[fat32_offset as usize + 71..fat32_offset as usize + 82];
-    let label = std::str::from_utf8(label_bytes)
-        .unwrap()
-        .trim_end();
+    let label = std::str::from_utf8(label_bytes).unwrap().trim_end();
     assert_eq!(label, "MBRTEST");
 }
 
