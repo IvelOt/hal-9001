@@ -1861,9 +1861,12 @@ async fn mount_esp_elevated(
     }
     let m = lang.messages();
     let label = format!("{} {esp_node}", m.storage_sudo_label_mount_esp);
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
     let args = vec![
         "-t".to_string(),
         "vfat".to_string(),
+        "-o".to_string(),
+        format!("uid={uid},gid={gid},umask=000"),
         esp_node.to_string(),
         mount_point.to_string_lossy().to_string(),
     ];
