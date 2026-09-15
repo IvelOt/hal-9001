@@ -1,12 +1,12 @@
 use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
-    build_ventoy_entries, compute_speed_eta, create_mbr_fat32, detect_ventoy,
+    build_ventoy_entries, compute_speed_eta, create_gpt_dual, create_mbr_fat32, detect_ventoy,
     format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_gzip_file,
     is_iso_or_img, is_no_usb_device_error, is_not_authorized_error, is_permission_denied_error,
-    is_sudo_auth_failure, is_system_disk, is_whole_disk, mkfs_command, parse_dd_bytes_copied,
-    parse_proc_mounts, parse_proc_swaps, primary_partition, resolve_block_object_path,
-    skips_power_off, sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind,
-    PartitionInfo, StorageSnapshot,
+    is_sudo_auth_failure, is_system_disk, is_whole_disk, mkfs_command, partition_node,
+    parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
+    resolve_block_object_path, skips_power_off, sudo_invocation, ventoy_data_partition, BusType,
+    DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};
@@ -438,6 +438,134 @@ fn mkfs_command_builds_vfat_args_with_label_and_fat32_flag() {
     let (bin, args) = mkfs_command("vfat", "PENDRIVE", "/dev/sdz1").expect("vfat mapeado");
     assert_eq!(bin, "mkfs.vfat");
     assert_eq!(args, vec!["-F", "32", "-n", "PENDRIVE", "/dev/sdz1"]);
+}
+
+#[test]
+fn mkfs_command_adds_dash_i_when_formatting_whole_disk_as_fat() {
+    // A whole-disk target (no trailing partition digit) needs `-I` so mkfs.fat
+    // does not refuse a device that still carries a partition table.
+    let (bin, args) = mkfs_command("vfat", "PENDRIVE", "/dev/sda").expect("vfat mapeado");
+    assert_eq!(bin, "mkfs.vfat");
+    assert_eq!(args, vec!["-F", "32", "-I", "-n", "PENDRIVE", "/dev/sda"]);
+}
+
+#[test]
+fn mkfs_command_omits_dash_i_for_partition_targets() {
+    let (_bin, args) = mkfs_command("vfat", "", "/dev/sda1").expect("vfat mapeado");
+    assert!(!args.iter().any(|a| a == "-I"));
+    assert_eq!(args, vec!["-F", "32", "/dev/sda1"]);
+}
+
+#[test]
+fn partition_node_follows_kernel_naming_rules() {
+    assert_eq!(partition_node("/dev/sda", 1), "/dev/sda1");
+    assert_eq!(partition_node("/dev/sda", 2), "/dev/sda2");
+    assert_eq!(partition_node("/dev/nvme0n1", 1), "/dev/nvme0n1p1");
+    assert_eq!(partition_node("/dev/mmcblk0", 2), "/dev/mmcblk0p2");
+}
+
+/// CRC-32/ISO-HDLC, matching the implementation used to build GPT metadata.
+fn test_crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn make_sparse_disk(size: u64) -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    let f = tempfile::NamedTempFile::new().expect("temp disk");
+    f.as_file().set_len(size).expect("set_len");
+    let path = f.path().to_path_buf();
+    (f, path)
+}
+
+#[test]
+fn create_gpt_dual_lays_out_data_then_esp_without_overlap() {
+    let size: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB (sparse)
+    let esp_size: u64 = 128 * 1024 * 1024;
+    let (_f, path) = make_sparse_disk(size);
+
+    let layout = create_gpt_dual(path.to_str().unwrap(), size, esp_size).expect("create_gpt_dual");
+
+    // Data partition comes first and is 1 MiB aligned.
+    assert_eq!(layout.data_first_lba % 2048, 0, "data not 1MiB aligned");
+    assert_eq!(layout.data_offset, layout.data_first_lba * 512);
+    // ESP sits after the data partition, near the end, and is ~128 MiB.
+    assert!(layout.esp_first_lba > layout.data_last_lba, "esp overlaps data");
+    assert_eq!(layout.data_last_lba + 1, layout.esp_first_lba);
+    assert!(
+        layout.esp_size >= esp_size,
+        "esp too small: {} < {}",
+        layout.esp_size,
+        esp_size
+    );
+    // Data partition takes the bulk of the disk.
+    assert!(layout.data_size > size / 2, "data partition unexpectedly small");
+}
+
+#[test]
+fn create_gpt_dual_rejects_disk_too_small_for_esp() {
+    let size: u64 = 64 * 1024 * 1024; // 64 MiB — smaller than a 128 MiB ESP
+    let (_f, path) = make_sparse_disk(size);
+    assert!(create_gpt_dual(path.to_str().unwrap(), size, 128 * 1024 * 1024).is_err());
+}
+
+#[test]
+fn create_gpt_dual_writes_valid_gpt_metadata() {
+    const EFI_SYSTEM_GUID: [u8; 16] = [
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+        0x3B,
+    ];
+    const MS_BASIC_DATA_GUID: [u8; 16] = [
+        0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99,
+        0xC7,
+    ];
+
+    let size: u64 = 2 * 1024 * 1024 * 1024;
+    let esp_size: u64 = 128 * 1024 * 1024;
+    let (_f, path) = make_sparse_disk(size);
+    let layout = create_gpt_dual(path.to_str().unwrap(), size, esp_size).expect("create_gpt_dual");
+
+    let disk = std::fs::read(&path).unwrap();
+
+    // Protective MBR: partition type 0xEE + boot signature.
+    assert_eq!(disk[450], 0xEE, "protective MBR type");
+    assert_eq!(disk[510], 0x55);
+    assert_eq!(disk[511], 0xAA);
+
+    // Primary GPT header at LBA 1.
+    let hdr = &disk[512..512 + 92];
+    assert_eq!(&hdr[0..8], b"EFI PART", "GPT signature");
+    // Header CRC (bytes 16..20) must validate with that field zeroed.
+    let mut hdr_zeroed = hdr.to_vec();
+    let stored_hdr_crc = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
+    hdr_zeroed[16..20].copy_from_slice(&[0, 0, 0, 0]);
+    assert_eq!(test_crc32(&hdr_zeroed), stored_hdr_crc, "header CRC invalid");
+
+    // Partition entry array CRC must match the stored value.
+    let entries_lba =
+        u64::from_le_bytes(hdr[72..80].try_into().unwrap()) as usize;
+    let entries = &disk[entries_lba * 512..entries_lba * 512 + 128 * 128];
+    let stored_entries_crc = u32::from_le_bytes([hdr[88], hdr[89], hdr[90], hdr[91]]);
+    assert_eq!(test_crc32(entries), stored_entries_crc, "entries CRC invalid");
+
+    // Entry 0 = data (Microsoft Basic Data), entry 1 = ESP (EFI System).
+    assert_eq!(&entries[0..16], &MS_BASIC_DATA_GUID, "data type GUID");
+    assert_eq!(&entries[128..144], &EFI_SYSTEM_GUID, "esp type GUID");
+
+    let data_first = u64::from_le_bytes(entries[32..40].try_into().unwrap());
+    let esp_first = u64::from_le_bytes(entries[160..168].try_into().unwrap());
+    assert_eq!(data_first, layout.data_first_lba);
+    assert_eq!(esp_first, layout.esp_first_lba);
+
+    // Backup GPT header lives in the last sector.
+    let last = disk.len() - 512;
+    assert_eq!(&disk[last..last + 8], b"EFI PART", "backup GPT signature");
 }
 
 #[test]

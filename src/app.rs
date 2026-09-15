@@ -19,15 +19,20 @@ pub enum FsChoice {
     Ext4,
     Ntfs,
     Btrfs,
+    /// Whole-disk Ventoy-style multi-boot: repartitions the drive with a large
+    /// exFAT data partition (ISOs + files) and a small FAT32 ESP for the
+    /// bootloader. Not a plain filesystem — routed to a dedicated orchestrator.
+    MultibootDual,
 }
 
 impl FsChoice {
-    pub const ALL: [FsChoice; 5] = [
+    pub const ALL: [FsChoice; 6] = [
         FsChoice::Vfat,
         FsChoice::Exfat,
         FsChoice::Ext4,
         FsChoice::Ntfs,
         FsChoice::Btrfs,
+        FsChoice::MultibootDual,
     ];
 
     pub fn udisks_type(self) -> &'static str {
@@ -37,6 +42,7 @@ impl FsChoice {
             FsChoice::Ext4 => "ext4",
             FsChoice::Ntfs => "ntfs",
             FsChoice::Btrfs => "btrfs",
+            FsChoice::MultibootDual => "multiboot-dual",
         }
     }
 
@@ -47,6 +53,7 @@ impl FsChoice {
             FsChoice::Ext4 => "ext4",
             FsChoice::Ntfs => "NTFS",
             FsChoice::Btrfs => "btrfs",
+            FsChoice::MultibootDual => "Multi-Boot (exFAT + ESP)",
         }
     }
 }

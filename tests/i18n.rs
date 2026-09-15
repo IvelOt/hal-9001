@@ -146,6 +146,19 @@ fn new_message_fields() -> Vec<MessageField> {
         }),
         ("storage_toast_format_done", |m| m.storage_toast_format_done),
         ("storage_err_needs_fat32", |m| m.storage_err_needs_fat32),
+        ("storage_toast_multiboot_formatting", |m| {
+            m.storage_toast_multiboot_formatting
+        }),
+        ("storage_err_gpt_failed", |m| m.storage_err_gpt_failed),
+        ("storage_err_multiboot_dual_needs_disk", |m| {
+            m.storage_err_multiboot_dual_needs_disk
+        }),
+        ("storage_err_multiboot_no_esp", |m| {
+            m.storage_err_multiboot_no_esp
+        }),
+        ("storage_sudo_label_partprobe", |m| {
+            m.storage_sudo_label_partprobe
+        }),
         ("storage_err_cancelled_by_user", |m| {
             m.storage_err_cancelled_by_user
         }),
