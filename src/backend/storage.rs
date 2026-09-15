@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1818,6 +1818,146 @@ async fn create_mbr_and_format_fat32_elevated(
     result
 }
 
+/// Whether a D-Bus error indicates that the UDisks2 `Filesystem` interface (or
+/// the whole block object) is absent for a partition. This is exactly what
+/// happens to an EFI System Partition: the udev rule
+/// `80-udisks2.rules` matches the ESP partition type GUID and sets
+/// `UDISKS_IGNORE=1`, so udisksd never exposes `org.freedesktop.UDisks2.Filesystem`
+/// for that object and `Mount` fails with `UnknownMethod`/`UnknownObject`.
+pub fn is_missing_udisks_filesystem_error(err: &anyhow::Error) -> bool {
+    let lower = err.to_string().to_ascii_lowercase();
+    lower.contains("unknownmethod")
+        || lower.contains("unknownobject")
+        || lower.contains("no such interface")
+        || lower.contains("no such object")
+        || lower.contains("org.freedesktop.udisks2.filesystem")
+}
+
+/// Generate a unique, collision-resistant temporary directory path (under the
+/// system temp dir) used as the mount point for an elevated ESP mount. The
+/// directory itself is not created here — `mount_esp_elevated` creates it.
+fn temp_esp_mount_dir() -> std::path::PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("hal9001-esp-{}-{n}-{nanos:x}", std::process::id()))
+}
+
+/// Mount a FAT32 ESP at `mount_point` by elevating privileges via
+/// `sudo mount -t vfat <esp_node> <mount_point>`. On failure the (already
+/// created) mount point is removed again so no empty directory is leaked.
+async fn mount_esp_elevated(
+    esp_node: &str,
+    mount_point: &std::path::Path,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<(), String> {
+    if let Err(e) = std::fs::create_dir_all(mount_point) {
+        return Err(e.to_string());
+    }
+    let m = lang.messages();
+    let label = format!("{} {esp_node}", m.storage_sudo_label_mount_esp);
+    let args = vec![
+        "-t".to_string(),
+        "vfat".to_string(),
+        esp_node.to_string(),
+        mount_point.to_string_lossy().to_string(),
+    ];
+    if let Err(e) = run_sudo_command(&label, "mount", &args, lang, sudo_tx, tx).await {
+        let _ = std::fs::remove_dir_all(mount_point);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Unmount an elevated ESP mount and remove its temporary directory. Errors are
+/// deliberately ignored: this is a best-effort cleanup that must never mask the
+/// outcome of the operation that preceded it.
+async fn unmount_esp_elevated(
+    mount_point: &std::path::Path,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) {
+    let m = lang.messages();
+    let label = format!(
+        "{} {}",
+        m.storage_sudo_label_unmount_esp,
+        mount_point.display()
+    );
+    let args = vec![mount_point.to_string_lossy().to_string()];
+    let _ = run_sudo_command(&label, "umount", &args, lang, sudo_tx, tx).await;
+    let _ = std::fs::remove_dir_all(mount_point);
+}
+
+/// How an ESP ended up mounted. UDisks2 mounts are left in place (they are the
+/// user-visible mount); elevated mounts are temporary and must be torn down.
+struct EspMount {
+    mount_point: String,
+    elevated_temp_dir: Option<std::path::PathBuf>,
+}
+
+/// Mount an ESP partition, preferring the normal UDisks2 path and falling back
+/// to a temporary `sudo mount` when the partition is ignored by UDisks2 (ESP
+/// type GUID). The data partition keeps using the plain UDisks2 mount.
+async fn mount_esp_partition(
+    conn: &Connection,
+    block_path: &str,
+    esp_node: &str,
+    existing_mount: Option<String>,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<EspMount, String> {
+    if let Some(mp) = existing_mount {
+        if !mp.is_empty() {
+            return Ok(EspMount {
+                mount_point: mp,
+                elevated_temp_dir: None,
+            });
+        }
+    }
+    match mount_and_get_path(conn, block_path).await {
+        Ok(mp) => Ok(EspMount {
+            mount_point: mp,
+            elevated_temp_dir: None,
+        }),
+        Err(e) if is_missing_udisks_filesystem_error(&e) => {
+            tracing::warn!(
+                target: "hal9001::storage",
+                node = %esp_node,
+                error = %e,
+                "partição ESP ignorada pelo UDisks2 — montando temporariamente com sudo"
+            );
+            let dir = temp_esp_mount_dir();
+            mount_esp_elevated(esp_node, &dir, lang, sudo_tx, tx).await?;
+            Ok(EspMount {
+                mount_point: dir.to_string_lossy().to_string(),
+                elevated_temp_dir: Some(dir),
+            })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Tear down an ESP mount that was created elevated (unmount + remove the temp
+/// dir). UDisks2 mounts are left untouched. Must be called in both the success
+/// and error paths so no orphaned mount point is left under `/tmp`.
+async fn finish_esp_mount(
+    mount: EspMount,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) {
+    if let Some(dir) = mount.elevated_temp_dir {
+        unmount_esp_elevated(&dir, lang, sudo_tx, tx).await;
+    }
+}
+
 /// Whole-disk Ventoy-style multi-boot setup: repartition the drive with a GPT
 /// table (exFAT data partition + FAT32 ESP), format both, mount both, and lay
 /// down the boot files. Destructive — the caller must have confirmed and
@@ -1932,8 +2072,10 @@ async fn multiboot_prepare_dual_task(
             return;
         }
     };
-    let esp_mount = match mount_and_get_path(&conn, &esp_block).await {
-        Ok(mp) => mp,
+    let esp_mount = match mount_esp_partition(&conn, &esp_block, &esp_node, None, lang, &sudo_tx, &tx)
+        .await
+    {
+        Ok(mount) => mount,
         Err(e) => {
             fail(format!("{}: {e}", m.storage_err_mount_esp_partition));
             return;
@@ -1942,7 +2084,7 @@ async fn multiboot_prepare_dual_task(
 
     // 5. Lay down the boot files: BOOTX64.EFI on the ESP, ISOs/theme/grub.cfg
     //    on the data partition.
-    let esp_mp = std::path::PathBuf::from(&esp_mount);
+    let esp_mp = std::path::PathBuf::from(&esp_mount.mount_point);
     let data_mp = std::path::PathBuf::from(&data_mount);
     let data_mount_for_count = data_mount.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -1951,6 +2093,10 @@ async fn multiboot_prepare_dual_task(
     .await
     .map_err(|e| e.to_string())
     .and_then(|r| r.map_err(|e| e.to_string()));
+
+    // Always tear down an elevated ESP mount, success or failure, so no orphaned
+    // mount point is left under /tmp.
+    finish_esp_mount(esp_mount, lang, &sudo_tx, &tx).await;
 
     let toast = match &result {
         Ok(()) => {
@@ -1976,14 +2122,26 @@ async fn multiboot_prepare_dual_parts_task(
     device_id: String,
     esp_part_path: String,
     esp_existing_mount: Option<String>,
+    esp_dev_node: String,
     data_part_path: String,
     data_existing_mount: Option<String>,
     lang: crate::i18n::Language,
+    sudo_tx: SudoPasswordTx,
     tx: EventTx,
 ) {
     let m = lang.messages();
-    let esp_mount = match ensure_mounted(&conn, &esp_part_path, esp_existing_mount).await {
-        Ok(mp) => mp,
+    let esp_mount = match mount_esp_partition(
+        &conn,
+        &esp_part_path,
+        &esp_dev_node,
+        esp_existing_mount,
+        lang,
+        &sudo_tx,
+        &tx,
+    )
+    .await
+    {
+        Ok(mount) => mount,
         Err(e) => {
             let _ = tx.send(AppEvent::Toast(Toast::error(format!(
                 "{}: {e}",
@@ -1999,11 +2157,12 @@ async fn multiboot_prepare_dual_parts_task(
                 "{}: {e}",
                 m.storage_err_mount_data_partition
             ))));
+            finish_esp_mount(esp_mount, lang, &sudo_tx, &tx).await;
             return;
         }
     };
 
-    let esp_mp = std::path::PathBuf::from(&esp_mount);
+    let esp_mp = std::path::PathBuf::from(&esp_mount.mount_point);
     let data_mp = std::path::PathBuf::from(&data_mount);
     let data_mount_for_count = data_mount.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -2012,6 +2171,8 @@ async fn multiboot_prepare_dual_parts_task(
     .await
     .map_err(|e| e.to_string())
     .and_then(|r| r.map_err(|e| e.to_string()));
+
+    finish_esp_mount(esp_mount, lang, &sudo_tx, &tx).await;
 
     let toast = match &result {
         Ok(()) => {
@@ -3170,15 +3331,18 @@ async fn handle_action(
                     let data_existing_mount = part.mount_points.first().cloned();
                     let esp_part_path = esp.id.0.clone();
                     let esp_existing_mount = esp.mount_points.first().cloned();
+                    let esp_dev_node = esp.dev_node.clone();
                     tracing::warn!(target: "hal9001::storage", device = %device_id, esp = %esp_part_path, data = %data_part_path, "preparação de multi-boot (dual, partições existentes) solicitada");
                     tokio::spawn(multiboot_prepare_dual_parts_task(
                         conn.clone(),
                         device_id,
                         esp_part_path,
                         esp_existing_mount,
+                        esp_dev_node,
                         data_part_path,
                         data_existing_mount,
                         lang,
+                        sudo_tx.clone(),
                         tx.clone(),
                     ));
                 }
@@ -3291,5 +3455,52 @@ async fn handle_action(
             ));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temp_esp_mount_dir_is_unique_and_under_tmp() {
+        let a = temp_esp_mount_dir();
+        let b = temp_esp_mount_dir();
+        assert_ne!(a, b);
+        let tmp = std::env::temp_dir();
+        assert_eq!(a.parent(), Some(tmp.as_path()));
+        assert!(a
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("hal9001-esp-"));
+    }
+
+    #[test]
+    fn temp_esp_mount_dir_does_not_create_the_directory() {
+        let dir = temp_esp_mount_dir();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn missing_udisks_filesystem_error_is_detected() {
+        for msg in [
+            "org.freedesktop.DBus.Error.UnknownMethod: No such interface \u{201c}org.freedesktop.UDisks2.Filesystem\u{201d} on object",
+            "org.freedesktop.DBus.Error.UnknownObject: No such object path '/org/freedesktop/UDisks2/block_devices/sda2'",
+        ] {
+            let err = anyhow::anyhow!(msg.to_string());
+            assert!(is_missing_udisks_filesystem_error(&err), "no match: {msg}");
+        }
+    }
+
+    #[test]
+    fn missing_udisks_filesystem_error_is_false_for_unrelated_errors() {
+        for msg in [
+            "failed to mount: permission denied",
+            "org.freedesktop.UDisks2.Error.AlreadyMounted: Device is already mounted",
+        ] {
+            let err = anyhow::anyhow!(msg.to_string());
+            assert!(!is_missing_udisks_filesystem_error(&err), "false match: {msg}");
+        }
     }
 }

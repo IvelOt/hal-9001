@@ -369,6 +369,8 @@ pub struct Messages {
     pub storage_sudo_label_fat32_suffix: &'static str,
     pub storage_sudo_label_flash: &'static str,
     pub storage_sudo_label_flash_gzip: &'static str,
+    pub storage_sudo_label_mount_esp: &'static str,
+    pub storage_sudo_label_unmount_esp: &'static str,
     pub storage_err_udisks_unavailable: &'static str,
     pub storage_hint_cancel_scan: &'static str,
 
@@ -937,6 +939,8 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_sudo_label_fat32_suffix: "(FAT32, sem mkfs.vfat)",
     storage_sudo_label_flash: "Gravar ISO em",
     storage_sudo_label_flash_gzip: "Gravar ISO comprimida em",
+    storage_sudo_label_mount_esp: "Montar partição ESP",
+    storage_sudo_label_unmount_esp: "Desmontar partição ESP",
     storage_err_udisks_unavailable: "UDisks2 indisponível",
     storage_hint_cancel_scan: "[Esc] Cancelar varredura",
 
@@ -1494,6 +1498,8 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_sudo_label_fat32_suffix: "(FAT32, no mkfs.vfat)",
     storage_sudo_label_flash: "Flash ISO to",
     storage_sudo_label_flash_gzip: "Flash compressed ISO to",
+    storage_sudo_label_mount_esp: "Mount ESP partition",
+    storage_sudo_label_unmount_esp: "Unmount ESP partition",
     storage_err_udisks_unavailable: "UDisks2 unavailable",
     storage_hint_cancel_scan: "[Esc] Cancel scan",
 
@@ -2049,6 +2055,8 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_sudo_label_fat32_suffix: "(FAT32, sin mkfs.vfat)",
     storage_sudo_label_flash: "Grabar ISO en",
     storage_sudo_label_flash_gzip: "Grabar ISO comprimida en",
+    storage_sudo_label_mount_esp: "Montar partición ESP",
+    storage_sudo_label_unmount_esp: "Desmontar partición ESP",
     storage_err_udisks_unavailable: "UDisks2 no disponible",
     storage_hint_cancel_scan: "[Esc] Cancelar exploración",
 
