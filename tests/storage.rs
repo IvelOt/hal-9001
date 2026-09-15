@@ -3,8 +3,8 @@ use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, create_gpt_dual, create_mbr_fat32, detect_ventoy,
     format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_gzip_file,
     is_iso_or_img, is_no_usb_device_error, is_not_authorized_error, is_permission_denied_error,
-    is_sudo_auth_failure, is_system_disk, is_whole_disk, mkfs_command, partition_node,
-    parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps, primary_partition,
+    is_sudo_auth_failure, is_system_disk, is_whole_disk, mkfs_command, parse_dd_bytes_copied,
+    parse_proc_mounts, parse_proc_swaps, partition_node, primary_partition,
     resolve_block_object_path, skips_power_off, sudo_invocation, ventoy_data_partition, BusType,
     DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
 };
@@ -496,7 +496,10 @@ fn create_gpt_dual_lays_out_data_then_esp_without_overlap() {
     assert_eq!(layout.data_first_lba % 2048, 0, "data not 1MiB aligned");
     assert_eq!(layout.data_offset, layout.data_first_lba * 512);
     // ESP sits after the data partition, near the end, and is ~128 MiB.
-    assert!(layout.esp_first_lba > layout.data_last_lba, "esp overlaps data");
+    assert!(
+        layout.esp_first_lba > layout.data_last_lba,
+        "esp overlaps data"
+    );
     assert_eq!(layout.data_last_lba + 1, layout.esp_first_lba);
     assert!(
         layout.esp_size >= esp_size,
@@ -505,7 +508,10 @@ fn create_gpt_dual_lays_out_data_then_esp_without_overlap() {
         esp_size
     );
     // Data partition takes the bulk of the disk.
-    assert!(layout.data_size > size / 2, "data partition unexpectedly small");
+    assert!(
+        layout.data_size > size / 2,
+        "data partition unexpectedly small"
+    );
 }
 
 #[test]
@@ -545,14 +551,21 @@ fn create_gpt_dual_writes_valid_gpt_metadata() {
     let mut hdr_zeroed = hdr.to_vec();
     let stored_hdr_crc = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
     hdr_zeroed[16..20].copy_from_slice(&[0, 0, 0, 0]);
-    assert_eq!(test_crc32(&hdr_zeroed), stored_hdr_crc, "header CRC invalid");
+    assert_eq!(
+        test_crc32(&hdr_zeroed),
+        stored_hdr_crc,
+        "header CRC invalid"
+    );
 
     // Partition entry array CRC must match the stored value.
-    let entries_lba =
-        u64::from_le_bytes(hdr[72..80].try_into().unwrap()) as usize;
+    let entries_lba = u64::from_le_bytes(hdr[72..80].try_into().unwrap()) as usize;
     let entries = &disk[entries_lba * 512..entries_lba * 512 + 128 * 128];
     let stored_entries_crc = u32::from_le_bytes([hdr[88], hdr[89], hdr[90], hdr[91]]);
-    assert_eq!(test_crc32(entries), stored_entries_crc, "entries CRC invalid");
+    assert_eq!(
+        test_crc32(entries),
+        stored_entries_crc,
+        "entries CRC invalid"
+    );
 
     // Entry 0 = data (Microsoft Basic Data), entry 1 = ESP (EFI System).
     assert_eq!(&entries[0..16], &MS_BASIC_DATA_GUID, "data type GUID");

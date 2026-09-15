@@ -841,7 +841,7 @@ pub fn create_gpt_dual(
     const ENTRY_COUNT: u64 = 128;
     const ENTRY_SIZE: u64 = 128;
     const ALIGN: u64 = 2048; // 1 MiB alignment
-    // 128 entries * 128 bytes = 16384 bytes = 32 sectors.
+                             // 128 entries * 128 bytes = 16384 bytes = 32 sectors.
     const ENTRY_ARRAY_SECTORS: u64 = (ENTRY_COUNT * ENTRY_SIZE) / SECTOR;
 
     let total_sectors = disk_size / SECTOR;
@@ -1855,7 +1855,13 @@ async fn multiboot_prepare_dual_task(
 
     // 2. Ask the kernel to re-read the partition table so the partition nodes
     //    appear, then give udev/udisks a moment to settle.
-    let _ = udisks_call(&conn, &block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
+    let _ = udisks_call(
+        &conn,
+        &block_path,
+        "org.freedesktop.UDisks2.Block",
+        "Rescan",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     let data_node = partition_node(&dev_node, 1);
@@ -1876,7 +1882,10 @@ async fn multiboot_prepare_dual_task(
     )
     .await
     {
-        fail(format!("{} mkfs.exfat: {e}", m.storage_err_format_via_failed));
+        fail(format!(
+            "{} mkfs.exfat: {e}",
+            m.storage_err_format_via_failed
+        ));
         return;
     }
 
@@ -1905,7 +1914,13 @@ async fn multiboot_prepare_dual_task(
     }
 
     // 4. Rescan and mount both partitions via udisks.
-    let _ = udisks_call(&conn, &block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
+    let _ = udisks_call(
+        &conn,
+        &block_path,
+        "org.freedesktop.UDisks2.Block",
+        "Rescan",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     let data_block = format!("{BLOCK_DEVICE_PREFIX}{}", node_basename(&data_node));
@@ -2928,11 +2943,15 @@ async fn handle_action(
                     .dev_node_for_block_path(&block_path)
                     .and_then(|dn| snap.drives.iter().find(|d| d.dev_node == dn))
                 else {
-                    let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_multiboot_dual_needs_disk)));
+                    let _ = tx.send(AppEvent::Toast(Toast::error(
+                        m.storage_err_multiboot_dual_needs_disk,
+                    )));
                     return;
                 };
                 if !is_whole_disk(&drv.dev_node) {
-                    let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_multiboot_dual_needs_disk)));
+                    let _ = tx.send(AppEvent::Toast(Toast::error(
+                        m.storage_err_multiboot_dual_needs_disk,
+                    )));
                     return;
                 }
                 tokio::spawn(multiboot_prepare_dual_task(
@@ -3140,11 +3159,7 @@ async fn handle_action(
                         .drives
                         .iter()
                         .find(|d| d.partitions.iter().any(|p| p.id == part.id))
-                        .and_then(|d| {
-                            d.partitions
-                                .iter()
-                                .find(|p| matches!(p.fs, FsKind::Vfat))
-                        });
+                        .and_then(|d| d.partitions.iter().find(|p| matches!(p.fs, FsKind::Vfat)));
                     let Some(esp) = esp else {
                         let _ = tx.send(AppEvent::Toast(Toast::error(
                             m.storage_err_multiboot_no_esp,

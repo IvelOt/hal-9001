@@ -215,7 +215,10 @@ fn create_dual_boot_disk(
             .unwrap();
         let grub = root.create_dir("boot").unwrap().create_dir("grub").unwrap();
         let cfg = std::fs::read(project_dir.join("assets/multiboot/grub.cfg")).unwrap();
-        grub.create_file("grub.cfg").unwrap().write_all(&cfg).unwrap();
+        grub.create_file("grub.cfg")
+            .unwrap()
+            .write_all(&cfg)
+            .unwrap();
     }
 
     // --- Data (mb_root): marker + theme + grub.cfg + a dummy ISO ---------
@@ -239,8 +242,15 @@ fn create_dual_boot_disk(
 
         let grub = root.create_dir("boot").unwrap().create_dir("grub").unwrap();
         let cfg = std::fs::read(project_dir.join("assets/multiboot/grub.cfg")).unwrap();
-        grub.create_file("grub.cfg").unwrap().write_all(&cfg).unwrap();
-        let theme = grub.create_dir("themes").unwrap().create_dir("hal9001").unwrap();
+        grub.create_file("grub.cfg")
+            .unwrap()
+            .write_all(&cfg)
+            .unwrap();
+        let theme = grub
+            .create_dir("themes")
+            .unwrap()
+            .create_dir("hal9001")
+            .unwrap();
         for name in ["theme.txt", "ascii.pf2", "unicode.pf2"] {
             let data =
                 std::fs::read(project_dir.join(format!("assets/multiboot/themes/hal9001/{name}")))
@@ -287,11 +297,7 @@ fn dual_boot_disk_has_valid_gpt_esp_and_data() {
         .read(true)
         .write(true)
         .open({
-            std::fs::write(
-                std::env::temp_dir().join("hal9001_dual_reopen.img"),
-                &disk,
-            )
-            .unwrap();
+            std::fs::write(std::env::temp_dir().join("hal9001_dual_reopen.img"), &disk).unwrap();
             std::env::temp_dir().join("hal9001_dual_reopen.img")
         })
         .unwrap();
@@ -302,7 +308,10 @@ fn dual_boot_disk_has_valid_gpt_esp_and_data() {
         "ESP missing BOOTX64.EFI"
     );
     assert!(
-        esp_fs.root_dir().open_file("ISOs/.hal9001-multiboot").is_err(),
+        esp_fs
+            .root_dir()
+            .open_file("ISOs/.hal9001-multiboot")
+            .is_err(),
         "ESP should not carry the ISO marker"
     );
     drop(esp_fs);
@@ -316,7 +325,10 @@ fn dual_boot_disk_has_valid_gpt_esp_and_data() {
     let mut data_wrap = OffsetFile::new(data_file, layout.data_offset);
     let data_fs = fatfs::FileSystem::new(&mut data_wrap, fatfs::FsOptions::new()).unwrap();
     assert!(
-        data_fs.root_dir().open_file("ISOs/.hal9001-multiboot").is_ok(),
+        data_fs
+            .root_dir()
+            .open_file("ISOs/.hal9001-multiboot")
+            .is_ok(),
         "data partition missing ISO marker"
     );
     drop(data_fs);
