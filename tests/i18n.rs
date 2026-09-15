@@ -238,6 +238,12 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_err_format_generic_prefix", |m| {
             m.storage_err_format_generic_prefix
         }),
+        ("storage_sudo_label_mount_esp", |m| {
+            m.storage_sudo_label_mount_esp
+        }),
+        ("storage_sudo_label_unmount_esp", |m| {
+            m.storage_sudo_label_unmount_esp
+        }),
     ]
 }
 

@@ -2,11 +2,11 @@ use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageMod
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, create_gpt_dual, create_mbr_fat32, detect_ventoy,
     format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_gzip_file,
-    is_iso_or_img, is_no_usb_device_error, is_not_authorized_error, is_permission_denied_error,
-    is_sudo_auth_failure, is_system_disk, is_whole_disk, mkfs_command, parse_dd_bytes_copied,
-    parse_proc_mounts, parse_proc_swaps, partition_node, primary_partition,
-    resolve_block_object_path, skips_power_off, sudo_invocation, ventoy_data_partition, BusType,
-    DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
+    is_iso_or_img, is_missing_udisks_filesystem_error, is_no_usb_device_error,
+    is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
+    is_whole_disk, mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps,
+    partition_node, primary_partition, resolve_block_object_path, skips_power_off, sudo_invocation,
+    ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};
@@ -431,6 +431,26 @@ fn is_not_authorized_error_detects_polkit_refusal_variants() {
 fn is_not_authorized_error_is_false_for_missing_mkfs() {
     let err = anyhow::anyhow!("mkfs.vfat: command not found");
     assert!(!is_not_authorized_error(&err));
+}
+
+#[test]
+fn is_missing_udisks_filesystem_error_detects_esp_ignored_variants() {
+    for msg in [
+        "org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.freedesktop.UDisks2.Filesystem” on object",
+        "org.freedesktop.DBus.Error.UnknownObject: No such object path '/org/freedesktop/UDisks2/block_devices/sda2'",
+    ] {
+        let err = anyhow::anyhow!(msg.to_string());
+        assert!(
+            is_missing_udisks_filesystem_error(&err),
+            "esperava match para: {msg}"
+        );
+    }
+}
+
+#[test]
+fn is_missing_udisks_filesystem_error_is_false_for_other_mount_failures() {
+    let err = anyhow::anyhow!("failed to mount: permission denied");
+    assert!(!is_missing_udisks_filesystem_error(&err));
 }
 
 #[test]
