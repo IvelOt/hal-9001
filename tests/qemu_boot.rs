@@ -155,6 +155,269 @@ fn create_bootable_disk(disk_path: &std::path::Path, project_dir: &std::path::Pa
     drop(wrapper);
 }
 
+/// Build a GPT dual-partition disk image (Ventoy-style): a data partition
+/// followed by a FAT32 ESP. Both partitions are formatted FAT32 here (the data
+/// partition stands in for exFAT, which cannot be created without root/loop in
+/// a unit test) so we can verify the end-to-end GPT + ESP + `search` boot flow.
+/// The bootloader lives on the ESP; the marker, theme and a dummy ISO live on
+/// the data partition, exactly as `prepare_multiboot_dual` arranges them.
+fn create_dual_boot_disk(
+    disk_path: &std::path::Path,
+    project_dir: &std::path::Path,
+) -> hal9001::backend::storage::DualPartitionLayout {
+    let disk_size: u64 = 320 * 1024 * 1024;
+    let esp_size: u64 = 64 * 1024 * 1024;
+
+    std::fs::File::create(disk_path)
+        .and_then(|f| {
+            f.set_len(disk_size)?;
+            Ok(())
+        })
+        .expect("create disk image file");
+
+    let layout = hal9001::backend::storage::create_gpt_dual(
+        disk_path.to_str().unwrap(),
+        disk_size,
+        esp_size,
+    )
+    .expect("create_gpt_dual");
+
+    // Format both partitions FAT32 at their byte offsets.
+    hal9001::backend::storage::format_fat32_partition(
+        disk_path.to_str().unwrap(),
+        "HAL9001ESP",
+        layout.esp_offset,
+    )
+    .expect("format ESP");
+    hal9001::backend::storage::format_fat32_partition(
+        disk_path.to_str().unwrap(),
+        "HAL9001",
+        layout.data_offset,
+    )
+    .expect("format data");
+
+    // --- ESP: bootloader + grub.cfg -------------------------------------
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(disk_path)
+            .unwrap();
+        let mut wrapper = OffsetFile::new(file, layout.esp_offset);
+        let fs = fatfs::FileSystem::new(&mut wrapper, fatfs::FsOptions::new()).expect("open ESP");
+        let root = fs.root_dir();
+        let boot = root.create_dir("EFI").unwrap().create_dir("BOOT").unwrap();
+        let efi = std::fs::read(project_dir.join("assets/multiboot/BOOTX64.EFI"))
+            .expect("read BOOTX64.EFI");
+        boot.create_file("BOOTX64.EFI")
+            .unwrap()
+            .write_all(&efi)
+            .unwrap();
+        let grub = root.create_dir("boot").unwrap().create_dir("grub").unwrap();
+        let cfg = std::fs::read(project_dir.join("assets/multiboot/grub.cfg")).unwrap();
+        grub.create_file("grub.cfg")
+            .unwrap()
+            .write_all(&cfg)
+            .unwrap();
+    }
+
+    // --- Data (mb_root): marker + theme + grub.cfg + a dummy ISO ---------
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(disk_path)
+            .unwrap();
+        let mut wrapper = OffsetFile::new(file, layout.data_offset);
+        let fs = fatfs::FileSystem::new(&mut wrapper, fatfs::FsOptions::new()).expect("open data");
+        let root = fs.root_dir();
+
+        let isos = root.create_dir("ISOs").unwrap();
+        isos.create_file(".hal9001-multiboot").unwrap();
+        // A dummy ISO so GRUB produces a "Boot:" menu entry from the data part.
+        isos.create_file("dummy.iso")
+            .unwrap()
+            .write_all(b"not a real iso")
+            .unwrap();
+
+        let grub = root.create_dir("boot").unwrap().create_dir("grub").unwrap();
+        let cfg = std::fs::read(project_dir.join("assets/multiboot/grub.cfg")).unwrap();
+        grub.create_file("grub.cfg")
+            .unwrap()
+            .write_all(&cfg)
+            .unwrap();
+        let theme = grub
+            .create_dir("themes")
+            .unwrap()
+            .create_dir("hal9001")
+            .unwrap();
+        for name in ["theme.txt", "ascii.pf2", "unicode.pf2"] {
+            let data =
+                std::fs::read(project_dir.join(format!("assets/multiboot/themes/hal9001/{name}")))
+                    .unwrap();
+            theme.create_file(name).unwrap().write_all(&data).unwrap();
+        }
+    }
+
+    layout
+}
+
+#[test]
+fn dual_boot_disk_has_valid_gpt_esp_and_data() {
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let disk_path = std::env::temp_dir().join("hal9001_dual_boot_struct_test.img");
+
+    let layout = create_dual_boot_disk(&disk_path, &project_dir);
+
+    let disk = std::fs::read(&disk_path).unwrap();
+    let _ = std::fs::remove_file(&disk_path);
+
+    // Protective MBR + primary/backup GPT signatures.
+    assert_eq!(disk[450], 0xEE, "protective MBR type");
+    assert_eq!(&disk[512..520], b"EFI PART", "primary GPT signature");
+    let last = disk.len() - 512;
+    assert_eq!(&disk[last..last + 8], b"EFI PART", "backup GPT signature");
+
+    // Both partitions carry a FAT32 boot sector signature at their offsets.
+    let esp = layout.esp_offset as usize;
+    assert_eq!(
+        u16::from_le_bytes([disk[esp + 510], disk[esp + 511]]),
+        0xAA55,
+        "ESP FAT signature"
+    );
+    let data = layout.data_offset as usize;
+    assert_eq!(
+        u16::from_le_bytes([disk[data + 510], disk[data + 511]]),
+        0xAA55,
+        "data FAT signature"
+    );
+
+    // The bootloader is on the ESP; the marker is on the data partition.
+    let esp_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open({
+            std::fs::write(std::env::temp_dir().join("hal9001_dual_reopen.img"), &disk).unwrap();
+            std::env::temp_dir().join("hal9001_dual_reopen.img")
+        })
+        .unwrap();
+    let mut esp_wrap = OffsetFile::new(esp_file, layout.esp_offset);
+    let esp_fs = fatfs::FileSystem::new(&mut esp_wrap, fatfs::FsOptions::new()).unwrap();
+    assert!(
+        esp_fs.root_dir().open_file("EFI/BOOT/BOOTX64.EFI").is_ok(),
+        "ESP missing BOOTX64.EFI"
+    );
+    assert!(
+        esp_fs
+            .root_dir()
+            .open_file("ISOs/.hal9001-multiboot")
+            .is_err(),
+        "ESP should not carry the ISO marker"
+    );
+    drop(esp_fs);
+    drop(esp_wrap);
+
+    let data_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(std::env::temp_dir().join("hal9001_dual_reopen.img"))
+        .unwrap();
+    let mut data_wrap = OffsetFile::new(data_file, layout.data_offset);
+    let data_fs = fatfs::FileSystem::new(&mut data_wrap, fatfs::FsOptions::new()).unwrap();
+    assert!(
+        data_fs
+            .root_dir()
+            .open_file("ISOs/.hal9001-multiboot")
+            .is_ok(),
+        "data partition missing ISO marker"
+    );
+    drop(data_fs);
+    drop(data_wrap);
+    let _ = std::fs::remove_file(std::env::temp_dir().join("hal9001_dual_reopen.img"));
+}
+
+#[test]
+fn qemu_uefi_boot_dual_partition_loads_grub_menu() {
+    let ovmf_path = std::path::Path::new("/usr/share/edk2/x64/OVMF.4m.fd");
+    if !ovmf_path.exists() {
+        eprintln!(
+            "OVMF firmware not found at {} -- skipping QEMU dual-boot test",
+            ovmf_path.display()
+        );
+        return;
+    }
+    let qemu_available = Command::new("qemu-system-x86_64")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !qemu_available {
+        eprintln!("qemu-system-x86_64 not available -- skipping QEMU dual-boot test");
+        return;
+    }
+
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let disk_path = std::env::temp_dir().join("hal9001_qemu_dual_boot_test.img");
+    let serial_log = std::env::temp_dir().join("hal9001_qemu_dual_serial.log");
+    let _ = std::fs::remove_file(&serial_log);
+
+    create_dual_boot_disk(&disk_path, &project_dir);
+
+    let mut child = Command::new("qemu-system-x86_64")
+        .arg("-bios")
+        .arg(ovmf_path)
+        .arg("-drive")
+        .arg(format!("file={},format=raw", disk_path.display()))
+        .arg("-m")
+        .arg("256")
+        .arg("-nographic")
+        .arg("-serial")
+        .arg(format!("file:{}", serial_log.display()))
+        .arg("-no-reboot")
+        .arg("-accel")
+        .arg("tcg")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn QEMU");
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(25);
+    let matched = |content: &str| {
+        content.contains("GNU GRUB")
+            || content.contains("GRUB")
+            || content.contains("HAL-9001")
+            || content.contains("Multi-Boot")
+            || content.contains("Boot:")
+    };
+    loop {
+        if start.elapsed() >= timeout {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Ok(content) = std::fs::read_to_string(&serial_log) {
+            if matched(&content) {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&disk_path);
+                let _ = std::fs::remove_file(&serial_log);
+                return;
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let log_content = std::fs::read_to_string(&serial_log).unwrap_or_default();
+    let _ = std::fs::remove_file(&disk_path);
+    let _ = std::fs::remove_file(&serial_log);
+    eprintln!("Dual-boot serial log:\n{log_content}");
+    assert!(
+        matched(&log_content),
+        "QEMU dual-partition serial log did not contain GRUB menu within 25s.\nLog:\n{log_content}"
+    );
+}
+
 #[test]
 fn bootable_disk_has_correct_mbr_and_fat32_structure() {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));

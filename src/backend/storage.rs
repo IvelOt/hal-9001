@@ -328,6 +328,14 @@ pub fn mkfs_command(fs_type: &str, label: &str, dev_node: &str) -> Option<(Strin
         "vfat" | "fat32" | "fat" => {
             args.push("-F".to_string());
             args.push("32".to_string());
+            // When the target is a whole disk (e.g. `/dev/sda`) rather than a
+            // partition, `mkfs.fat` refuses with exit code 1 ("Device
+            // partition expected, not making filesystem on entire device") if a
+            // partition table is present. `-I` overrides that check so the
+            // superfloppy fallback can format the raw device.
+            if is_whole_disk(dev_node) {
+                args.push("-I".to_string());
+            }
             if !label.is_empty() {
                 args.push("-n".to_string());
                 args.push(label.to_string());
@@ -660,6 +668,22 @@ pub fn is_whole_disk(dev_node: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Derive the device node of the `index`-th partition (1-based) of a whole
+/// disk, following the kernel's naming rules (`sda` → `sda1`, but `nvme0n1` →
+/// `nvme0n1p1` and `mmcblk0` → `mmcblk0p1`).
+pub fn partition_node(dev_node: &str, index: u32) -> String {
+    let ends_with_digit = dev_node
+        .chars()
+        .last()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false);
+    if ends_with_digit {
+        format!("{dev_node}p{index}")
+    } else {
+        format!("{dev_node}{index}")
+    }
+}
+
 /// Write an MBR partition table with a single FAT32 bootable partition
 /// occupying the whole disk.
 ///
@@ -725,6 +749,283 @@ pub fn format_fat32_partition(dev_node: &str, label: &str, offset: u64) -> anyho
         .write(true)
         .open(dev_node)?;
     format_fat32_on_file_at(file, label, offset)
+}
+
+// --- GPT dual-partition (Ventoy-style) support -----------------------------
+
+/// GPT partition type GUID for a Microsoft Basic Data partition (used for the
+/// exFAT/NTFS/data partition), in the mixed-endian on-disk byte layout.
+const GPT_TYPE_MS_BASIC_DATA: [u8; 16] = [
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+];
+
+/// GPT partition type GUID for an EFI System Partition (ESP), in the
+/// mixed-endian on-disk byte layout.
+const GPT_TYPE_EFI_SYSTEM: [u8; 16] = [
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+];
+
+/// Byte layout of a dual-partition GPT drive produced by [`create_gpt_dual`]:
+/// a large data partition (exFAT — ISOs and user files) followed by a small
+/// FAT32 EFI System Partition holding the GRUB boot files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DualPartitionLayout {
+    /// Byte offset where the data (exFAT) partition begins.
+    pub data_offset: u64,
+    /// Size in bytes of the data (exFAT) partition.
+    pub data_size: u64,
+    pub data_first_lba: u64,
+    pub data_last_lba: u64,
+    /// Byte offset where the FAT32 ESP begins.
+    pub esp_offset: u64,
+    /// Size in bytes of the FAT32 ESP.
+    pub esp_size: u64,
+    pub esp_first_lba: u64,
+    pub esp_last_lba: u64,
+}
+
+/// CRC-32/ISO-HDLC (the reflected polynomial used by GPT), computed without a
+/// lookup table to keep this dependency-free.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Generate a pseudo-unique version-4-shaped GUID (mixed-endian on-disk bytes).
+/// GPT only requires disk/partition GUIDs to be unique, not cryptographically
+/// random, so a time-seeded xorshift is sufficient and avoids a `uuid`/`rand`
+/// dependency.
+fn gen_guid(state: &mut u64) -> [u8; 16] {
+    let mut next = || {
+        // xorshift64*
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let mut bytes = [0u8; 16];
+    bytes[0..8].copy_from_slice(&next().to_le_bytes());
+    bytes[8..16].copy_from_slice(&next().to_le_bytes());
+    // Set version (4) and variant (RFC 4122) bits.
+    bytes[7] = (bytes[7] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    bytes
+}
+
+/// Write a GPT partition table to `dev_node` describing two partitions: a large
+/// data partition (partition 1, Microsoft Basic Data — meant for exFAT) that
+/// occupies the bulk of the disk, and a small FAT32 EFI System Partition
+/// (partition 2, `esp_size` bytes) at the end of the disk.
+///
+/// Only the GPT metadata sectors (protective MBR, primary/backup headers and
+/// entry arrays) are written; the partition data regions are left untouched for
+/// the caller to format with `mkfs.exfat` / a FAT32 formatter. Returns the byte
+/// offsets and sizes of both partitions.
+pub fn create_gpt_dual(
+    dev_node: &str,
+    disk_size: u64,
+    esp_size: u64,
+) -> anyhow::Result<DualPartitionLayout> {
+    use std::io::{Seek, SeekFrom, Write};
+
+    const SECTOR: u64 = 512;
+    const ENTRY_COUNT: u64 = 128;
+    const ENTRY_SIZE: u64 = 128;
+    const ALIGN: u64 = 2048; // 1 MiB alignment
+                             // 128 entries * 128 bytes = 16384 bytes = 32 sectors.
+    const ENTRY_ARRAY_SECTORS: u64 = (ENTRY_COUNT * ENTRY_SIZE) / SECTOR;
+
+    let total_sectors = disk_size / SECTOR;
+    // Need room for: protective MBR + primary header + primary entries (32) +
+    // at least one aligned data cluster + ESP + backup entries (32) + backup
+    // header. Require the ESP plus generous slack.
+    let esp_sectors = esp_size.div_ceil(SECTOR);
+    let min_sectors = 2 * ALIGN + 2 * ENTRY_ARRAY_SECTORS + 2 + esp_sectors + ALIGN;
+    if total_sectors < min_sectors {
+        anyhow::bail!(
+            "disk too small for GPT dual-partition ({disk_size} bytes, need >= {} bytes)",
+            min_sectors * SECTOR
+        );
+    }
+
+    let last_lba = total_sectors - 1; // backup GPT header
+    let primary_entries_lba = 2u64;
+    let first_usable_lba = primary_entries_lba + ENTRY_ARRAY_SECTORS; // 34
+    let backup_entries_lba = last_lba - ENTRY_ARRAY_SECTORS; // last_lba - 32
+    let last_usable_lba = backup_entries_lba - 1;
+
+    // ESP occupies the tail of the usable area, aligned down.
+    let esp_last_lba = last_usable_lba;
+    let esp_first_lba = ((esp_last_lba + 1 - esp_sectors) / ALIGN) * ALIGN;
+    // Data partition occupies the front, from the first aligned usable LBA up to
+    // just before the ESP.
+    let data_first_lba = first_usable_lba.div_ceil(ALIGN) * ALIGN;
+    let data_last_lba = esp_first_lba - 1;
+
+    if data_first_lba >= data_last_lba || esp_first_lba <= data_first_lba {
+        anyhow::bail!("disk too small to lay out both partitions");
+    }
+
+    let mut guid_state = seed_guid_state(disk_size);
+    let disk_guid = gen_guid(&mut guid_state);
+    let data_guid = gen_guid(&mut guid_state);
+    let esp_guid = gen_guid(&mut guid_state);
+
+    // Build the 128-entry partition array (16 KiB).
+    let mut entries = vec![0u8; (ENTRY_COUNT * ENTRY_SIZE) as usize];
+    write_gpt_entry(
+        &mut entries[0..128],
+        &GPT_TYPE_MS_BASIC_DATA,
+        &data_guid,
+        data_first_lba,
+        data_last_lba,
+        "HAL9001-DATA",
+    );
+    write_gpt_entry(
+        &mut entries[128..256],
+        &GPT_TYPE_EFI_SYSTEM,
+        &esp_guid,
+        esp_first_lba,
+        esp_last_lba,
+        "HAL9001-ESP",
+    );
+    let entries_crc = crc32_ieee(&entries);
+
+    let primary_header = build_gpt_header(
+        1,
+        last_lba,
+        first_usable_lba,
+        last_usable_lba,
+        &disk_guid,
+        primary_entries_lba,
+        entries_crc,
+    );
+    let backup_header = build_gpt_header(
+        last_lba,
+        1,
+        first_usable_lba,
+        last_usable_lba,
+        &disk_guid,
+        backup_entries_lba,
+        entries_crc,
+    );
+
+    // Protective MBR (LBA 0).
+    let mut mbr = [0u8; 512];
+    mbr[446] = 0x00; // not bootable
+    mbr[447] = 0x00;
+    mbr[448] = 0x02;
+    mbr[449] = 0x00;
+    mbr[450] = 0xEE; // GPT protective type
+    mbr[451] = 0xFF;
+    mbr[452] = 0xFF;
+    mbr[453] = 0xFF;
+    mbr[454..458].copy_from_slice(&1u32.to_le_bytes()); // starting LBA
+    let protective_size = u32::try_from(total_sectors - 1).unwrap_or(0xFFFF_FFFF);
+    mbr[458..462].copy_from_slice(&protective_size.to_le_bytes());
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dev_node)?;
+
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&mbr)?;
+    // Primary GPT header at LBA 1.
+    file.seek(SeekFrom::Start(SECTOR))?;
+    file.write_all(&primary_header)?;
+    // Primary entry array at LBA 2.
+    file.seek(SeekFrom::Start(primary_entries_lba * SECTOR))?;
+    file.write_all(&entries)?;
+    // Backup entry array.
+    file.seek(SeekFrom::Start(backup_entries_lba * SECTOR))?;
+    file.write_all(&entries)?;
+    // Backup GPT header at the last LBA.
+    file.seek(SeekFrom::Start(last_lba * SECTOR))?;
+    file.write_all(&backup_header)?;
+    file.sync_all()?;
+
+    Ok(DualPartitionLayout {
+        data_offset: data_first_lba * SECTOR,
+        data_size: (data_last_lba - data_first_lba + 1) * SECTOR,
+        data_first_lba,
+        data_last_lba,
+        esp_offset: esp_first_lba * SECTOR,
+        esp_size: (esp_last_lba - esp_first_lba + 1) * SECTOR,
+        esp_first_lba,
+        esp_last_lba,
+    })
+}
+
+fn seed_guid_state(salt: u64) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    // Ensure the xorshift state is never zero.
+    (nanos ^ salt.rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15) | 1
+}
+
+/// Serialize a single 128-byte GPT partition entry into `out`.
+fn write_gpt_entry(
+    out: &mut [u8],
+    type_guid: &[u8; 16],
+    part_guid: &[u8; 16],
+    first_lba: u64,
+    last_lba: u64,
+    name: &str,
+) {
+    out[0..16].copy_from_slice(type_guid);
+    out[16..32].copy_from_slice(part_guid);
+    out[32..40].copy_from_slice(&first_lba.to_le_bytes());
+    out[40..48].copy_from_slice(&last_lba.to_le_bytes());
+    // attributes = 0
+    // Partition name: UTF-16LE, 72 bytes (36 code units).
+    for (i, unit) in name.encode_utf16().take(36).enumerate() {
+        let off = 56 + i * 2;
+        out[off..off + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+}
+
+/// Build a 512-byte sector containing a GPT header with a correct header CRC.
+#[allow(clippy::too_many_arguments)]
+fn build_gpt_header(
+    current_lba: u64,
+    backup_lba: u64,
+    first_usable_lba: u64,
+    last_usable_lba: u64,
+    disk_guid: &[u8; 16],
+    entries_lba: u64,
+    entries_crc: u32,
+) -> [u8; 512] {
+    let mut h = [0u8; 512];
+    h[0..8].copy_from_slice(b"EFI PART");
+    h[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes()); // revision 1.0
+    h[12..16].copy_from_slice(&92u32.to_le_bytes()); // header size
+                                                     // header CRC (16..20) left zero for now
+    h[24..32].copy_from_slice(&current_lba.to_le_bytes());
+    h[32..40].copy_from_slice(&backup_lba.to_le_bytes());
+    h[40..48].copy_from_slice(&first_usable_lba.to_le_bytes());
+    h[48..56].copy_from_slice(&last_usable_lba.to_le_bytes());
+    h[56..72].copy_from_slice(disk_guid);
+    h[72..80].copy_from_slice(&entries_lba.to_le_bytes());
+    h[80..84].copy_from_slice(&128u32.to_le_bytes()); // number of entries
+    h[84..88].copy_from_slice(&128u32.to_le_bytes()); // size of an entry
+    h[88..92].copy_from_slice(&entries_crc.to_le_bytes());
+    let header_crc = crc32_ieee(&h[0..92]);
+    h[16..20].copy_from_slice(&header_crc.to_le_bytes());
+    h
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1405,6 +1706,333 @@ async fn multiboot_prepare_task(
     let _ = tx.send(AppEvent::Toast(toast));
 }
 
+/// Default EFI System Partition size for the dual-partition layout: 128 MiB,
+/// comfortably large enough for a FAT32 filesystem and the bootloader.
+const DUAL_ESP_SIZE: u64 = 128 * 1024 * 1024;
+
+/// Write a GPT dual-partition table to a whole disk, elevating privileges via
+/// `sudo chmod` when the process lacks direct write access to the raw device
+/// (mirrors [`format_fat32_elevated`]).
+async fn create_gpt_dual_elevated(
+    dev_node: &str,
+    disk_size: u64,
+    esp_size: u64,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<DualPartitionLayout, String> {
+    // Fast path: we already have write access (e.g. running as root or the
+    // device is group-writable).
+    {
+        let dev = dev_node.to_string();
+        if let Ok(Ok(layout)) =
+            tokio::task::spawn_blocking(move || create_gpt_dual(&dev, disk_size, esp_size)).await
+        {
+            return Ok(layout);
+        }
+    }
+
+    let original_mode = std::fs::metadata(dev_node)
+        .map(|m| m.permissions().mode() & 0o777)
+        .map_err(|e| e.to_string())?;
+    let m = lang.messages();
+    let sudo_label = format!("{} {dev_node} (GPT)", m.storage_sudo_label_format);
+    run_sudo_command(
+        &sudo_label,
+        "chmod",
+        &["666".to_string(), dev_node.to_string()],
+        lang,
+        sudo_tx,
+        tx,
+    )
+    .await?;
+
+    let dev = dev_node.to_string();
+    let result = tokio::task::spawn_blocking(move || create_gpt_dual(&dev, disk_size, esp_size))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
+
+    let restore_args = vec![format!("{original_mode:o}"), dev_node.to_string()];
+    let _ = run_sudo_command(&sudo_label, "chmod", &restore_args, lang, sudo_tx, tx).await;
+
+    result
+}
+
+/// Write an MBR partition table and format its single FAT32 partition on a
+/// whole disk, elevating via `sudo chmod` when the process lacks direct write
+/// access to the raw device. Returns the FAT32 data offset.
+async fn create_mbr_and_format_fat32_elevated(
+    dev_node: &str,
+    disk_size: u64,
+    label: &str,
+    lang: crate::i18n::Language,
+    sudo_tx: &SudoPasswordTx,
+    tx: &EventTx,
+) -> Result<u64, String> {
+    fn mbr_and_format(dev: &str, disk_size: u64, label: &str) -> Result<u64, String> {
+        let offset = create_mbr_fat32(dev, disk_size).map_err(|e| e.to_string())?;
+        format_fat32_partition(dev, label, offset).map_err(|e| e.to_string())?;
+        Ok(offset)
+    }
+
+    // Fast path: already writable.
+    {
+        let dev = dev_node.to_string();
+        let label = label.to_string();
+        if let Ok(Ok(offset)) =
+            tokio::task::spawn_blocking(move || mbr_and_format(&dev, disk_size, &label)).await
+        {
+            return Ok(offset);
+        }
+    }
+
+    let original_mode = std::fs::metadata(dev_node)
+        .map(|m| m.permissions().mode() & 0o777)
+        .map_err(|e| e.to_string())?;
+    let m = lang.messages();
+    let sudo_label = format!(
+        "{} {dev_node} {}",
+        m.storage_sudo_label_format, m.storage_sudo_label_fat32_suffix
+    );
+    run_sudo_command(
+        &sudo_label,
+        "chmod",
+        &["666".to_string(), dev_node.to_string()],
+        lang,
+        sudo_tx,
+        tx,
+    )
+    .await?;
+
+    let dev = dev_node.to_string();
+    let label_owned = label.to_string();
+    let result = tokio::task::spawn_blocking(move || mbr_and_format(&dev, disk_size, &label_owned))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+
+    let restore_args = vec![format!("{original_mode:o}"), dev_node.to_string()];
+    let _ = run_sudo_command(&sudo_label, "chmod", &restore_args, lang, sudo_tx, tx).await;
+
+    result
+}
+
+/// Whole-disk Ventoy-style multi-boot setup: repartition the drive with a GPT
+/// table (exFAT data partition + FAT32 ESP), format both, mount both, and lay
+/// down the boot files. Destructive — the caller must have confirmed and
+/// verified the target is not a system disk.
+#[allow(clippy::too_many_arguments)]
+async fn multiboot_prepare_dual_task(
+    conn: Connection,
+    device_id: String,
+    dev_node: String,
+    block_path: String,
+    disk_size: u64,
+    lang: crate::i18n::Language,
+    sudo_tx: SudoPasswordTx,
+    tx: EventTx,
+) {
+    let m = lang.messages();
+    let fail = |msg: String| {
+        let _ = tx.send(AppEvent::Toast(Toast::error(msg)));
+    };
+
+    tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "preparação de multi-boot dual (exFAT + ESP) solicitada");
+
+    // 1. Write the GPT partition table.
+    let layout =
+        match create_gpt_dual_elevated(&dev_node, disk_size, DUAL_ESP_SIZE, lang, &sudo_tx, &tx)
+            .await
+        {
+            Ok(l) => l,
+            Err(e) => {
+                fail(format!("{}: {e}", m.storage_err_gpt_failed));
+                return;
+            }
+        };
+    tracing::warn!(target: "hal9001::storage", device = %device_id, data_off = layout.data_offset, esp_off = layout.esp_offset, "tabela GPT dual escrita");
+
+    // 2. Ask the kernel to re-read the partition table so the partition nodes
+    //    appear, then give udev/udisks a moment to settle.
+    let _ = udisks_call(
+        &conn,
+        &block_path,
+        "org.freedesktop.UDisks2.Block",
+        "Rescan",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let data_node = partition_node(&dev_node, 1);
+    let esp_node = partition_node(&dev_node, 2);
+
+    // 3. Format the data partition as exFAT (needs mkfs.exfat) and the ESP as
+    //    FAT32.
+    let _ = tx.send(AppEvent::Toast(Toast::info(
+        m.storage_toast_multiboot_formatting,
+    )));
+    if let Err(e) = run_sudo_command(
+        &format!("mkfs.exfat {data_node}"),
+        "mkfs.exfat",
+        &["-n".to_string(), "HAL9001".to_string(), data_node.clone()],
+        lang,
+        &sudo_tx,
+        &tx,
+    )
+    .await
+    {
+        fail(format!(
+            "{} mkfs.exfat: {e}",
+            m.storage_err_format_via_failed
+        ));
+        return;
+    }
+
+    let esp_result = if mkfs_vfat_available() {
+        run_sudo_command(
+            &format!("mkfs.vfat {esp_node}"),
+            "mkfs.vfat",
+            &[
+                "-F".to_string(),
+                "32".to_string(),
+                "-n".to_string(),
+                "HAL9001ESP".to_string(),
+                esp_node.clone(),
+            ],
+            lang,
+            &sudo_tx,
+            &tx,
+        )
+        .await
+    } else {
+        format_fat32_elevated(&esp_node, "HAL9001ESP", lang, &sudo_tx, &tx).await
+    };
+    if let Err(e) = esp_result {
+        fail(format!("{}: {e}", m.storage_err_format_fat32_failed));
+        return;
+    }
+
+    // 4. Rescan and mount both partitions via udisks.
+    let _ = udisks_call(
+        &conn,
+        &block_path,
+        "org.freedesktop.UDisks2.Block",
+        "Rescan",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let data_block = format!("{BLOCK_DEVICE_PREFIX}{}", node_basename(&data_node));
+    let esp_block = format!("{BLOCK_DEVICE_PREFIX}{}", node_basename(&esp_node));
+    let data_mount = match mount_and_get_path(&conn, &data_block).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            fail(format!("{}: {e}", m.storage_err_mount_data_partition));
+            return;
+        }
+    };
+    let esp_mount = match mount_and_get_path(&conn, &esp_block).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            fail(format!("{}: {e}", m.storage_err_mount_esp_partition));
+            return;
+        }
+    };
+
+    // 5. Lay down the boot files: BOOTX64.EFI on the ESP, ISOs/theme/grub.cfg
+    //    on the data partition.
+    let esp_mp = std::path::PathBuf::from(&esp_mount);
+    let data_mp = std::path::PathBuf::from(&data_mount);
+    let data_mount_for_count = data_mount.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::backend::multiboot::prepare_multiboot_dual(&esp_mp, &data_mp)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
+
+    let toast = match &result {
+        Ok(()) => {
+            let n = crate::backend::multiboot::count_isos(&data_mount_for_count);
+            Toast::info(
+                m.storage_toast_multiboot_prepared
+                    .replace("{n}", &n.to_string()),
+            )
+        }
+        Err(e) => Toast::error(format!("{}: {e}", m.storage_err_multiboot_prepare_failed)),
+    };
+    tracing::warn!(target: "hal9001::storage", device = %device_id, ok = result.is_ok(), "preparação de multi-boot dual concluída");
+    let _ = tx.send(AppEvent::Toast(toast));
+}
+
+/// Prepare a Ventoy-style multi-boot across two *already-formatted* partitions:
+/// boot files onto the FAT ESP, ISOs/theme onto the data partition. Used when
+/// the user runs "prepare multi-boot" on an existing exFAT/NTFS data partition
+/// that already has a sibling FAT ESP on the same drive.
+#[allow(clippy::too_many_arguments)]
+async fn multiboot_prepare_dual_parts_task(
+    conn: Connection,
+    device_id: String,
+    esp_part_path: String,
+    esp_existing_mount: Option<String>,
+    data_part_path: String,
+    data_existing_mount: Option<String>,
+    lang: crate::i18n::Language,
+    tx: EventTx,
+) {
+    let m = lang.messages();
+    let esp_mount = match ensure_mounted(&conn, &esp_part_path, esp_existing_mount).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                "{}: {e}",
+                m.storage_err_mount_esp_partition
+            ))));
+            return;
+        }
+    };
+    let data_mount = match ensure_mounted(&conn, &data_part_path, data_existing_mount).await {
+        Ok(mp) => mp,
+        Err(e) => {
+            let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                "{}: {e}",
+                m.storage_err_mount_data_partition
+            ))));
+            return;
+        }
+    };
+
+    let esp_mp = std::path::PathBuf::from(&esp_mount);
+    let data_mp = std::path::PathBuf::from(&data_mount);
+    let data_mount_for_count = data_mount.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::backend::multiboot::prepare_multiboot_dual(&esp_mp, &data_mp)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
+
+    let toast = match &result {
+        Ok(()) => {
+            let n = crate::backend::multiboot::count_isos(&data_mount_for_count);
+            Toast::info(
+                m.storage_toast_multiboot_prepared
+                    .replace("{n}", &n.to_string()),
+            )
+        }
+        Err(e) => Toast::error(format!("{}: {e}", m.storage_err_multiboot_prepare_failed)),
+    };
+    tracing::warn!(target: "hal9001::storage", device = %device_id, ok = result.is_ok(), "preparação de multi-boot dual (partições existentes) concluída");
+    let _ = tx.send(AppEvent::Toast(toast));
+}
+
+/// Strip the `/dev/` prefix from a device node to get the udisks block object
+/// basename (e.g. `/dev/sda1` → `sda1`).
+fn node_basename(dev_node: &str) -> &str {
+    dev_node.rsplit('/').next().unwrap_or(dev_node)
+}
+
 async fn format_via_sudo(
     dev_node: &str,
     bin: &str,
@@ -1538,36 +2166,29 @@ async fn format_with_sudo_fallback(
     if is_fat_fs_type(fs_type) {
         if let Some(drv) = snap.drives.iter().find(|d| d.dev_node == dev_node) {
             if is_whole_disk(&drv.dev_node) {
-                match create_mbr_fat32(&drv.dev_node, drv.size) {
+                match create_mbr_and_format_fat32_elevated(
+                    &drv.dev_node,
+                    drv.size,
+                    label,
+                    lang,
+                    sudo_tx,
+                    tx,
+                )
+                .await
+                {
                     Ok(fat32_offset) => {
-                        tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, offset = fat32_offset, "MBR criado no fallback — formatando partição FAT32");
-                        let label_c = label.to_string();
-                        let dev_c = drv.dev_node.clone();
-                        let format_result = tokio::task::spawn_blocking(move || {
-                            format_fat32_partition(&dev_c, &label_c, fat32_offset)
-                        })
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r.map_err(|e| e.to_string()));
-                        return match format_result {
-                            Ok(()) => {
-                                let _ = udisks_call(
-                                    conn,
-                                    block_path,
-                                    "org.freedesktop.UDisks2.Block",
-                                    "Rescan",
-                                )
-                                .await;
-                                Toast::info(format!(
-                                    "{} (MBR + FAT32, sudo)",
-                                    m.storage_toast_format_done
-                                ))
-                            }
-                            Err(msg) => Toast::error(format!(
-                                "{}: {msg}",
-                                m.storage_err_format_fat32_failed
-                            )),
-                        };
+                        tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, offset = fat32_offset, "MBR criado no fallback (elevado) — partição FAT32 formatada");
+                        let _ = udisks_call(
+                            conn,
+                            block_path,
+                            "org.freedesktop.UDisks2.Block",
+                            "Rescan",
+                        )
+                        .await;
+                        return Toast::info(format!(
+                            "{} (MBR + FAT32, sudo)",
+                            m.storage_toast_format_done
+                        ));
                     }
                     Err(e) => {
                         tracing::warn!(target: "hal9001::storage", device = %drv.dev_node, error = %e, "falha ao criar MBR no fallback — continuando com formatação sem particionamento");
@@ -2314,6 +2935,38 @@ async fn handle_action(
             }
             tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
 
+            // "multiboot-dual" is not a real filesystem: it repartitions the
+            // whole drive Ventoy-style (exFAT data partition + FAT32 ESP) and
+            // installs the boot files in one shot.
+            if fs_type == "multiboot-dual" {
+                let Some(drv) = snap
+                    .dev_node_for_block_path(&block_path)
+                    .and_then(|dn| snap.drives.iter().find(|d| d.dev_node == dn))
+                else {
+                    let _ = tx.send(AppEvent::Toast(Toast::error(
+                        m.storage_err_multiboot_dual_needs_disk,
+                    )));
+                    return;
+                };
+                if !is_whole_disk(&drv.dev_node) {
+                    let _ = tx.send(AppEvent::Toast(Toast::error(
+                        m.storage_err_multiboot_dual_needs_disk,
+                    )));
+                    return;
+                }
+                tokio::spawn(multiboot_prepare_dual_task(
+                    conn.clone(),
+                    device_id.clone(),
+                    drv.dev_node.clone(),
+                    block_path.clone(),
+                    drv.size,
+                    lang,
+                    sudo_tx.clone(),
+                    tx.clone(),
+                ));
+                return;
+            }
+
             // When formatting a whole disk as FAT32, first create an MBR
             // partition table so the device is recognized as bootable by
             // BIOS/UEFI firmware (avoids the "superfloppy" problem).
@@ -2476,27 +3129,65 @@ async fn handle_action(
                 )));
                 return;
             };
-            if !matches!(part.fs, FsKind::Vfat) {
-                let _ = tx.send(AppEvent::Toast(Toast::error(
-                    m.storage_err_needs_fat32.replace("{fs}", part.fs.label()),
-                )));
-                return;
-            }
-            let part_path = part.id.0.clone();
-            let existing_mount = part.mount_points.first().cloned();
-            let mount_point = match ensure_mounted(conn, &part_path, existing_mount).await {
-                Ok(mp) => mp,
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Toast(Toast::error(format!(
-                        "{}: {e}",
-                        m.storage_err_mount_data_partition
-                    ))));
-                    return;
+            match part.fs {
+                // Single-partition layout: bootloader, theme and ISOs all live
+                // on one FAT32 partition (which is both the ESP and mb_root).
+                FsKind::Vfat => {
+                    let part_path = part.id.0.clone();
+                    let existing_mount = part.mount_points.first().cloned();
+                    let mount_point = match ensure_mounted(conn, &part_path, existing_mount).await {
+                        Ok(mp) => mp,
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::Toast(Toast::error(format!(
+                                "{}: {e}",
+                                m.storage_err_mount_data_partition
+                            ))));
+                            return;
+                        }
+                    };
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, "preparação de multi-boot (partição única) solicitada");
+                    let txc = tx.clone();
+                    tokio::spawn(multiboot_prepare_task(device_id, mount_point, lang, txc));
                 }
-            };
-            tracing::warn!(target: "hal9001::storage", device = %device_id, mount = %mount_point, "preparação de multi-boot solicitada");
-            let txc = tx.clone();
-            tokio::spawn(multiboot_prepare_task(device_id, mount_point, lang, txc));
+                // Data partition (exFAT/NTFS/ext) of a Ventoy-style dual layout.
+                // It can hold ISOs > 4 GiB, but the firmware still needs a FAT
+                // ESP for the bootloader, so require a FAT sibling on the same
+                // drive. If there is none, the user should reformat the whole
+                // drive with the "Multi-Boot (exFAT + ESP)" option.
+                FsKind::Exfat | FsKind::Ntfs | FsKind::Ext4 => {
+                    let esp = snap
+                        .drives
+                        .iter()
+                        .find(|d| d.partitions.iter().any(|p| p.id == part.id))
+                        .and_then(|d| d.partitions.iter().find(|p| matches!(p.fs, FsKind::Vfat)));
+                    let Some(esp) = esp else {
+                        let _ = tx.send(AppEvent::Toast(Toast::error(
+                            m.storage_err_multiboot_no_esp,
+                        )));
+                        return;
+                    };
+                    let data_part_path = part.id.0.clone();
+                    let data_existing_mount = part.mount_points.first().cloned();
+                    let esp_part_path = esp.id.0.clone();
+                    let esp_existing_mount = esp.mount_points.first().cloned();
+                    tracing::warn!(target: "hal9001::storage", device = %device_id, esp = %esp_part_path, data = %data_part_path, "preparação de multi-boot (dual, partições existentes) solicitada");
+                    tokio::spawn(multiboot_prepare_dual_parts_task(
+                        conn.clone(),
+                        device_id,
+                        esp_part_path,
+                        esp_existing_mount,
+                        data_part_path,
+                        data_existing_mount,
+                        lang,
+                        tx.clone(),
+                    ));
+                }
+                _ => {
+                    let _ = tx.send(AppEvent::Toast(Toast::error(
+                        m.storage_err_needs_fat32.replace("{fs}", part.fs.label()),
+                    )));
+                }
+            }
         }
         Action::StorageMultibootListIsos { device_id } => {
             let id = DeviceId(device_id.clone());
