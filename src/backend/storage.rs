@@ -1855,15 +1855,7 @@ async fn multiboot_prepare_dual_task(
 
     // 2. Ask the kernel to re-read the partition table so the partition nodes
     //    appear, then give udev/udisks a moment to settle.
-    let _ = run_sudo_command(
-        &format!("{} {dev_node}", m.storage_sudo_label_partprobe),
-        "partprobe",
-        std::slice::from_ref(&dev_node),
-        lang,
-        &sudo_tx,
-        &tx,
-    )
-    .await;
+    let _ = udisks_call(&conn, &block_path, "org.freedesktop.UDisks2.Block", "Rescan").await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     let data_node = partition_node(&dev_node, 1);
@@ -1928,7 +1920,7 @@ async fn multiboot_prepare_dual_task(
     let esp_mount = match mount_and_get_path(&conn, &esp_block).await {
         Ok(mp) => mp,
         Err(e) => {
-            fail(format!("{}: {e}", m.storage_err_mount_data_partition));
+            fail(format!("{}: {e}", m.storage_err_mount_esp_partition));
             return;
         }
     };
@@ -1980,7 +1972,7 @@ async fn multiboot_prepare_dual_parts_task(
         Err(e) => {
             let _ = tx.send(AppEvent::Toast(Toast::error(format!(
                 "{}: {e}",
-                m.storage_err_mount_data_partition
+                m.storage_err_mount_esp_partition
             ))));
             return;
         }

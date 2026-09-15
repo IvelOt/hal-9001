@@ -156,8 +156,8 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_err_multiboot_no_esp", |m| {
             m.storage_err_multiboot_no_esp
         }),
-        ("storage_sudo_label_partprobe", |m| {
-            m.storage_sudo_label_partprobe
+        ("storage_err_mount_esp_partition", |m| {
+            m.storage_err_mount_esp_partition
         }),
         ("storage_err_cancelled_by_user", |m| {
             m.storage_err_cancelled_by_user

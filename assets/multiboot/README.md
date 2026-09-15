@@ -79,7 +79,7 @@ Partition 2  FAT32   HAL9001-ESP    128 MiB at the end <- EFI System Partition (
 that can actually serve it:
 
 - **ESP (FAT32)** — `EFI/BOOT/BOOTX64.EFI` (the only file UEFI firmware reads,
-  which is why it must be FAT), plus a copy of `boot/grub/grub.cfg`.
+  which is why it must be FAT).
 - **Data (exFAT = `mb_root`)** — `ISOs/` + `.hal9001-multiboot` marker, the
   theme under `boot/grub/themes/hal9001/`, and `boot/grub/grub.cfg`. The bundled
   `grub.cfg` `search`es for the marker to set `$mb_root`, then loads the theme

@@ -101,14 +101,12 @@ pub fn prepare_multiboot(mount_point: &Path) -> anyhow::Result<()> {
 }
 
 /// Dual-partition (Ventoy-style) layout:
-/// - `esp_mount` (FAT32 ESP): the `BOOTX64.EFI` bootloader the firmware loads,
-///   plus a copy of `grub.cfg` so the ESP is self-describing.
+/// - `esp_mount` (FAT32 ESP): the `BOOTX64.EFI` bootloader the firmware loads.
 /// - `data_mount` (exFAT/NTFS/ext data partition = `mb_root`): the `ISOs/`
 ///   directory + marker, the theme, and `grub.cfg` — everything the bundled
 ///   config resolves relative to `($mb_root)`.
 pub fn prepare_multiboot_dual(esp_mount: &Path, data_mount: &Path) -> anyhow::Result<()> {
     write_efi_binary(esp_mount)?;
-    write_grub_cfg(esp_mount)?;
 
     write_isos_marker(data_mount)?;
     write_grub_cfg(data_mount)?;
@@ -240,10 +238,10 @@ mod tests {
         let data = temp_mount();
         prepare_multiboot_dual(esp.path(), data.path()).expect("prepare dual");
 
-        // ESP holds the firmware-loaded bootloader (must be on FAT) + grub.cfg.
+        // ESP holds the firmware-loaded bootloader (must be on FAT).
         assert!(esp.path().join("EFI/BOOT/BOOTX64.EFI").is_file());
-        assert!(esp.path().join("boot/grub/grub.cfg").is_file());
-        // The ESP must NOT carry the ISOs/marker — those live on the data part.
+        // The ESP must NOT carry grub.cfg or the ISOs/marker.
+        assert!(!esp.path().join("boot/grub/grub.cfg").exists());
         assert!(!esp.path().join("ISOs/.hal9001-multiboot").exists());
 
         // Data partition (mb_root) holds the marker, theme and grub.cfg, since
