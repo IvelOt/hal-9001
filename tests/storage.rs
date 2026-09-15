@@ -5,9 +5,8 @@ use hal9001::backend::storage::{
     is_iso_or_img, is_missing_udisks_filesystem_error, is_no_usb_device_error,
     is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
     is_whole_disk, mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps,
-    partition_node, primary_partition, resolve_block_object_path, skips_power_off,
-    sudo_invocation, ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo,
-    StorageSnapshot,
+    partition_node, primary_partition, resolve_block_object_path, skips_power_off, sudo_invocation,
+    ventoy_data_partition, BusType, DriveInfo, FsKind, PartitionInfo, StorageSnapshot,
 };
 use hal9001::config::Config;
 use hal9001::events::{Action, AppEvent, DeviceId, SudoPasswordRequest};

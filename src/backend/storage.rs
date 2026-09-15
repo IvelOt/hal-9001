@@ -2075,15 +2075,14 @@ async fn multiboot_prepare_dual_task(
             return;
         }
     };
-    let esp_mount = match mount_esp_partition(&conn, &esp_block, &esp_node, None, lang, &sudo_tx, &tx)
-        .await
-    {
-        Ok(mount) => mount,
-        Err(e) => {
-            fail(format!("{}: {e}", m.storage_err_mount_esp_partition));
-            return;
-        }
-    };
+    let esp_mount =
+        match mount_esp_partition(&conn, &esp_block, &esp_node, None, lang, &sudo_tx, &tx).await {
+            Ok(mount) => mount,
+            Err(e) => {
+                fail(format!("{}: {e}", m.storage_err_mount_esp_partition));
+                return;
+            }
+        };
 
     // 5. Lay down the boot files: BOOTX64.EFI on the ESP, ISOs/theme/grub.cfg
     //    on the data partition.
@@ -3503,7 +3502,10 @@ mod tests {
             "org.freedesktop.UDisks2.Error.AlreadyMounted: Device is already mounted",
         ] {
             let err = anyhow::anyhow!(msg.to_string());
-            assert!(!is_missing_udisks_filesystem_error(&err), "false match: {msg}");
+            assert!(
+                !is_missing_udisks_filesystem_error(&err),
+                "false match: {msg}"
+            );
         }
     }
 }
