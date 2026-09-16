@@ -244,6 +244,18 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_sudo_label_unmount_esp", |m| {
             m.storage_sudo_label_unmount_esp
         }),
+        ("storage_detect_windows_pe", |m| m.storage_detect_windows_pe),
+        ("storage_detect_windows_installer", |m| {
+            m.storage_detect_windows_installer
+        }),
+        ("storage_detect_linux", |m| m.storage_detect_linux),
+        ("storage_detect_partitioned_img", |m| {
+            m.storage_detect_partitioned_img
+        }),
+        ("storage_detect_unknown", |m| m.storage_detect_unknown),
+        ("storage_err_write_image_cfg", |m| {
+            m.storage_err_write_image_cfg
+        }),
     ]
 }
 

@@ -2,12 +2,16 @@ pub mod audio;
 pub mod bluetooth;
 pub mod disk_analyzer;
 pub mod display;
+pub mod grub_gen;
+pub mod image_probe;
+pub mod iso_reader;
 pub mod multiboot;
 pub mod network;
 pub mod power;
 pub mod storage;
 pub mod system;
 pub mod updates;
+pub mod windows_provision;
 
 use tokio::sync::broadcast;
 

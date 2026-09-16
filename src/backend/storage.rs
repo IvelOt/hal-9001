@@ -2851,11 +2851,93 @@ async fn multiboot_add_iso_task(
         .await
         .map(|()| file_name.clone())
         .map_err(|e| e.to_string());
+
+    // Provisioning intelligence: inspect the copied image, classify it and
+    // write a per-image GRUB `.cfg` fragment (plus native Windows extraction).
+    if result.is_ok() {
+        let mount_point_c = mount_point.clone();
+        let file_name_c = file_name.clone();
+        let dst_path_c = dst_path.clone();
+        let toast = tokio::task::spawn_blocking(move || {
+            provision_multiboot_image(&mount_point_c, &file_name_c, &dst_path_c, lang)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+
+        match toast {
+            Ok(Some(text)) => {
+                let _ = tx.send(AppEvent::Toast(Toast::info(text)));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(target: "hal9001::storage", error = %e, "provisionamento da imagem adicionada falhou");
+            }
+        }
+    }
+
     let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
         device_id: device_id.clone(),
         result,
     });
     list_and_emit(&mount_point, device_id, &tx).await;
+}
+
+/// Inspect a freshly-added multiboot image, write its GRUB `.cfg` fragment and
+/// (for Windows) extract boot files into the mounted partition. Returns an
+/// optional toast message summarizing the detected type.
+fn provision_multiboot_image(
+    mount_point: &str,
+    file_name: &str,
+    dst_path: &str,
+    lang: crate::i18n::Language,
+) -> Result<Option<String>, String> {
+    use crate::backend::image_probe::{self, OsClass};
+    use crate::backend::{grub_gen, windows_provision};
+
+    let m = lang.messages();
+    let inspected = image_probe::inspect(
+        std::path::Path::new(dst_path),
+        &image_probe::ProbeOpts::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let plan = grub_gen::plan_for(&inspected);
+    let stanza = grub_gen::stanza_for(&plan);
+
+    let stem = std::path::Path::new(file_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_name.to_string());
+    let cfg_path = format!("{}/ISOs/{stem}.cfg", mount_point.trim_end_matches('/'));
+    std::fs::write(&cfg_path, stanza)
+        .map_err(|e| format!("{}: {e}", m.storage_err_write_image_cfg))?;
+
+    let toast = match &inspected.os {
+        OsClass::Windows { is_installer, .. } => {
+            let plan = image_probe::windows_provision_plan(&inspected.os);
+            let mut reader =
+                crate::backend::iso_reader::IsoReader::open(std::path::Path::new(dst_path))
+                    .map_err(|e| e.to_string())?;
+            if let Err(e) = windows_provision::extract_windows_to_mount(
+                &mut reader,
+                std::path::Path::new(mount_point),
+                plan,
+                |_, _| {},
+            ) {
+                tracing::warn!(target: "hal9001::storage", error = %e, "extração nativa de arquivos Windows falhou");
+            }
+            if *is_installer {
+                Some(m.storage_detect_windows_installer.to_string())
+            } else {
+                Some(m.storage_detect_windows_pe.to_string())
+            }
+        }
+        OsClass::Linux(flavor) => Some(m.storage_detect_linux.replace("{flavor}", flavor.label())),
+        OsClass::PartitionedImage { .. } => Some(m.storage_detect_partitioned_img.to_string()),
+        OsClass::Unknown => Some(m.storage_detect_unknown.to_string()),
+    };
+
+    Ok(toast)
 }
 
 async fn multiboot_remove_iso_task(

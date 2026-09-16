@@ -12,6 +12,16 @@ All user-facing text lives in `src/i18n.rs` (`Messages` struct + `MESSAGES_PT_BR
 - Dynamic messages with a placeholder (e.g. counts) are stored as literal `{n}`/`{name}` tokens in the message string and filled with `.replace("{n}", &n.to_string())` rather than `format!` on a runtime string.
 - `tests/i18n.rs` asserts new fields are non-empty and meaningfully different across languages (guards against a language silently falling back to pt-BR) — add new keys there when extending coverage.
 
+## Multi-boot image intelligence (pure Rust)
+
+Provisioning smarts live at *add time*, not boot time: `multiboot_add_iso_task` (`storage.rs`) runs `image_probe::inspect`, classifies the image, and writes a per-image `ISOs/<stem>.cfg` GRUB fragment next to the ISO.
+- `image_probe.rs` — magic-byte format detection (`probe_format`) + OS classification (`inspect`). ISO9660/UDF signature is read at byte offset `32768` (2048-byte logical sector 16), *not* `512*16`.
+- `iso_reader.rs` — pure ISO9660/Joliet reader (`open`/`list_paths`/`find`/`extract`); multi-extent files are merged by consecutive directory records.
+- `grub_gen.rs` — deterministic stanzas (`grub_for_linux`/`grub_for_partitioned`/`grub_for_windows`/`generic_fallback`).
+- `windows_provision.rs` — native Windows boot-file extraction into a FAT32 mount (UEFI `chainloader` needs a real device handle, never a `(loop)`).
+- `assets/multiboot/grub.cfg` is an orchestrator: `ISOs/*.cfg` fragments take precedence; the legacy cascade only runs for images without a generated `.cfg`.
+- Synthetic ISO9660 fixtures for tests live in `tests/common/mod.rs` (`build_iso`), plus `build_gpt_fat_disk` for partitioned-image tests.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
