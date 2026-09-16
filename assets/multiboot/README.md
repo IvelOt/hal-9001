@@ -71,8 +71,8 @@ Formatting an entire disk with the **Multi-Boot (exFAT + ESP)** option
 `src/backend/storage.rs`) with two partitions:
 
 ```
-Partition 1  exFAT   HAL9001-DATA   bulk of the disk   <- ISOs (any size) + user files
-Partition 2  FAT32   HAL9001-ESP    128 MiB at the end <- EFI System Partition (ESP)
+Partition 1  FAT32   HAL9001-ESP    128 MiB at the start <- EFI System Partition (ESP)
+Partition 2  exFAT   HAL9001-DATA   bulk of the disk     <- ISOs (any size) + user files
 ```
 
 `prepare_multiboot_dual` then lays the files out so each is on the partition

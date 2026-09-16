@@ -106,6 +106,9 @@ pub fn prepare_multiboot(mount_point: &Path) -> anyhow::Result<()> {
 ///   directory + marker, the theme, and `grub.cfg` — everything the bundled
 ///   config resolves relative to `($mb_root)`.
 pub fn prepare_multiboot_dual(esp_mount: &Path, data_mount: &Path) -> anyhow::Result<()> {
+    let _ = std::fs::remove_dir_all(esp_mount.join("ISOs"));
+    let _ = std::fs::remove_dir_all(esp_mount.join("boot"));
+
     write_efi_binary(esp_mount)?;
 
     write_isos_marker(data_mount)?;
@@ -275,12 +278,29 @@ mod tests {
     }
 
     #[test]
+    fn prepare_dual_cleans_stale_dirs_from_esp() {
+        let esp = temp_mount();
+        let data = temp_mount();
+        std::fs::create_dir_all(esp.path().join("ISOs")).unwrap();
+        std::fs::create_dir_all(esp.path().join("boot")).unwrap();
+        std::fs::write(esp.path().join("ISOs/stale.iso"), b"bad").unwrap();
+        std::fs::write(esp.path().join("boot/stale.txt"), b"bad").unwrap();
+
+        prepare_multiboot_dual(esp.path(), data.path()).expect("prepare dual");
+
+        assert!(!esp.path().join("ISOs").exists());
+        assert!(!esp.path().join("boot").exists());
+        assert!(esp.path().join("EFI/BOOT/BOOTX64.EFI").is_file());
+    }
+
+    #[test]
     fn grub_cfg_loads_data_partition_filesystem_modules() {
         // The bundled config must be able to read exFAT/NTFS/ext data
         // partitions, not just FAT, so ISOs > 4 GiB can live off the ESP.
         assert!(GRUB_CFG.contains("insmod exfat"));
         assert!(GRUB_CFG.contains("insmod ntfs"));
         assert!(GRUB_CFG.contains("insmod ext2"));
+        assert!(GRUB_CFG.contains("insmod udf"));
     }
 
     #[test]
@@ -291,6 +311,7 @@ mod tests {
         assert!(has(b"exfat.mod"), "BOOTX64.EFI missing exfat.mod");
         assert!(has(b"ntfs.mod"), "BOOTX64.EFI missing ntfs.mod");
         assert!(has(b"ext2.mod"), "BOOTX64.EFI missing ext2.mod");
+        assert!(has(b"udf.mod"), "BOOTX64.EFI missing udf.mod");
     }
 
     #[test]

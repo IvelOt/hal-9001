@@ -463,7 +463,7 @@ fn spawn_sudo(
     let handle = tokio::spawn(async move {
         let mut cmd = tokio::process::Command::new("sudo");
         if password.is_some() {
-            cmd.arg("-S").arg("-k").arg("--");
+            cmd.arg("-S").arg("--");
         } else {
             cmd.arg("-n").arg("--");
         }
@@ -503,7 +503,6 @@ pub fn sudo_invocation(cached: bool, program: &str, args: &[String]) -> Vec<Stri
         v.push("-n".to_string());
     } else {
         v.push("-S".to_string());
-        v.push("-k".to_string());
     }
     v.push("--".to_string());
     v.push(program.to_string());
@@ -766,8 +765,8 @@ const GPT_TYPE_EFI_SYSTEM: [u8; 16] = [
 ];
 
 /// Byte layout of a dual-partition GPT drive produced by [`create_gpt_dual`]:
-/// a large data partition (exFAT — ISOs and user files) followed by a small
-/// FAT32 EFI System Partition holding the GRUB boot files.
+/// a small FAT32 EFI System Partition holding the GRUB boot files, followed by
+/// a large data partition (exFAT — ISOs and user files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DualPartitionLayout {
     /// Byte offset where the data (exFAT) partition begins.
@@ -821,10 +820,10 @@ fn gen_guid(state: &mut u64) -> [u8; 16] {
     bytes
 }
 
-/// Write a GPT partition table to `dev_node` describing two partitions: a large
-/// data partition (partition 1, Microsoft Basic Data — meant for exFAT) that
-/// occupies the bulk of the disk, and a small FAT32 EFI System Partition
-/// (partition 2, `esp_size` bytes) at the end of the disk.
+/// Write a GPT partition table to `dev_node` describing two partitions: a small
+/// FAT32 EFI System Partition (partition 1, `esp_size` bytes) at the start of
+/// the disk (1 MiB aligned), and a large data partition (partition 2, Microsoft
+/// Basic Data — meant for exFAT) occupying the remainder of the disk.
 ///
 /// Only the GPT metadata sectors (protective MBR, primary/backup headers and
 /// entry arrays) are written; the partition data regions are left untouched for
@@ -863,15 +862,14 @@ pub fn create_gpt_dual(
     let backup_entries_lba = last_lba - ENTRY_ARRAY_SECTORS; // last_lba - 32
     let last_usable_lba = backup_entries_lba - 1;
 
-    // ESP occupies the tail of the usable area, aligned down.
-    let esp_last_lba = last_usable_lba;
-    let esp_first_lba = ((esp_last_lba + 1 - esp_sectors) / ALIGN) * ALIGN;
-    // Data partition occupies the front, from the first aligned usable LBA up to
-    // just before the ESP.
-    let data_first_lba = first_usable_lba.div_ceil(ALIGN) * ALIGN;
-    let data_last_lba = esp_first_lba - 1;
+    // ESP occupies the front of the usable area (starting at 1 MiB alignment).
+    let esp_first_lba = first_usable_lba.div_ceil(ALIGN) * ALIGN;
+    let esp_last_lba = esp_first_lba + esp_sectors - 1;
+    // Data partition occupies the remainder up to the last usable LBA, aligned to 1 MiB.
+    let data_first_lba = (esp_last_lba + 1).div_ceil(ALIGN) * ALIGN;
+    let data_last_lba = last_usable_lba;
 
-    if data_first_lba >= data_last_lba || esp_first_lba <= data_first_lba {
+    if data_first_lba >= data_last_lba {
         anyhow::bail!("disk too small to lay out both partitions");
     }
 
@@ -884,19 +882,19 @@ pub fn create_gpt_dual(
     let mut entries = vec![0u8; (ENTRY_COUNT * ENTRY_SIZE) as usize];
     write_gpt_entry(
         &mut entries[0..128],
-        &GPT_TYPE_MS_BASIC_DATA,
-        &data_guid,
-        data_first_lba,
-        data_last_lba,
-        "HAL9001-DATA",
-    );
-    write_gpt_entry(
-        &mut entries[128..256],
         &GPT_TYPE_EFI_SYSTEM,
         &esp_guid,
         esp_first_lba,
         esp_last_lba,
         "HAL9001-ESP",
+    );
+    write_gpt_entry(
+        &mut entries[128..256],
+        &GPT_TYPE_MS_BASIC_DATA,
+        &data_guid,
+        data_first_lba,
+        data_last_lba,
+        "HAL9001-DATA",
     );
     let entries_crc = crc32_ieee(&entries);
 
@@ -1056,18 +1054,25 @@ pub fn ventoy_data_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
         .max_by_key(|p| p.size)
 }
 
+pub fn is_esp_partition(p: &PartitionInfo) -> bool {
+    p.label.eq_ignore_ascii_case("HAL9001ESP")
+        || p.label.to_ascii_uppercase().ends_with("ESP")
+        || p.label.eq_ignore_ascii_case("vtoyefi")
+}
+
 pub fn primary_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
     if let Some(p) = drive
         .partitions
         .iter()
-        .find(|p| p.is_mounted() && !p.is_system)
+        .filter(|p| p.is_mounted() && !p.is_system && !is_esp_partition(p))
+        .max_by_key(|p| p.size)
     {
         return Some(p);
     }
     if let Some(p) = drive
         .partitions
         .iter()
-        .filter(|p| !p.is_system)
+        .filter(|p| !p.is_system && !is_esp_partition(p))
         .max_by_key(|p| p.size)
     {
         return Some(p);
@@ -2007,8 +2012,8 @@ async fn multiboot_prepare_dual_task(
     .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    let data_node = partition_node(&dev_node, 1);
-    let esp_node = partition_node(&dev_node, 2);
+    let esp_node = partition_node(&dev_node, 1);
+    let data_node = partition_node(&dev_node, 2);
 
     // 3. Format the data partition as exFAT (needs mkfs.exfat) and the ESP as
     //    FAT32.
@@ -2095,6 +2100,16 @@ async fn multiboot_prepare_dual_task(
     .await
     .map_err(|e| e.to_string())
     .and_then(|r| r.map_err(|e| e.to_string()));
+
+    if result.is_ok() && esp_mount.elevated_temp_dir.is_none() {
+        let _ = udisks_call(
+            &conn,
+            &esp_block,
+            "org.freedesktop.UDisks2.Filesystem",
+            "Unmount",
+        )
+        .await;
+    }
 
     // Always tear down an elevated ESP mount, success or failure, so no orphaned
     // mount point is left under /tmp.
@@ -3099,7 +3114,7 @@ async fn handle_action(
             tracing::warn!(target: "hal9001::storage", device = %device_id, block = %block_path, fs = %fs_type, label = %label, "formatação solicitada");
 
             // "multiboot-dual" is not a real filesystem: it repartitions the
-            // whole drive Ventoy-style (exFAT data partition + FAT32 ESP) and
+            // whole drive Ventoy-style (FAT32 ESP + exFAT data partition) and
             // installs the boot files in one shot.
             if fs_type == "multiboot-dual" {
                 let Some(drv) = snap

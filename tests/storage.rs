@@ -1,8 +1,8 @@
 use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, create_gpt_dual, create_mbr_fat32, detect_ventoy,
-    format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_gzip_file,
-    is_iso_or_img, is_missing_udisks_filesystem_error, is_no_usb_device_error,
+    format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_esp_partition,
+    is_gzip_file, is_iso_or_img, is_missing_udisks_filesystem_error, is_no_usb_device_error,
     is_not_authorized_error, is_permission_denied_error, is_sudo_auth_failure, is_system_disk,
     is_whole_disk, mkfs_command, parse_dd_bytes_copied, parse_proc_mounts, parse_proc_swaps,
     partition_node, primary_partition, resolve_block_object_path, skips_power_off, sudo_invocation,
@@ -505,22 +505,38 @@ fn make_sparse_disk(size: u64) -> (tempfile::NamedTempFile, std::path::PathBuf) 
 }
 
 #[test]
-fn create_gpt_dual_lays_out_data_then_esp_without_overlap() {
+fn create_gpt_dual_lays_out_esp_then_data_without_overlap() {
+    const EFI_SYSTEM_GUID: [u8; 16] = [
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+        0x3B,
+    ];
+    const MS_BASIC_DATA_GUID: [u8; 16] = [
+        0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99,
+        0xC7,
+    ];
+
     let size: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB (sparse)
     let esp_size: u64 = 128 * 1024 * 1024;
     let (_f, path) = make_sparse_disk(size);
 
     let layout = create_gpt_dual(path.to_str().unwrap(), size, esp_size).expect("create_gpt_dual");
 
-    // Data partition comes first and is 1 MiB aligned.
+    // ESP comes first, is 1 MiB aligned, and precedes the data partition.
+    assert_eq!(layout.esp_first_lba % 2048, 0, "esp not 1MiB aligned");
+    assert_eq!(layout.esp_offset, layout.esp_first_lba * 512);
+    assert!(
+        layout.esp_first_lba < layout.data_first_lba,
+        "esp does not precede data"
+    );
+
+    // Data partition comes after ESP without overlap, aligned to 1 MiB.
+    assert!(
+        layout.data_first_lba > layout.esp_last_lba,
+        "data overlaps esp"
+    );
     assert_eq!(layout.data_first_lba % 2048, 0, "data not 1MiB aligned");
     assert_eq!(layout.data_offset, layout.data_first_lba * 512);
-    // ESP sits after the data partition, near the end, and is ~128 MiB.
-    assert!(
-        layout.esp_first_lba > layout.data_last_lba,
-        "esp overlaps data"
-    );
-    assert_eq!(layout.data_last_lba + 1, layout.esp_first_lba);
+
     assert!(
         layout.esp_size >= esp_size,
         "esp too small: {} < {}",
@@ -531,6 +547,20 @@ fn create_gpt_dual_lays_out_data_then_esp_without_overlap() {
     assert!(
         layout.data_size > size / 2,
         "data partition unexpectedly small"
+    );
+
+    // Verify GPT partition entries: Entry 0 is ESP, Entry 1 is Data.
+    let disk = std::fs::read(&path).unwrap();
+    let entries = &disk[2 * 512..2 * 512 + 256];
+    assert_eq!(
+        &entries[0..16],
+        &EFI_SYSTEM_GUID,
+        "entry 0 is not EFI System"
+    );
+    assert_eq!(
+        &entries[128..144],
+        &MS_BASIC_DATA_GUID,
+        "entry 1 is not MS Basic Data"
     );
 }
 
@@ -587,14 +617,14 @@ fn create_gpt_dual_writes_valid_gpt_metadata() {
         "entries CRC invalid"
     );
 
-    // Entry 0 = data (Microsoft Basic Data), entry 1 = ESP (EFI System).
-    assert_eq!(&entries[0..16], &MS_BASIC_DATA_GUID, "data type GUID");
-    assert_eq!(&entries[128..144], &EFI_SYSTEM_GUID, "esp type GUID");
+    // Entry 0 = ESP (EFI System), entry 1 = data (Microsoft Basic Data).
+    assert_eq!(&entries[0..16], &EFI_SYSTEM_GUID, "esp type GUID");
+    assert_eq!(&entries[128..144], &MS_BASIC_DATA_GUID, "data type GUID");
 
-    let data_first = u64::from_le_bytes(entries[32..40].try_into().unwrap());
-    let esp_first = u64::from_le_bytes(entries[160..168].try_into().unwrap());
-    assert_eq!(data_first, layout.data_first_lba);
+    let esp_first = u64::from_le_bytes(entries[32..40].try_into().unwrap());
+    let data_first = u64::from_le_bytes(entries[160..168].try_into().unwrap());
     assert_eq!(esp_first, layout.esp_first_lba);
+    assert_eq!(data_first, layout.data_first_lba);
 
     // Backup GPT header lives in the last sector.
     let last = disk.len() - 512;
@@ -627,9 +657,11 @@ fn sudo_invocation_uses_dash_n_without_dashes_k_or_s_when_cached() {
 }
 
 #[test]
-fn sudo_invocation_uses_dash_s_dash_k_when_password_required() {
+fn sudo_invocation_uses_dash_s_when_password_required() {
     let args = sudo_invocation(false, "dd", &["if=x".to_string(), "of=y".to_string()]);
-    assert_eq!(args, vec!["-S", "-k", "--", "dd", "if=x", "of=y"]);
+    assert_eq!(args, vec!["-S", "--", "dd", "if=x", "of=y"]);
+    assert!(args.contains(&"-S".to_string()));
+    assert!(!args.contains(&"-k".to_string()));
 }
 
 #[test]
@@ -1255,6 +1287,70 @@ fn ventoy_data_partition_falls_back_to_largest_non_efi_when_unlabeled() {
     ];
     let data = ventoy_data_partition(&d).expect("esperava a partição de dados");
     assert_eq!(data.dev_node, "/dev/sdz2");
+}
+
+#[test]
+fn is_esp_partition_identifies_esp_labels_case_insensitively() {
+    let mut p = labeled_partition("HAL9001ESP", "/dev/sdz1", 128 * 1024 * 1024);
+    assert!(is_esp_partition(&p));
+
+    p.label = "hal9001esp".into();
+    assert!(is_esp_partition(&p));
+
+    p.label = "EFI ESP".into();
+    assert!(is_esp_partition(&p));
+
+    p.label = "vtoyefi".into();
+    assert!(is_esp_partition(&p));
+
+    p.label = "VTOYEFI".into();
+    assert!(is_esp_partition(&p));
+
+    p.label = "ESP".into();
+    assert!(is_esp_partition(&p));
+
+    p.label = "HAL9001".into();
+    assert!(!is_esp_partition(&p));
+
+    p.label = "Ventoy".into();
+    assert!(!is_esp_partition(&p));
+
+    p.label = "MYDATA".into();
+    assert!(!is_esp_partition(&p));
+
+    p.label = "".into();
+    assert!(!is_esp_partition(&p));
+}
+
+#[test]
+fn primary_partition_prefers_large_data_partition_over_mounted_esp() {
+    let mut d = drive(true, BusType::Usb);
+    let mut esp = labeled_partition("HAL9001ESP", "/dev/sdb1", 128 * 1024 * 1024);
+    esp.mount_points = vec!["/run/media/user/HAL9001ESP".to_string()];
+
+    let mut data = labeled_partition("HAL9001", "/dev/sdb2", 2 * 1024 * 1024 * 1024 * 1024);
+    data.mount_points = vec!["/run/media/user/HAL9001".to_string()];
+
+    // ESP comes first in the partition list (partition 1) and both are mounted.
+    d.partitions = vec![esp, data];
+
+    let p = primary_partition(&d).expect("esperava a partição primária de dados");
+    assert_eq!(p.label, "HAL9001");
+    assert_eq!(p.dev_node, "/dev/sdb2");
+    assert_eq!(p.size, 2 * 1024 * 1024 * 1024 * 1024);
+}
+
+#[test]
+fn primary_partition_selects_largest_data_partition_when_unmounted() {
+    let mut d = drive(true, BusType::Usb);
+    let esp = labeled_partition("HAL9001ESP", "/dev/sdb1", 128 * 1024 * 1024);
+    let data = labeled_partition("HAL9001", "/dev/sdb2", 2 * 1024 * 1024 * 1024 * 1024);
+
+    d.partitions = vec![esp, data];
+
+    let p = primary_partition(&d).expect("esperava a partição primária de dados");
+    assert_eq!(p.label, "HAL9001");
+    assert_eq!(p.dev_node, "/dev/sdb2");
 }
 
 #[test]
