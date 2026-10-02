@@ -22,6 +22,10 @@ Provisioning smarts live at *add time*, not boot time: `multiboot_add_iso_task` 
 - `assets/multiboot/grub.cfg` is an orchestrator: `ISOs/*.cfg` fragments take precedence; the legacy cascade only runs for images without a generated `.cfg`.
 - Synthetic ISO9660 fixtures for tests live in `tests/common/mod.rs` (`build_iso`), plus `build_gpt_fat_disk` for partitioned-image tests.
 
+## Hardware-conditional controls (probe-then-hide pattern)
+
+For a control that only some hardware supports (e.g. `src/backend/power.rs::BatteryBypass`, a battery-bypass/conservation-mode knob): probe real sysfs paths through a `probe_at(root: &Path)` function parameterized over the root directory (defaults to `/` in the public `probe()`), so `tests/*.rs` can point it at a `tempfile::tempdir()` standing in for `/sys/...` without touching the real system. Probe once in `App::new()` and store `Option<T>`; render the key hint/indicator only when `Some`, and thread an availability `bool` through `InputStream::next` / `map_key` (see `src/events/input.rs`) so the keybinding itself doesn't fire on unsupported hosts. Toggling re-probes fresh (cheap) and does the actual write in `tokio::task::spawn_blocking`, falling back from a direct `std::fs::write` to `pkexec tee` / `sudo tee` on `PermissionDenied`.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

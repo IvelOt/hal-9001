@@ -256,6 +256,15 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_err_write_image_cfg", |m| {
             m.storage_err_write_image_cfg
         }),
+        ("label_battery_bypass", |m| m.label_battery_bypass),
+        ("err_battery_bypass_unavailable", |m| {
+            m.err_battery_bypass_unavailable
+        }),
+        ("toast_battery_bypass_on", |m| m.toast_battery_bypass_on),
+        ("toast_battery_bypass_off", |m| m.toast_battery_bypass_off),
+        ("toast_battery_bypass_error_prefix", |m| {
+            m.toast_battery_bypass_error_prefix
+        }),
     ]
 }
 

@@ -188,6 +188,8 @@ pub enum Action {
 
     CyclePowerProfile,
 
+    ToggleBatteryBypass,
+
     Redraw,
 
     StorageMount(DeviceId),

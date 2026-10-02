@@ -52,6 +52,7 @@ pub async fn run(mut terminal: DefaultTerminal, config: Config) -> Result<()> {
                 app.text_input_active(),
                 app.sudo_prompt_open(),
                 app.storage_analyzer_open(),
+                app.battery_bypass.is_some(),
             ) => {
                 app.dispatch(action, &action_tx);
                 terminal.draw(|f| ui::draw(&app, f))?;

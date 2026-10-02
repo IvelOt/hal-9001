@@ -24,6 +24,7 @@ impl InputStream {
         text_mode: bool,
         sudo_prompt_open: bool,
         storage_analyzer_open: bool,
+        battery_bypass_available: bool,
     ) -> Option<Action> {
         loop {
             match self.inner.next().await {
@@ -35,6 +36,7 @@ impl InputStream {
                         text_mode,
                         sudo_prompt_open,
                         storage_analyzer_open,
+                        battery_bypass_available,
                     ) {
                         return Some(action);
                     }
@@ -54,6 +56,7 @@ impl Default for InputStream {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_key(
     key: KeyEvent,
     active: Tab,
@@ -61,6 +64,7 @@ fn map_key(
     text_mode: bool,
     sudo_prompt_open: bool,
     storage_analyzer_open: bool,
+    battery_bypass_available: bool,
 ) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -142,6 +146,9 @@ fn map_key(
         }
         if key.code == KeyCode::Char('A') {
             return Some(Action::ToggleAirplaneMode);
+        }
+        if battery_bypass_available && key.code == KeyCode::Char('C') {
+            return Some(Action::ToggleBatteryBypass);
         }
     }
 

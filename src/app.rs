@@ -435,6 +435,8 @@ pub struct App {
 
     pub services: std::collections::HashMap<&'static str, ServiceStatus>,
 
+    pub battery_bypass: Option<crate::backend::power::BatteryBypass>,
+
     pub toast: Option<(Toast, Instant)>,
 
     started: Instant,
@@ -482,6 +484,7 @@ impl App {
             display_selected: 0,
             display_res_selected: 0,
             services: std::collections::HashMap::new(),
+            battery_bypass: crate::backend::power::BatteryBypass::probe(),
             toast: None,
             started: Instant::now(),
         }
@@ -2051,7 +2054,8 @@ impl App {
             | Action::KbdBrightnessUp
             | Action::KbdBrightnessDown
             | Action::ToggleAirplaneMode
-            | Action::CyclePowerProfile => {
+            | Action::CyclePowerProfile
+            | Action::ToggleBatteryBypass => {
                 let _ = action_tx.send(action);
             }
             Action::Redraw => {}

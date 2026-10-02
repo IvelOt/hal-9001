@@ -208,6 +208,9 @@ fn draw_footer(app: &App, pal: &Palette, f: &mut Frame, area: Rect) {
         spans.extend(hint("b/B", m.label_brightness));
         spans.extend(hint("v/V", m.label_volume));
         spans.extend(hint("m", m.overview_hint_mute));
+        if app.battery_bypass.is_some() {
+            spans.extend(hint("C", m.label_battery_bypass));
+        }
         spans.extend(hint("c", m.overview_hint_config));
     }
 
@@ -300,7 +303,8 @@ fn build_sections<'a>(app: &App, s: &SystemSnapshot, pal: &Palette, width: u16) 
         section_top_processes(s, pal, cols, &mut out);
     }
     section_platform(s, pal, cols, detailed, m, &mut out);
-    section_power(s, pal, cols, detailed, m, &mut out);
+    let bypass_enabled = app.battery_bypass.as_ref().map(|b| b.is_enabled());
+    section_power(s, pal, cols, detailed, m, &mut out, bypass_enabled);
     out.push(section_title(m.sec_palette, pal));
     out.push(palette_line());
 
@@ -500,6 +504,7 @@ fn section_platform(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn section_power(
     s: &SystemSnapshot,
     pal: &Palette,
@@ -507,6 +512,7 @@ fn section_power(
     detailed: bool,
     m: &'static crate::i18n::Messages,
     out: &mut Vec<Line>,
+    bypass_enabled: Option<bool>,
 ) {
     out.push(section_title(m.sec_peripherals, pal));
 
@@ -550,6 +556,16 @@ fn section_power(
             cols.width,
             pal,
         )),
+    }
+
+    if let Some(enabled) = bypass_enabled {
+        let state = if enabled { "[ON]" } else { "[OFF]" };
+        out.push(kv_line(
+            m.label_battery_bypass,
+            format!("[C] {state}"),
+            cols.width,
+            pal,
+        ));
     }
 
     match s.brightness {

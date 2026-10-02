@@ -1125,6 +1125,11 @@ async fn apply_control(action: &Action, lang: Language, tx: &EventTx) -> bool {
             Ok(false) => Toast::info(m.toast_airplane_on),
             Err(e) => Toast::error(format!("{}: {e}", m.toast_airplane_error_prefix)),
         },
+        Action::ToggleBatteryBypass => match crate::backend::power::toggle_bypass(lang).await {
+            Ok(true) => Toast::success(m.toast_battery_bypass_on),
+            Ok(false) => Toast::success(m.toast_battery_bypass_off),
+            Err(e) => Toast::error(format!("{}: {e}", m.toast_battery_bypass_error_prefix)),
+        },
         _ => return false,
     };
     let _ = tx.send(AppEvent::Toast(toast));
