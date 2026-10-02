@@ -265,6 +265,10 @@ fn new_message_fields() -> Vec<MessageField> {
         ("toast_battery_bypass_error_prefix", |m| {
             m.toast_battery_bypass_error_prefix
         }),
+        ("toast_battery_bypass_cancelled", |m| {
+            m.toast_battery_bypass_cancelled
+        }),
+        ("sudo_label_battery_bypass", |m| m.sudo_label_battery_bypass),
     ]
 }
 

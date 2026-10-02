@@ -124,12 +124,30 @@ impl BatteryBypass {
         }
     }
 
-    /// Flips the knob and returns the new state, elevating via `pkexec tee`
-    /// / `sudo tee` when the direct write is rejected (HAL-9001 normally
-    /// runs as an unprivileged user).
-    pub fn toggle(&self) -> Result<bool, String> {
+    /// Flips the knob with a direct write and returns the new state. When
+    /// the write is rejected (HAL-9001 normally runs unprivileged) this
+    /// returns [`BypassError::PermissionDenied`] instead of elevating on its
+    /// own: spawning `pkexec`/`sudo` without a TTY wedges the raw-mode TUI,
+    /// so the caller asks for the password through the in-app sudo modal and
+    /// finishes with [`apply_value_with_sudo`].
+    pub fn toggle(&self) -> Result<bool, BypassError> {
         let enabling = !self.is_enabled();
-        let value = match self.kind {
+        let value = self.target_value(enabling);
+        match std::fs::write(&self.path, value) {
+            Ok(()) => Ok(enabling),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                Err(BypassError::PermissionDenied {
+                    path: self.path.clone(),
+                    target_value: value,
+                    enabling,
+                })
+            }
+            Err(e) => Err(BypassError::Failed(e.to_string())),
+        }
+    }
+
+    fn target_value(&self, enabling: bool) -> &'static str {
+        match self.kind {
             BypassKind::Threshold { on, off } => {
                 if enabling {
                     on
@@ -144,67 +162,113 @@ impl BatteryBypass {
                     "0"
                 }
             }
-        };
-        self.write_value(value)?;
-        Ok(enabling)
-    }
-
-    fn write_value(&self, value: &str) -> Result<(), String> {
-        match std::fs::write(&self.path, value) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                self.write_value_elevated(value)
-            }
-            Err(e) => Err(e.to_string()),
         }
-    }
-
-    fn write_value_elevated(&self, value: &str) -> Result<(), String> {
-        let mut last_err = String::new();
-        for bin in ["pkexec", "sudo"] {
-            match run_tee(bin, &self.path, value) {
-                Ok(()) => return Ok(()),
-                Err(e) => last_err = e,
-            }
-        }
-        Err(last_err)
     }
 }
 
-fn run_tee(bin: &str, path: &Path, value: &str) -> Result<(), String> {
-    let mut child = Command::new(bin)
-        .arg("tee")
+/// Why [`BatteryBypass::toggle`] could not flip the knob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BypassError {
+    /// The direct write needs root: retry with [`apply_value_with_sudo`]
+    /// writing `target_value` to `path`, which yields the `enabling` state.
+    PermissionDenied {
+        path: PathBuf,
+        target_value: &'static str,
+        enabling: bool,
+    },
+    Failed(String),
+}
+
+impl std::fmt::Display for BypassError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionDenied { path, .. } => {
+                write!(f, "permission denied: {}", path.display())
+            }
+            Self::Failed(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Outcome of an elevated write attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SudoWriteError {
+    /// sudo rejected the password (or needs one and none was given).
+    AuthFailed,
+    Failed(String),
+}
+
+/// Writes `value` to `path` as root via `sudo -S`, feeding `password` on
+/// stdin (the same pattern `storage.rs` uses). `-k` ignores any cached
+/// credential so sudo always consumes the password line instead of handing
+/// it to the command. The value travels as an argument rather than on
+/// stdin so a wrong password is never followed by a second stdin line that
+/// sudo would count as another failed attempt (pam_faillock).
+pub fn apply_value_with_sudo(
+    path: &Path,
+    value: &str,
+    password: &str,
+) -> Result<(), SudoWriteError> {
+    run_sudo_write(&["-k", "-S", "-p", ""], path, value, Some(password))
+}
+
+/// Same as [`apply_value_with_sudo`] but only succeeds when sudo already
+/// holds a cached credential (`sudo -n`), so the password modal can be
+/// skipped entirely.
+pub fn apply_value_with_cached_sudo(path: &Path, value: &str) -> Result<(), SudoWriteError> {
+    run_sudo_write(&["-n"], path, value, None)
+}
+
+fn run_sudo_write(
+    sudo_flags: &[&str],
+    path: &Path,
+    value: &str,
+    password: Option<&str>,
+) -> Result<(), SudoWriteError> {
+    let mut child = Command::new("sudo")
+        .args(sudo_flags)
+        .arg("--")
+        .args(["sh", "-c", "printf '%s' \"$1\" > \"$2\"", "hal9001"])
+        .arg(value)
         .arg(path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("{bin}: {e}"))?;
+        .map_err(|e| SudoWriteError::Failed(format!("sudo: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(value.as_bytes())
-            .map_err(|e| format!("{bin}: {e}"))?;
+        if let Some(pw) = password {
+            // A write error here means sudo already exited; its status and
+            // stderr below carry the real reason.
+            let _ = stdin.write_all(pw.as_bytes());
+            let _ = stdin.write_all(b"\n");
+        }
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|e| format!("{bin}: {e}"))?;
+        .map_err(|e| SudoWriteError::Failed(format!("sudo: {e}")))?;
     if output.status.success() {
-        Ok(())
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if crate::backend::storage::is_sudo_auth_failure(&stderr) {
+        Err(SudoWriteError::AuthFailed)
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(SudoWriteError::Failed(stderr))
     }
 }
 
 /// Toggles whatever battery-bypass knob is present on this host. Probes
 /// fresh on every call since the check is a handful of cheap path lookups.
-pub async fn toggle_bypass(lang: Language) -> Result<bool, String> {
-    let bypass = BatteryBypass::probe()
-        .ok_or_else(|| lang.messages().err_battery_bypass_unavailable.to_string())?;
+pub async fn toggle_bypass(lang: Language) -> Result<bool, BypassError> {
+    let bypass = BatteryBypass::probe().ok_or_else(|| {
+        BypassError::Failed(lang.messages().err_battery_bypass_unavailable.to_string())
+    })?;
     tokio::task::spawn_blocking(move || bypass.toggle())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| BypassError::Failed(e.to_string()))?
 }
 
 fn find_in_dir_with_prefix(dir: &Path, prefix: &str, filenames: &[&str]) -> Option<PathBuf> {
@@ -386,6 +450,32 @@ mod tests {
         let enabled = bypass.toggle().expect("direct write should succeed");
         assert!(!enabled);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "100");
+    }
+
+    #[test]
+    fn toggle_reports_permission_denied_instead_of_elevating() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let path = root.join("sys/class/power_supply/BAT0/charge_control_end_threshold");
+        write_file(&path, "100\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            // Running as root: permission bits are not enforced.
+            return;
+        }
+
+        let bypass = BatteryBypass::probe_at(root).unwrap();
+        assert_eq!(
+            bypass.toggle(),
+            Err(BypassError::PermissionDenied {
+                path: path.clone(),
+                target_value: "60",
+                enabling: true,
+            })
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "100\n");
     }
 
     #[test]

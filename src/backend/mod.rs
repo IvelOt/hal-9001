@@ -31,6 +31,7 @@ pub fn spawn_all(
         lang.clone(),
         tx.clone(),
         action_tx.subscribe(),
+        sudo_tx.clone(),
     ));
 
     tokio::spawn(storage::run(

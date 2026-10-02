@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sysinfo::{Disks, System};
 use tokio::sync::broadcast;
 
-use crate::events::{Action, AppEvent, EventTx, Toast};
+use crate::backend::power::{self, BypassError, SudoWriteError};
+use crate::events::{Action, AppEvent, EventTx, SudoPasswordRequest, SudoPasswordTx, Toast};
 use crate::i18n::{Language, SharedLang};
 
 #[derive(Debug, Clone, Default)]
@@ -1084,7 +1085,71 @@ pub async fn cycle_power_profile(lang: Language) -> Result<PowerProfile, String>
     Ok(next)
 }
 
-async fn apply_control(action: &Action, lang: Language, tx: &EventTx) -> bool {
+fn battery_bypass_toast(enabled: bool, lang: Language) -> Toast {
+    let m = lang.messages();
+    if enabled {
+        Toast::success(m.toast_battery_bypass_on)
+    } else {
+        Toast::success(m.toast_battery_bypass_off)
+    }
+}
+
+/// Finishes a battery-bypass toggle whose direct sysfs write was refused:
+/// reuses a cached sudo credential when there is one, otherwise asks for
+/// the password through the in-TUI sudo modal (re-prompting on a wrong
+/// password) and writes the value with `sudo -S`.
+async fn elevate_battery_bypass(
+    path: PathBuf,
+    value: &'static str,
+    enabling: bool,
+    lang: Language,
+    sudo_tx: &SudoPasswordTx,
+) -> Toast {
+    let m = lang.messages();
+    let run = |password: Option<String>| {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || match password {
+            Some(pw) => power::apply_value_with_sudo(&path, value, &pw),
+            None => power::apply_value_with_cached_sudo(&path, value),
+        })
+    };
+    let error = |e: String| Toast::error(format!("{}: {e}", m.toast_battery_bypass_error_prefix));
+
+    if let Ok(Ok(())) = run(None).await {
+        return battery_bypass_toast(enabling, lang);
+    }
+
+    let mut retry_error = None;
+    loop {
+        let (respond, respond_rx) = tokio::sync::oneshot::channel();
+        let request = SudoPasswordRequest {
+            label: m.sudo_label_battery_bypass.to_string(),
+            retry_error: retry_error.take(),
+            respond,
+        };
+        if sudo_tx.send(request).is_err() {
+            return Toast::info(m.toast_battery_bypass_cancelled);
+        }
+        let Some(password) = respond_rx.await.ok().flatten() else {
+            return Toast::info(m.toast_battery_bypass_cancelled);
+        };
+        match run(Some(password)).await {
+            Ok(Ok(())) => return battery_bypass_toast(enabling, lang),
+            Ok(Err(SudoWriteError::AuthFailed)) => {
+                retry_error = Some(m.storage_err_wrong_password.to_string());
+            }
+            Ok(Err(SudoWriteError::Failed(e))) => return error(e),
+            Err(e) => return error(e.to_string()),
+        }
+    }
+}
+
+async fn apply_control(
+    action: &Action,
+    lang: Language,
+    tx: &EventTx,
+    sudo_tx: &SudoPasswordTx,
+) -> bool {
     let m = lang.messages();
     let toast = match action {
         Action::BrightnessUp => match adjust_brightness(CONTROL_STEP, lang).await {
@@ -1125,9 +1190,24 @@ async fn apply_control(action: &Action, lang: Language, tx: &EventTx) -> bool {
             Ok(false) => Toast::info(m.toast_airplane_on),
             Err(e) => Toast::error(format!("{}: {e}", m.toast_airplane_error_prefix)),
         },
-        Action::ToggleBatteryBypass => match crate::backend::power::toggle_bypass(lang).await {
-            Ok(true) => Toast::success(m.toast_battery_bypass_on),
-            Ok(false) => Toast::success(m.toast_battery_bypass_off),
+        Action::ToggleBatteryBypass => match power::toggle_bypass(lang).await {
+            Ok(enabled) => battery_bypass_toast(enabled, lang),
+            Err(BypassError::PermissionDenied {
+                path,
+                target_value,
+                enabling,
+            }) => {
+                // Elevation waits on the sudo modal; run it off the polling
+                // loop so snapshots keep flowing while the user types.
+                let tx = tx.clone();
+                let sudo_tx = sudo_tx.clone();
+                tokio::spawn(async move {
+                    let toast =
+                        elevate_battery_bypass(path, target_value, enabling, lang, &sudo_tx).await;
+                    let _ = tx.send(AppEvent::Toast(toast));
+                });
+                return true;
+            }
             Err(e) => Toast::error(format!("{}: {e}", m.toast_battery_bypass_error_prefix)),
         },
         _ => return false,
@@ -1141,6 +1221,7 @@ pub async fn run(
     lang: SharedLang,
     tx: EventTx,
     mut actions: broadcast::Receiver<Action>,
+    sudo_tx: SudoPasswordTx,
 ) -> anyhow::Result<()> {
     let mut sys = System::new_all();
     let mut disks = Disks::new_with_refreshed_list();
@@ -1211,7 +1292,7 @@ pub async fn run(
                         let _ = tx.send(AppEvent::Toast(Toast::info(msg)));
                     }
 
-                    if apply_control(&action, lang.get(), &tx).await {
+                    if apply_control(&action, lang.get(), &tx, &sudo_tx).await {
                         let snap = refresh(&mut sys, &mut disks, &stat);
                         if tx.send(AppEvent::System(snap)).is_err() {
                             break;
