@@ -28,6 +28,10 @@ For a control that only some hardware supports (e.g. `src/backend/power.rs::Batt
 
 **Root elevation:** never spawn `pkexec`/`sudo` expecting a TTY or polkit agent from a backend task — under crossterm raw mode it hangs or fails. Ask for the password through the in-TUI modal by sending a `SudoPasswordRequest` on the `SudoPasswordTx` passed into the backend `run` (see `spawn_all` in `src/backend/mod.rs`), then run `sudo -S` with the password on stdin; re-send with `retry_error` on `is_sudo_auth_failure`. Examples: `storage.rs` (`next_sudo_attempt`) and `system.rs` (`elevate_battery_bypass`).
 
+## ISO/image file picker (`FilePickerState` in `src/app.rs`, rendering in `src/ui/file_picker.rs`)
+
+The picker lists directories plus only disk-image-pickable files (`file_picker::is_pickable_for`); everything else (including dotfiles unless toggled) is dropped from `entries` in `reload()`, not just dimmed — so `enter_selected`'s `Unsupported` outcome is effectively unreachable in normal use and only guards against future filter gaps. `'.'` toggles `show_hidden`, `'/'` enters inline search mode (`is_searching` + `search_query`, consumes subsequent chars until Enter/Down/Esc), and Space toggles `selected_paths` for multi-select — `enter_selected` returns `FilePickerOutcome::Picked(Vec<PathBuf>)`, preferring the marked set over the single cursor entry when non-empty. `App::last_file_picker_dir` is updated on every picker dispatch/confirm and seeds the next `FilePickerState::open` call. Multi-file adds to the Multiboot ISO Manager are sequenced one at a time through `MultibootIsoManagerState::pending_adds`, popped on each `StorageMultibootIsoCopyDone` success — the backend only ever processes one `StorageMultibootAddIso` at a time.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

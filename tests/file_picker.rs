@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use hal9001::app::{FilePickerOutcome, FilePickerPurpose, FilePickerState};
+use hal9001::app::{App, FilePickerOutcome, FilePickerPurpose, FilePickerState, StorageModal};
+use hal9001::config::Config;
+use hal9001::events::Action;
 use hal9001::ui::file_picker::{
     is_flashable_image, is_pickable_for, is_pickable_image, sort_entries, FileEntry,
 };
@@ -148,7 +150,7 @@ fn entering_a_pickable_image_returns_picked_outcome() {
     let mut s = FilePickerState::open(root.clone(), flasher_purpose());
     s.selected = 0;
     match s.enter_selected() {
-        FilePickerOutcome::Picked(path) => assert_eq!(path, root.join("linux.iso")),
+        FilePickerOutcome::Picked(paths) => assert_eq!(paths, vec![root.join("linux.iso")]),
         other => panic!("esperava Picked, obteve {other:?}"),
     }
 
@@ -156,16 +158,113 @@ fn entering_a_pickable_image_returns_picked_outcome() {
 }
 
 #[test]
-fn entering_an_unsupported_file_returns_unsupported_outcome() {
+fn unsupported_files_are_filtered_out_of_the_listing_entirely() {
     let root = unique_temp_dir("unsupported");
     std::fs::write(root.join("notes.txt"), b"hello").unwrap();
+    std::fs::write(root.join("linux.iso"), b"fake iso data").unwrap();
+
+    let s = FilePickerState::open(root.clone(), flasher_purpose());
+    assert_eq!(
+        s.entries.len(),
+        1,
+        "notes.txt não é selecionável e não deve poluir a lista"
+    );
+    assert_eq!(s.entries[0].name, "linux.iso");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn directories_are_always_listed_regardless_of_extension_filter() {
+    let root = unique_temp_dir("dirs-kept");
+    std::fs::create_dir_all(root.join("some_dir")).unwrap();
+    std::fs::write(root.join("notes.txt"), b"hello").unwrap();
+
+    let s = FilePickerState::open(root.clone(), flasher_purpose());
+    let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["some_dir"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn hidden_files_are_excluded_by_default_and_shown_after_toggle() {
+    let root = unique_temp_dir("hidden");
+    std::fs::write(root.join(".hidden.iso"), b"x").unwrap();
+    std::fs::write(root.join("visible.iso"), b"x").unwrap();
 
     let mut s = FilePickerState::open(root.clone(), flasher_purpose());
+    assert!(!s.show_hidden);
+    let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["visible.iso"]);
+
+    s.show_hidden = true;
+    s.reload();
+    let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec![".hidden.iso", "visible.iso"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn search_query_filters_entries_case_insensitively() {
+    let root = unique_temp_dir("search");
+    std::fs::write(root.join("Archlinux.iso"), b"x").unwrap();
+    std::fs::write(root.join("debian.iso"), b"x").unwrap();
+
+    let mut s = FilePickerState::open(root.clone(), flasher_purpose());
+    s.search_query = "arch".to_string();
+    s.reload();
+    let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["Archlinux.iso"]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn toggle_selected_marks_and_unmarks_files_and_advances_cursor() {
+    let root = unique_temp_dir("multi-select");
+    std::fs::write(root.join("a.iso"), b"1").unwrap();
+    std::fs::write(root.join("b.iso"), b"2").unwrap();
+
+    let mut s = FilePickerState::open(root.clone(), flasher_purpose());
+    assert_eq!(s.selected, 0);
+
+    s.toggle_selected();
+    assert!(s.selected_paths.contains(&root.join("a.iso")));
+    assert_eq!(s.selected, 1, "deve avançar para a próxima linha");
+
+    s.toggle_selected();
+    assert!(s.selected_paths.contains(&root.join("b.iso")));
+
     s.selected = 0;
-    match s.enter_selected() {
-        FilePickerOutcome::Unsupported => {}
-        other => panic!("esperava Unsupported, obteve {other:?}"),
-    }
+    s.toggle_selected();
+    assert!(!s.selected_paths.contains(&root.join("a.iso")));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn entering_with_multiple_marked_files_returns_all_of_them() {
+    let root = unique_temp_dir("multi-pick");
+    std::fs::write(root.join("a.iso"), b"1").unwrap();
+    std::fs::write(root.join("b.iso"), b"2").unwrap();
+
+    let purpose = FilePickerPurpose::MultibootAddIso {
+        device_id: "/drives/ventoy".to_string(),
+        target_label: "Ventoy USB".to_string(),
+    };
+    let mut s = FilePickerState::open(root.clone(), purpose);
+    s.toggle_selected();
+    s.toggle_selected();
+    s.selected = 0;
+
+    let mut paths = match s.enter_selected() {
+        FilePickerOutcome::Picked(paths) => paths,
+        other => panic!("esperava Picked, obteve {other:?}"),
+    };
+    paths.sort();
+    assert_eq!(paths, vec![root.join("a.iso"), root.join("b.iso")]);
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -242,6 +341,121 @@ fn file_entry_modified_field_is_populated_when_available() {
     let e = s.entries.first().expect("esperava uma entrada");
     assert!(e.modified.is_some());
     assert!(e.modified.unwrap() <= SystemTime::now());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+fn app_with_file_picker(root: PathBuf, purpose: FilePickerPurpose) -> App {
+    let mut app = App::new(Config::default());
+    app.storage_modal = StorageModal::FilePicker(FilePickerState::open(root, purpose));
+    app
+}
+
+#[test]
+fn dispatch_dot_key_toggles_hidden_files_and_reloads() {
+    let root = unique_temp_dir("dispatch-hidden");
+    std::fs::write(root.join(".hidden.iso"), b"x").unwrap();
+    std::fs::write(root.join("visible.iso"), b"x").unwrap();
+
+    let mut app = app_with_file_picker(root.clone(), flasher_purpose());
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+
+    let entries_len = |app: &App| match &app.storage_modal {
+        StorageModal::FilePicker(s) => s.entries.len(),
+        other => panic!("esperava FilePicker, obteve {other:?}"),
+    };
+    assert_eq!(entries_len(&app), 1);
+
+    app.dispatch(Action::StorageModalChar('.'), &tx);
+    assert_eq!(entries_len(&app), 2);
+
+    app.dispatch(Action::StorageModalChar('.'), &tx);
+    assert_eq!(entries_len(&app), 1);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn dispatch_slash_activates_search_and_filters_entries_as_typed() {
+    let root = unique_temp_dir("dispatch-search");
+    std::fs::write(root.join("Archlinux.iso"), b"x").unwrap();
+    std::fs::write(root.join("debian.iso"), b"x").unwrap();
+
+    let mut app = app_with_file_picker(root.clone(), flasher_purpose());
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+
+    app.dispatch(Action::StorageModalChar('/'), &tx);
+    app.dispatch(Action::StorageModalChar('a'), &tx);
+    app.dispatch(Action::StorageModalChar('r'), &tx);
+    app.dispatch(Action::StorageModalChar('c'), &tx);
+    app.dispatch(Action::StorageModalChar('h'), &tx);
+
+    match &app.storage_modal {
+        StorageModal::FilePicker(s) => {
+            assert!(s.is_searching);
+            assert_eq!(s.search_query, "arch");
+            let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, vec!["Archlinux.iso"]);
+        }
+        other => panic!("esperava FilePicker, obteve {other:?}"),
+    }
+
+    app.dispatch(Action::StorageModalBackspace, &tx);
+    match &app.storage_modal {
+        StorageModal::FilePicker(s) => assert_eq!(s.search_query, "arc"),
+        other => panic!("esperava FilePicker, obteve {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn dispatch_space_marks_multiple_isos_and_enter_confirms_all() {
+    let root = unique_temp_dir("dispatch-multi");
+    std::fs::write(root.join("a.iso"), b"1").unwrap();
+    std::fs::write(root.join("b.iso"), b"2").unwrap();
+
+    let purpose = FilePickerPurpose::MultibootAddIso {
+        device_id: "/drives/ventoy".to_string(),
+        target_label: "Ventoy USB".to_string(),
+    };
+    let mut app = app_with_file_picker(root.clone(), purpose);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+
+    app.dispatch(Action::StorageModalChar(' '), &tx);
+    app.dispatch(Action::StorageModalChar(' '), &tx);
+    app.dispatch(Action::Enter, &tx);
+
+    match &app.storage_modal {
+        StorageModal::MultibootIsoManager(s) => {
+            assert_eq!(s.pending_adds.len(), 1);
+        }
+        other => panic!("esperava MultibootIsoManager, obteve {other:?}"),
+    }
+
+    let first = rx
+        .try_recv()
+        .expect("esperava uma ação StorageMultibootAddIso");
+    match first {
+        Action::StorageMultibootAddIso { .. } => {}
+        other => panic!("esperava StorageMultibootAddIso, obteve {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn last_file_picker_dir_tracks_navigation() {
+    let root = unique_temp_dir("dispatch-lastdir");
+    std::fs::create_dir_all(root.join("subdir")).unwrap();
+    std::fs::write(root.join("subdir/image.iso"), b"x").unwrap();
+
+    let mut app = app_with_file_picker(root.clone(), flasher_purpose());
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    assert_eq!(app.last_file_picker_dir, None);
+
+    app.dispatch(Action::Enter, &tx);
+    assert_eq!(app.last_file_picker_dir, Some(root.join("subdir")));
 
     std::fs::remove_dir_all(&root).ok();
 }

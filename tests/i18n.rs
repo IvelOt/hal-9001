@@ -276,6 +276,11 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_format_success", |m| m.storage_format_success),
         ("storage_format_failed", |m| m.storage_format_failed),
         ("storage_format_hint_close", |m| m.storage_format_hint_close),
+        ("filepicker_hint_select", |m| m.filepicker_hint_select),
+        ("filepicker_hint_search", |m| m.filepicker_hint_search),
+        ("filepicker_hint_hidden", |m| m.filepicker_hint_hidden),
+        ("filepicker_hint_confirm", |m| m.filepicker_hint_confirm),
+        ("filepicker_hint_cancel", |m| m.filepicker_hint_cancel),
     ]
 }
 

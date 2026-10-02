@@ -22,6 +22,10 @@ pub struct FileEntry {
     pub modified: Option<SystemTime>,
 }
 
+pub fn is_hidden(name: &str) -> bool {
+    name.starts_with('.')
+}
+
 pub fn is_pickable_image(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".iso")
@@ -133,7 +137,42 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
         rows[0],
     );
 
+    let status_line = if s.is_searching || !s.search_query.is_empty() {
+        Line::from(Span::styled(
+            format!("{}: {}_", m.filepicker_search_label, s.search_query),
+            Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        let hidden_label = if s.show_hidden {
+            m.filepicker_hidden_on
+        } else {
+            m.filepicker_hidden_off
+        };
+        Line::from(Span::styled(
+            format!("[{hidden_label}]"),
+            Style::default().fg(pal.dim),
+        ))
+    };
+    f.render_widget(Paragraph::new(status_line), rows[1]);
+
     draw_list(app, pal, f, rows[2], s);
+
+    let footer = format!(
+        "{}  {}  {}  {}  {}",
+        m.filepicker_hint_select,
+        m.filepicker_hint_search,
+        m.filepicker_hint_hidden,
+        m.filepicker_hint_confirm,
+        m.filepicker_hint_cancel,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer,
+            Style::default().fg(pal.dim),
+        )))
+        .wrap(Wrap { trim: false }),
+        rows[3],
+    );
 
     let detail_line = match s.entries.get(s.selected) {
         Some(entry) if !entry.is_dir => {
@@ -185,7 +224,7 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
     }
 
     let jumps = format!(
-        "{}: {}={}  {}={}  {}={}  {}={}",
+        "{}: {}={}  {}={}  {}={}",
         m.filepicker_hint_jumps,
         "~",
         m.filepicker_jump_home,
@@ -193,8 +232,6 @@ pub fn draw(app: &App, pal: &Palette, f: &mut Frame, s: &FilePickerState) {
         m.filepicker_jump_downloads,
         "M",
         m.filepicker_jump_media,
-        "/",
-        m.filepicker_jump_root,
     );
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -236,6 +273,9 @@ fn draw_list(app: &App, pal: &Palette, f: &mut Frame, area: Rect, s: &FilePicker
         } else {
             Style::default().fg(pal.fg)
         };
+        let marked = s.selected_paths.contains(&entry.path);
+        let mark = if marked { "[x] " } else { "" };
+        let mark_style = Style::default().fg(pal.ok).add_modifier(Modifier::BOLD);
         let prefix = if entry.is_dir { "/" } else { " " };
         let size = if entry.is_dir {
             String::new()
@@ -243,6 +283,7 @@ fn draw_list(app: &App, pal: &Palette, f: &mut Frame, area: Rect, s: &FilePicker
             human_bytes(entry.size)
         };
         lines.push(Line::from(vec![
+            Span::styled(mark, mark_style),
             Span::styled(format!("{prefix} {} ", entry.name), base_style),
             Span::styled(size, base_style.fg(pal.dim)),
         ]));

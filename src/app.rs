@@ -140,7 +140,7 @@ pub enum FilePickerPurpose {
 pub enum FilePickerOutcome {
     None,
 
-    Picked(PathBuf),
+    Picked(Vec<PathBuf>),
 
     Unsupported,
 }
@@ -153,6 +153,10 @@ pub struct FilePickerState {
     pub selected: usize,
     pub error: Option<String>,
     pub purpose: FilePickerPurpose,
+    pub show_hidden: bool,
+    pub search_query: String,
+    pub is_searching: bool,
+    pub selected_paths: std::collections::HashSet<PathBuf>,
 }
 
 impl FilePickerState {
@@ -168,6 +172,10 @@ impl FilePickerState {
             selected: 0,
             error: None,
             purpose,
+            show_hidden: false,
+            search_query: String::new(),
+            is_searching: false,
+            selected_paths: std::collections::HashSet::new(),
         };
         s.reload();
         s
@@ -176,12 +184,21 @@ impl FilePickerState {
     pub fn reload(&mut self) {
         match file_picker::list_dir(&self.cwd) {
             Ok(entries) => {
-                self.selected = if entries.is_empty() {
+                let show_hidden = self.show_hidden;
+                let purpose = self.purpose.clone();
+                let query = self.search_query.to_ascii_lowercase();
+                let filtered: Vec<FileEntry> = entries
+                    .into_iter()
+                    .filter(|e| show_hidden || !file_picker::is_hidden(&e.name))
+                    .filter(|e| e.is_dir || file_picker::is_pickable_for(&purpose, &e.name))
+                    .filter(|e| query.is_empty() || e.name.to_ascii_lowercase().contains(&query))
+                    .collect();
+                self.selected = if filtered.is_empty() {
                     0
                 } else {
-                    self.selected.min(entries.len() - 1)
+                    self.selected.min(filtered.len() - 1)
                 };
-                self.entries = entries;
+                self.entries = filtered;
                 self.error = None;
             }
             Err(e) => {
@@ -220,6 +237,19 @@ impl FilePickerState {
         }
     }
 
+    pub fn toggle_selected(&mut self) {
+        let Some(entry) = self.entries.get(self.selected).cloned() else {
+            return;
+        };
+        if entry.is_dir || !file_picker::is_pickable_for(&self.purpose, &entry.name) {
+            return;
+        }
+        if !self.selected_paths.remove(&entry.path) {
+            self.selected_paths.insert(entry.path);
+        }
+        self.move_down();
+    }
+
     pub fn enter_selected(&mut self) -> FilePickerOutcome {
         let Some(entry) = self.entries.get(self.selected).cloned() else {
             return FilePickerOutcome::None;
@@ -230,7 +260,13 @@ impl FilePickerState {
             self.reload();
             FilePickerOutcome::None
         } else if file_picker::is_pickable_for(&self.purpose, &entry.name) {
-            FilePickerOutcome::Picked(entry.path)
+            if !self.selected_paths.is_empty() {
+                let mut paths: Vec<PathBuf> = self.selected_paths.iter().cloned().collect();
+                paths.sort();
+                FilePickerOutcome::Picked(paths)
+            } else {
+                FilePickerOutcome::Picked(vec![entry.path])
+            }
         } else {
             FilePickerOutcome::Unsupported
         }
@@ -266,6 +302,7 @@ pub struct MultibootIsoManagerState {
     pub device_id: String,
     pub target_label: String,
     pub stage: MultibootIsoManagerStage,
+    pub pending_adds: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -420,6 +457,8 @@ pub struct App {
 
     pub storage_modal: StorageModal,
 
+    pub last_file_picker_dir: Option<PathBuf>,
+
     pub storage_analyzer: Option<DiskAnalyzerState>,
 
     pub sudo_prompt: Option<SudoPromptState>,
@@ -476,6 +515,7 @@ impl App {
             storage: None,
             storage_selected: 0,
             storage_modal: StorageModal::None,
+            last_file_picker_dir: None,
             storage_analyzer: None,
             sudo_prompt: None,
             sudo_respond: None,
@@ -837,10 +877,29 @@ impl App {
                     if s.device_id == device_id {
                         match result {
                             Ok(_) => {
-                                s.stage = MultibootIsoManagerStage::Loading;
-                                follow_up.push(Action::StorageMultibootListIsos {
-                                    device_id: device_id.clone(),
-                                });
+                                if !s.pending_adds.is_empty() {
+                                    let path = s.pending_adds.remove(0);
+                                    let size =
+                                        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                    let file_name = path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_default();
+                                    s.stage = MultibootIsoManagerStage::Copying {
+                                        bytes_written: 0,
+                                        total_bytes: size,
+                                        file_name,
+                                    };
+                                    follow_up.push(Action::StorageMultibootAddIso {
+                                        device_id: device_id.clone(),
+                                        src_path: path.to_string_lossy().to_string(),
+                                    });
+                                } else {
+                                    s.stage = MultibootIsoManagerStage::Loading;
+                                    follow_up.push(Action::StorageMultibootListIsos {
+                                        device_id: device_id.clone(),
+                                    });
+                                }
                             }
                             Err(e) => {
                                 s.stage = MultibootIsoManagerStage::Error { message: e };
@@ -1203,8 +1262,12 @@ impl App {
             return;
         }
         let target_label = drive.friendly_label();
+        let start_dir = self
+            .last_file_picker_dir
+            .clone()
+            .unwrap_or_else(Self::downloads_dir);
         self.storage_modal = StorageModal::FilePicker(FilePickerState::open(
-            Self::home_dir(),
+            start_dir,
             FilePickerPurpose::FlasherIso {
                 device_id: drive.id.0.clone(),
                 target_label,
@@ -1355,6 +1418,7 @@ impl App {
             device_id: device_id.clone(),
             target_label,
             stage: MultibootIsoManagerStage::Loading,
+            pending_adds: Vec::new(),
         });
         let _ = action_tx.send(Action::StorageMultibootListIsos { device_id });
     }
@@ -1511,8 +1575,12 @@ impl App {
         match &mut s.stage {
             FlasherStage::SelectIso { input, error } => match action {
                 Action::StorageModalOpenPicker => {
+                    let start_dir = self
+                        .last_file_picker_dir
+                        .clone()
+                        .unwrap_or_else(Self::downloads_dir);
                     return StorageModal::FilePicker(FilePickerState::open(
-                        Self::home_dir(),
+                        start_dir,
                         FilePickerPurpose::FlasherIso {
                             device_id: s.device_id.clone(),
                             target_label: s.target_label.clone(),
@@ -1606,6 +1674,33 @@ impl App {
             return StorageModal::FilePicker(s);
         }
 
+        if s.is_searching {
+            match action {
+                Action::StorageModalBackspace => {
+                    s.search_query.pop();
+                    s.reload();
+                }
+                Action::StorageModalChar(c) if !c.is_control() => {
+                    s.search_query.push(c);
+                    s.reload();
+                }
+                Action::Enter | Action::Down => {
+                    s.is_searching = false;
+                }
+                Action::ToggleConfig => {
+                    if !s.search_query.is_empty() {
+                        s.search_query.clear();
+                        s.reload();
+                    } else {
+                        s.is_searching = false;
+                    }
+                }
+                _ => {}
+            }
+            self.last_file_picker_dir = Some(s.cwd.clone());
+            return StorageModal::FilePicker(s);
+        }
+
         if matches!(action, Action::ToggleConfig) {
             return StorageModal::None;
         }
@@ -1625,9 +1720,18 @@ impl App {
                 s.jump_to(Self::downloads_dir())
             }
             Action::StorageModalChar('M') => s.jump_to(PathBuf::from("/media")),
-            Action::StorageModalChar('/') => s.jump_to(PathBuf::from("/")),
+            Action::StorageModalChar('.') => {
+                s.show_hidden = !s.show_hidden;
+                s.reload();
+            }
+            Action::StorageModalChar('/') => {
+                s.is_searching = true;
+                s.search_query.clear();
+            }
+            Action::StorageModalChar(' ') => s.toggle_selected(),
             _ => {}
         }
+        self.last_file_picker_dir = Some(s.cwd.clone());
         StorageModal::FilePicker(s)
     }
 
@@ -1636,15 +1740,17 @@ impl App {
         mut s: FilePickerState,
         action_tx: &broadcast::Sender<Action>,
     ) -> StorageModal {
-        match s.enter_selected() {
+        let outcome = s.enter_selected();
+        self.last_file_picker_dir = Some(s.cwd.clone());
+        match outcome {
             FilePickerOutcome::None => StorageModal::FilePicker(s),
             FilePickerOutcome::Unsupported => {
                 let m = self.lang.messages();
                 s.error = Some(m.filepicker_err_unsupported.to_string());
                 StorageModal::FilePicker(s)
             }
-            FilePickerOutcome::Picked(path) => {
-                let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            FilePickerOutcome::Picked(paths) => {
+                let multiple = paths.len() > 1;
                 match s.purpose.clone() {
                     FilePickerPurpose::FlasherIso {
                         device_id,
@@ -1652,6 +1758,15 @@ impl App {
                         target_dev_node,
                         target_size,
                     } => {
+                        let path = paths.into_iter().next().unwrap_or_default();
+                        let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                        if multiple {
+                            let m = self.lang.messages();
+                            self.toast = Some((
+                                Toast::info(m.filepicker_toast_multi_flasher_first_only),
+                                Instant::now(),
+                            ));
+                        }
                         if size > target_size {
                             let m = self.lang.messages();
                             StorageModal::Flasher(FlasherModalState {
@@ -1682,6 +1797,9 @@ impl App {
                         device_id,
                         target_label,
                     } => {
+                        let mut remaining = paths;
+                        let path = remaining.remove(0);
+                        let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                         let file_name = path
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
@@ -1698,6 +1816,7 @@ impl App {
                                 total_bytes: size,
                                 file_name,
                             },
+                            pending_adds: remaining,
                         })
                     }
                 }
@@ -1735,8 +1854,12 @@ impl App {
                     *selected = selected.saturating_sub(1);
                 }
                 Action::StorageModalChar('a') | Action::StorageModalChar('A') => {
+                    let start_dir = self
+                        .last_file_picker_dir
+                        .clone()
+                        .unwrap_or_else(Self::downloads_dir);
                     return StorageModal::FilePicker(FilePickerState::open(
-                        Self::home_dir(),
+                        start_dir,
                         FilePickerPurpose::MultibootAddIso {
                             device_id: s.device_id.clone(),
                             target_label: s.target_label.clone(),

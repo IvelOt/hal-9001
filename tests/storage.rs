@@ -1119,6 +1119,10 @@ fn open_flasher_and_pick_iso(
     match &mut app.storage_modal {
         StorageModal::FilePicker(s) => {
             s.cwd = iso_path.parent().unwrap().to_path_buf();
+            // tempfile's default prefix is dot-leading, so the fixture ISO
+            // files created by the test suite are hidden under the new
+            // hidden-files filter.
+            s.show_hidden = true;
             s.reload();
             s.selected = s
                 .entries
@@ -1703,6 +1707,7 @@ fn render_multiboot_iso_manager_modal_in_every_stage_without_panic() {
             device_id: "/drives/usb-target".to_string(),
             target_label: "Multi-boot USB".to_string(),
             stage,
+            pending_adds: Vec::new(),
         })
     };
 
