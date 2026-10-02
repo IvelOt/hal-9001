@@ -102,6 +102,11 @@ pub enum AppEvent {
         result: Result<String, String>,
     },
 
+    StorageFormatDone {
+        device_id: String,
+        result: Result<String, String>,
+    },
+
     StorageMultibootIsoList {
         device_id: String,
         entries: Vec<VentoyIsoEntry>,

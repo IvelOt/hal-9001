@@ -215,6 +215,7 @@ pub struct Messages {
     pub storage_hint_iso: &'static str,
     pub storage_hint_refresh: &'static str,
     pub storage_err_system: &'static str,
+    pub storage_err_device_not_mounted: &'static str,
     pub storage_safe_to_remove_sd: &'static str,
     pub storage_safe_to_remove: &'static str,
 
@@ -244,6 +245,10 @@ pub struct Messages {
     pub storage_format_hint: &'static str,
 
     pub storage_format_started: &'static str,
+    pub storage_format_progress: &'static str,
+    pub storage_format_success: &'static str,
+    pub storage_format_failed: &'static str,
+    pub storage_format_hint_close: &'static str,
 
     pub storage_multiboot_target_label: &'static str,
 
@@ -811,6 +816,7 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_hint_iso: "[g] Gravar ISO",
     storage_hint_refresh: "[r] Atualizar",
     storage_err_system: "operação bloqueada: disco de sistema",
+    storage_err_device_not_mounted: "Dispositivo não montado. Pressione [m] para montar antes de analisar.",
     storage_safe_to_remove_sd: "Seguro remover o cartão SD",
     storage_safe_to_remove: "Seguro remover o dispositivo",
     storage_tag_system_ascii: "[SISTEMA]",
@@ -834,6 +840,10 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     storage_format_warning: "ATENÇÃO: todos os dados do dispositivo serão apagados!",
     storage_format_hint: "[↑/↓/Tab] campo  [←/→] mudar FS  [Enter] formatar  [Esc] cancelar",
     storage_format_started: "Formatação iniciada em",
+    storage_format_progress: "Formatando dispositivo... Aguarde",
+    storage_format_success: "Formatação concluída com sucesso",
+    storage_format_failed: "Falha na formatação",
+    storage_format_hint_close: "[Enter / Esc] fechar",
 
     storage_multiboot_target_label: "Pendrive alvo",
 
@@ -1382,6 +1392,7 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_hint_iso: "[g] Flash ISO",
     storage_hint_refresh: "[r] Refresh",
     storage_err_system: "operation blocked: system disk",
+    storage_err_device_not_mounted: "Device not mounted. Press [m] to mount before analyzing.",
     storage_safe_to_remove_sd: "Safe to remove SD card",
     storage_safe_to_remove: "Safe to remove device",
     storage_tag_system_ascii: "[SYSTEM]",
@@ -1406,6 +1417,10 @@ pub static MESSAGES_EN_US: Messages = Messages {
     storage_format_hint:
         "[up/down/Tab] field  [left/right] change FS  [Enter] format  [Esc] cancel",
     storage_format_started: "Formatting started on",
+    storage_format_progress: "Formatting device... Please wait",
+    storage_format_success: "Format completed successfully",
+    storage_format_failed: "Format failed",
+    storage_format_hint_close: "[Enter / Esc] close",
 
     storage_multiboot_target_label: "Target drive",
 
@@ -1953,6 +1968,7 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_hint_iso: "[g] Grabar ISO",
     storage_hint_refresh: "[r] Actualizar",
     storage_err_system: "operación bloqueada: disco de sistema",
+    storage_err_device_not_mounted: "Dispositivo no montado. Pulse [m] para montar antes de analizar.",
     storage_safe_to_remove_sd: "Seguro retirar la tarjeta SD",
     storage_safe_to_remove: "Seguro retirar el dispositivo",
     storage_tag_system_ascii: "[SISTEMA]",
@@ -1976,6 +1992,10 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     storage_format_warning: "ATENCIÓN: ¡todos los datos del dispositivo serán borrados!",
     storage_format_hint: "[↑/↓/Tab] campo  [←/→] cambiar FS  [Enter] formatear  [Esc] cancelar",
     storage_format_started: "Formateo iniciado en",
+    storage_format_progress: "Formateando dispositivo... Espere",
+    storage_format_success: "Formateo completado con éxito",
+    storage_format_failed: "Error en el formateo",
+    storage_format_hint_close: "[Enter / Esc] cerrar",
 
     storage_multiboot_target_label: "Unidad destino",
 

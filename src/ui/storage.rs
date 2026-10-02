@@ -6,7 +6,8 @@ use ratatui::Frame;
 
 use crate::app::{
     App, DiskAnalyzerState, FlasherModalState, FlasherStage, FormatField, FormatModalState,
-    FsChoice, MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal, SudoPromptState,
+    FormatStage, FsChoice, MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal,
+    SudoPromptState,
 };
 use crate::backend::multiboot;
 use crate::backend::storage::{primary_partition, BusType, DriveInfo, PartitionInfo};
@@ -582,6 +583,50 @@ fn draw_format_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FormatModalSta
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    let lines = match &s.stage {
+        FormatStage::Configuring => draw_format_modal_configuring(app, pal, s),
+        FormatStage::Formatting => {
+            vec![
+                kv(m.storage_format_target, &s.target_label, pal),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!(
+                        "[ {} ] {}",
+                        spinner_glyph(s.spinner_frame),
+                        m.storage_format_progress
+                    ),
+                    Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
+                )),
+            ]
+        }
+        FormatStage::Done { ok, message } => {
+            let (color, text) = if *ok {
+                (pal.ok, m.storage_format_success)
+            } else {
+                (pal.err, m.storage_format_failed)
+            };
+            vec![
+                kv(m.storage_format_target, &s.target_label, pal),
+                Line::from(""),
+                Line::from(Span::styled(
+                    text,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(message.as_str(), Style::default().fg(pal.dim))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    m.storage_format_hint_close,
+                    Style::default().fg(pal.dim),
+                )),
+            ]
+        }
+    };
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_format_modal_configuring<'a>(app: &App, pal: &Palette, s: &FormatModalState) -> Vec<Line<'a>> {
+    let m = app.lang.messages();
     let mut lines: Vec<Line> = Vec::new();
     lines.push(kv(m.storage_format_target, &s.target_label, pal));
     lines.push(Line::from(""));
@@ -658,7 +703,7 @@ fn draw_format_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FormatModalSta
         Style::default().fg(pal.dim),
     )));
 
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    lines
 }
 
 fn draw_flasher_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FlasherModalState) {

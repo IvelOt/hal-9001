@@ -1,4 +1,6 @@
-use hal9001::app::{App, DiskAnalyzerState, FlasherStage, FormatField, StorageModal, Tab};
+use hal9001::app::{
+    App, DiskAnalyzerState, FlasherStage, FormatField, FormatStage, StorageModal, Tab,
+};
 use hal9001::backend::storage::{
     build_ventoy_entries, compute_speed_eta, create_gpt_dual, create_mbr_fat32, detect_ventoy,
     format_fat32_partition, format_fat32_pure_rust, gzip_uncompressed_size_hint, is_esp_partition,
@@ -782,6 +784,80 @@ fn sudo_prompt_takes_priority_over_an_already_open_storage_modal() {
 }
 
 #[test]
+fn analyzer_open_selected_uses_the_mounted_partition_of_the_selected_drive() {
+    let mut app = App::new({
+        let mut cfg = Config::default();
+        cfg.splash.enabled = false;
+        cfg
+    });
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(mock_snapshot())));
+    app.storage_selected = 1; // usb drive, mounted at /run/media/user/USB
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageOpenAnalyzer(None), &tx);
+
+    let analyzer = app.storage_analyzer.as_ref().expect("analisador aberto");
+    assert_eq!(
+        analyzer.current_path,
+        std::path::PathBuf::from("/run/media/user/USB")
+    );
+}
+
+#[test]
+fn analyzer_open_selected_falls_back_to_any_mounted_partition_on_the_drive() {
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/drives/usb-esp-only".into());
+    let mut esp = partition(vec!["/run/media/user/ESP"], false);
+    esp.is_system = true;
+    d.partitions = vec![esp];
+
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    app.handle_event(AppEvent::Storage(Box::new(StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    })));
+    app.storage_selected = 0;
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageOpenAnalyzer(None), &tx);
+
+    let analyzer = app.storage_analyzer.as_ref().expect("analisador aberto");
+    assert_eq!(
+        analyzer.current_path,
+        std::path::PathBuf::from("/run/media/user/ESP")
+    );
+}
+
+#[test]
+fn analyzer_open_selected_never_falls_back_to_home_when_nothing_is_mounted() {
+    let mut cfg = Config::default();
+    cfg.splash.enabled = false;
+    let mut app = App::new(cfg);
+    app.active = Tab::Storage;
+    let mut d = drive(true, BusType::Usb);
+    d.id = DeviceId("/drives/usb-unmounted".into());
+    d.partitions = vec![partition(vec![], false)];
+    app.handle_event(AppEvent::Storage(Box::new(StorageSnapshot {
+        udisks_available: true,
+        drives: vec![d],
+    })));
+    app.storage_selected = 0;
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageOpenAnalyzer(None), &tx);
+
+    assert!(
+        app.storage_analyzer.is_none(),
+        "não deveria abrir o analisador sem um ponto de montagem"
+    );
+    assert!(app.toast.is_some(), "deveria exibir um toast informativo");
+}
+
+#[test]
 fn format_open_is_refused_for_system_disk_and_no_modal_opens() {
     let mut cfg = Config::default();
     cfg.splash.enabled = false;
@@ -833,7 +909,12 @@ fn format_modal_cycles_fs_edits_label_and_sends_action_on_enter() {
 
     app.dispatch(Action::Enter, &tx);
 
-    assert!(matches!(app.storage_modal, StorageModal::None));
+    match &app.storage_modal {
+        StorageModal::Format(s) => {
+            assert!(matches!(s.stage, FormatStage::Formatting));
+        }
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    }
     match rx.try_recv() {
         Ok(Action::StorageFormat {
             device_id,
@@ -861,7 +942,12 @@ fn format_modal_enter_on_fs_field_formats_immediately() {
 
     app.dispatch(Action::Enter, &tx);
 
-    assert!(matches!(app.storage_modal, StorageModal::None));
+    match &app.storage_modal {
+        StorageModal::Format(s) => {
+            assert!(matches!(s.stage, FormatStage::Formatting));
+        }
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    }
     match rx.try_recv() {
         Ok(Action::StorageFormat {
             device_id,
@@ -876,6 +962,94 @@ fn format_modal_enter_on_fs_field_formats_immediately() {
     }
 
     assert!(app.toast.is_some());
+}
+
+#[test]
+fn format_modal_blocks_field_edits_and_close_while_formatting() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &tx);
+    app.dispatch(Action::Enter, &tx);
+
+    match &app.storage_modal {
+        StorageModal::Format(s) => assert!(matches!(s.stage, FormatStage::Formatting)),
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    }
+
+    app.dispatch(Action::ToggleConfig, &tx);
+    assert!(
+        app.storage_modal_open(),
+        "Esc não deveria fechar o modal durante a formatação"
+    );
+
+    app.dispatch(Action::Right, &tx);
+    app.dispatch(Action::StorageModalChar('x'), &tx);
+    match &app.storage_modal {
+        StorageModal::Format(s) => {
+            assert!(matches!(s.stage, FormatStage::Formatting));
+            assert_eq!(s.fs_idx, 0);
+            assert_eq!(s.label, "PENDRIVE");
+        }
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    }
+}
+
+#[test]
+fn format_done_event_transitions_modal_to_done_and_enter_closes_it() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &tx);
+    app.dispatch(Action::Enter, &tx);
+
+    let device_id = match &app.storage_modal {
+        StorageModal::Format(s) => s.device_id.clone(),
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    };
+
+    app.handle_event(AppEvent::StorageFormatDone {
+        device_id,
+        result: Ok("ok".to_string()),
+    });
+
+    match &app.storage_modal {
+        StorageModal::Format(s) => match &s.stage {
+            FormatStage::Done { ok, .. } => assert!(*ok),
+            other => panic!("esperava estágio Done, obteve {other:?}"),
+        },
+        other => panic!("esperava modal de formatação, obteve {other:?}"),
+    }
+
+    app.dispatch(Action::Enter, &tx);
+    assert!(matches!(app.storage_modal, StorageModal::None));
+}
+
+#[test]
+fn format_done_event_with_error_marks_stage_as_failed() {
+    let mut app = app_with_usb_target("/dev/sdz", 8 * 1024 * 1024 * 1024);
+    let (tx, _rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::StorageFormatOpen, &tx);
+    app.dispatch(Action::Enter, &tx);
+
+    let device_id = match &app.storage_modal {
+        StorageModal::Format(s) => s.device_id.clone(),
+        other => panic!("esperava modal de formatação em progresso, obteve {other:?}"),
+    };
+
+    app.handle_event(AppEvent::StorageFormatDone {
+        device_id,
+        result: Err("falhou".to_string()),
+    });
+
+    match &app.storage_modal {
+        StorageModal::Format(s) => match &s.stage {
+            FormatStage::Done { ok, message } => {
+                assert!(!*ok);
+                assert_eq!(message, "falhou");
+            }
+            other => panic!("esperava estágio Done, obteve {other:?}"),
+        },
+        other => panic!("esperava modal de formatação, obteve {other:?}"),
+    }
 }
 
 #[test]
@@ -1141,6 +1315,19 @@ fn render_format_and_flasher_modals_without_panic() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
     app.dispatch(Action::StorageFormatOpen, &tx);
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+
+    app.dispatch(Action::Enter, &tx);
+    terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
+
+    let device_id = match &app.storage_modal {
+        StorageModal::Format(s) => s.device_id.clone(),
+        other => panic!("esperava modal de formatação, obteve {other:?}"),
+    };
+    app.handle_event(AppEvent::StorageFormatDone {
+        device_id,
+        result: Ok("ok".to_string()),
+    });
     terminal.draw(|f| hal9001::ui::draw(&app, f)).unwrap();
     app.dispatch(Action::ToggleConfig, &tx);
 

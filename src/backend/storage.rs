@@ -14,7 +14,7 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
 use crate::events::{
-    Action, AppEvent, DeviceId, EventTx, SudoPasswordRequest, SudoPasswordTx, Toast,
+    Action, AppEvent, DeviceId, EventTx, SudoPasswordRequest, SudoPasswordTx, Toast, ToastLevel,
 };
 
 const IO_BUFFER_SIZE: usize = 4 * 1024 * 1024;
@@ -1060,6 +1060,14 @@ pub fn is_esp_partition(p: &PartitionInfo) -> bool {
         || p.label.eq_ignore_ascii_case("vtoyefi")
 }
 
+fn toast_to_format_result(toast: &Toast) -> Result<String, String> {
+    if toast.level == ToastLevel::Error {
+        Err(toast.text.clone())
+    } else {
+        Ok(toast.text.clone())
+    }
+}
+
 pub fn primary_partition(drive: &DriveInfo) -> Option<&PartitionInfo> {
     if let Some(p) = drive
         .partitions
@@ -1983,7 +1991,11 @@ async fn multiboot_prepare_dual_task(
 ) {
     let m = lang.messages();
     let fail = |msg: String| {
-        let _ = tx.send(AppEvent::Toast(Toast::error(msg)));
+        let _ = tx.send(AppEvent::Toast(Toast::error(msg.clone())));
+        let _ = tx.send(AppEvent::StorageFormatDone {
+            device_id: device_id.clone(),
+            result: Err(msg),
+        });
     };
 
     tracing::warn!(target: "hal9001::storage", device = %device_id, dev_node = %dev_node, "preparação de multi-boot dual (exFAT + ESP) solicitada");
@@ -2126,6 +2138,10 @@ async fn multiboot_prepare_dual_task(
         Err(e) => Toast::error(format!("{}: {e}", m.storage_err_multiboot_prepare_failed)),
     };
     tracing::warn!(target: "hal9001::storage", device = %device_id, ok = result.is_ok(), "preparação de multi-boot dual concluída");
+    let _ = tx.send(AppEvent::StorageFormatDone {
+        device_id: device_id.clone(),
+        result: toast_to_format_result(&toast),
+    });
     let _ = tx.send(AppEvent::Toast(toast));
 }
 
@@ -3174,6 +3190,10 @@ async fn handle_action(
             {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "formatação de disco de sistema recusada");
                 let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_system)));
+                let _ = tx.send(AppEvent::StorageFormatDone {
+                    device_id: device_id.clone(),
+                    result: Err(m.storage_err_system.to_string()),
+                });
                 return;
             }
 
@@ -3181,12 +3201,20 @@ async fn handle_action(
                 let _ = tx.send(AppEvent::Toast(Toast::error(
                     m.storage_err_tree_unavailable,
                 )));
+                let _ = tx.send(AppEvent::StorageFormatDone {
+                    device_id: device_id.clone(),
+                    result: Err(m.storage_err_tree_unavailable.to_string()),
+                });
                 return;
             };
 
             let Some(block_path) = resolve_block_object_path(snap, &id) else {
                 tracing::warn!(target: "hal9001::storage", device = %device_id, "bloco de dispositivo não encontrado para formatação");
                 let _ = tx.send(AppEvent::Toast(Toast::error(m.storage_err_block_not_found)));
+                let _ = tx.send(AppEvent::StorageFormatDone {
+                    device_id: device_id.clone(),
+                    result: Err(m.storage_err_block_not_found.to_string()),
+                });
                 return;
             };
 
@@ -3206,12 +3234,20 @@ async fn handle_action(
                     let _ = tx.send(AppEvent::Toast(Toast::error(
                         m.storage_err_multiboot_dual_needs_disk,
                     )));
+                    let _ = tx.send(AppEvent::StorageFormatDone {
+                        device_id: device_id.clone(),
+                        result: Err(m.storage_err_multiboot_dual_needs_disk.to_string()),
+                    });
                     return;
                 };
                 if !is_whole_disk(&drv.dev_node) {
                     let _ = tx.send(AppEvent::Toast(Toast::error(
                         m.storage_err_multiboot_dual_needs_disk,
                     )));
+                    let _ = tx.send(AppEvent::StorageFormatDone {
+                        device_id: device_id.clone(),
+                        result: Err(m.storage_err_multiboot_dual_needs_disk.to_string()),
+                    });
                     return;
                 }
                 tokio::spawn(multiboot_prepare_dual_task(
@@ -3266,6 +3302,10 @@ async fn handle_action(
                                         m.storage_err_format_fat32_failed
                                     )),
                                 };
+                                let _ = tx.send(AppEvent::StorageFormatDone {
+                                    device_id: device_id.clone(),
+                                    result: toast_to_format_result(&toast),
+                                });
                                 let _ = tx.send(AppEvent::Toast(toast));
                                 return;
                             }
@@ -3325,6 +3365,10 @@ async fn handle_action(
                     .await
                 }
             };
+            let _ = tx.send(AppEvent::StorageFormatDone {
+                device_id: device_id.clone(),
+                result: toast_to_format_result(&toast),
+            });
             let _ = tx.send(AppEvent::Toast(toast));
         }
         Action::StorageChecksumIso(iso_path) => {

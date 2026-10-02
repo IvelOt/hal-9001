@@ -66,12 +66,21 @@ pub enum FormatField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FormatStage {
+    Configuring,
+    Formatting,
+    Done { ok: bool, message: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FormatModalState {
     pub device_id: String,
     pub target_label: String,
     pub fs_idx: usize,
     pub label: String,
     pub field: FormatField,
+    pub stage: FormatStage,
+    pub spinner_frame: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -520,6 +529,11 @@ impl App {
                 state.spinner_frame = state.spinner_frame.wrapping_add(1);
             }
         }
+        if let StorageModal::Format(s) = &mut self.storage_modal {
+            if matches!(s.stage, FormatStage::Formatting) {
+                s.spinner_frame = s.spinner_frame.wrapping_add(1);
+            }
+        }
     }
 
     pub fn handle_event(&mut self, event: AppEvent) -> Vec<Action> {
@@ -748,6 +762,34 @@ impl App {
                                     Instant::now(),
                                 ));
                                 FlasherStage::Done {
+                                    ok: false,
+                                    message: err,
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+            AppEvent::StorageFormatDone { device_id, result } => {
+                if let StorageModal::Format(s) = &mut self.storage_modal {
+                    if s.device_id == device_id {
+                        let m = self.lang.messages();
+                        s.stage = match result {
+                            Ok(_msg) => {
+                                let message = m.storage_format_success.to_string();
+                                self.toast =
+                                    Some((Toast::success(message.clone()), Instant::now()));
+                                FormatStage::Done {
+                                    ok: true,
+                                    message,
+                                }
+                            }
+                            Err(err) => {
+                                self.toast = Some((
+                                    Toast::error(format!("{}: {err}", m.storage_format_failed)),
+                                    Instant::now(),
+                                ));
+                                FormatStage::Done {
                                     ok: false,
                                     message: err,
                                 }
@@ -1147,6 +1189,8 @@ impl App {
             fs_idx: 0,
             label: "PENDRIVE".to_string(),
             field: FormatField::Fs,
+            stage: FormatStage::Configuring,
+            spinner_frame: 0,
         });
     }
 
@@ -1171,12 +1215,26 @@ impl App {
     }
 
     fn storage_analyzer_open_selected(&mut self, action_tx: &broadcast::Sender<Action>) {
-        let start = self
-            .storage_selection()
-            .and_then(|(_, part)| part)
+        let Some((drive, part)) = self.storage_selection() else {
+            return;
+        };
+        let mount_point = part
             .and_then(|p| p.mount_points.first().cloned())
-            .map(PathBuf::from)
-            .unwrap_or_else(Self::home_dir);
+            .or_else(|| {
+                drive
+                    .partitions
+                    .iter()
+                    .find_map(|p| p.mount_points.first().cloned())
+            });
+        let Some(mount_point) = mount_point else {
+            let m = self.lang.messages();
+            self.toast = Some((
+                Toast::info(m.storage_err_device_not_mounted),
+                Instant::now(),
+            ));
+            return;
+        };
+        let start = PathBuf::from(mount_point);
         self.storage_analyzer = Some(DiskAnalyzerState::opening(start.clone()));
         let _ = action_tx.send(Action::StorageAnalyzerScan(start));
     }
@@ -1332,6 +1390,18 @@ impl App {
         action: Action,
         action_tx: &broadcast::Sender<Action>,
     ) -> StorageModal {
+        if !matches!(s.stage, FormatStage::Configuring) {
+            match action {
+                Action::Quit => self.should_quit = true,
+                Action::Enter | Action::ToggleConfig
+                    if matches!(s.stage, FormatStage::Done { .. }) =>
+                {
+                    return StorageModal::None;
+                }
+                _ => {}
+            }
+            return StorageModal::Format(s);
+        }
         match action {
             Action::Quit => self.should_quit = true,
 
@@ -1410,7 +1480,7 @@ impl App {
                     fs_type: fs.udisks_type().to_string(),
                     label,
                 });
-                return StorageModal::None;
+                s.stage = FormatStage::Formatting;
             }
             _ => {}
         }

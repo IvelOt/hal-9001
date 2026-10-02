@@ -269,6 +269,13 @@ fn new_message_fields() -> Vec<MessageField> {
             m.toast_battery_bypass_cancelled
         }),
         ("sudo_label_battery_bypass", |m| m.sudo_label_battery_bypass),
+        ("storage_err_device_not_mounted", |m| {
+            m.storage_err_device_not_mounted
+        }),
+        ("storage_format_progress", |m| m.storage_format_progress),
+        ("storage_format_success", |m| m.storage_format_success),
+        ("storage_format_failed", |m| m.storage_format_failed),
+        ("storage_format_hint_close", |m| m.storage_format_hint_close),
     ]
 }
 
