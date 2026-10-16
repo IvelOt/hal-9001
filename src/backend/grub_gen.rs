@@ -71,9 +71,20 @@ loopback --delete loop
             r#"set iso_path="($mb_root){iso}"
 loopback loop "$iso_path"
 set root=(loop)
-linux /arch/boot/x86_64/vmlinuz-linux img_dev=$mb_root img_loop={iso}
-initrd /arch/boot/x86_64/initramfs-linux.img
-loopback --delete loop
+if [ -z "$imgdevpath" ]; then
+    probe --set=mb_label --label ($mb_root)
+    if [ -n "$mb_label" ]; then
+        set imgdevpath="/dev/disk/by-label/$mb_label"
+    else
+        set imgdevpath="/dev/disk/by-label/HAL9001"
+    fi
+fi
+linux /arch/boot/x86_64/vmlinuz-linux archisobasedir=arch img_dev=$imgdevpath img_loop={iso} earlymodules=loop
+if [ -f /arch/boot/intel-ucode.img -a -f /arch/boot/amd-ucode.img ]; then
+    initrd /arch/boot/intel-ucode.img /arch/boot/amd-ucode.img /arch/boot/x86_64/initramfs-linux.img
+else
+    initrd /arch/boot/x86_64/initramfs-linux.img
+fi
 "#
         ),
         LinuxFlavor::NixOs => format!(
@@ -82,7 +93,6 @@ loopback loop "$iso_path"
 set root=(loop)
 linux /boot/bzImage findiso={iso}
 initrd /boot/initrd
-loopback --delete loop
 "#
         ),
         LinuxFlavor::GrubInternal => format!(
@@ -94,7 +104,6 @@ if [ -f /EFI/BOOT/grub.cfg ]; then
 elif [ -f /boot/grub/grub.cfg ]; then
     configfile /boot/grub/grub.cfg
 fi
-loopback --delete loop
 "#
         ),
         LinuxFlavor::Unknown => generic_fallback(file_name),
@@ -120,20 +129,32 @@ loopback loop "$iso_path"
         };
         for hint in &p.boot_hints {
             let hint = hint.trim_end_matches('/').to_string();
-            stanza.push_str(&format!(
-                r#"if [ -f {dev}{hint} ]; then
+            let lower = hint.to_ascii_lowercase();
+            if lower.ends_with(".cfg") || lower.ends_with("/grub.cfg") {
+                stanza.push_str(&format!(
+                    r#"if [ -f {dev}{hint} ]; then
     set root={dev}
     configfile {hint}
-    loopback --delete loop
 fi
 "#,
-                dev = dev,
-                hint = hint,
-            ));
+                    dev = dev,
+                    hint = hint,
+                ));
+            } else if lower.ends_with(".efi") || lower.contains("bootmgr") {
+                stanza.push_str(&format!(
+                    r#"if [ -f {dev}{hint} ]; then
+    set root={dev}
+    chainloader {hint}
+    boot
+fi
+"#,
+                    dev = dev,
+                    hint = hint,
+                ));
+            }
         }
     }
 
-    stanza.push_str("loopback --delete loop\n");
     stanza
 }
 

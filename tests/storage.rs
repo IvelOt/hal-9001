@@ -2124,6 +2124,7 @@ fn multiboot_copy_progress_updates_speed_eta_flushing_and_esc_emits_cancel() {
     app.storage_modal = StorageModal::MultibootIsoManager(MultibootIsoManagerState {
         device_id: "/drives/usb-target/p1".to_string(),
         target_label: "HAL9001".to_string(),
+        pending_adds: Vec::new(),
         stage: MultibootIsoManagerStage::Copying {
             bytes_written: 0,
             total_bytes: 100 * 1024 * 1024,
