@@ -84,7 +84,7 @@ pub fn blkflsbuf_best_effort(fd: RawFd) {
     // Linux BLKFLSBUF = _IO(0x12, 97) = 0x1261
     const BLKFLSBUF: libc::c_ulong = 0x1261;
     unsafe {
-        let _ = libc::ioctl(fd, BLKFLSBUF, 0);
+        let _ = libc::ioctl(fd, BLKFLSBUF as _, 0);
     }
 }
 
