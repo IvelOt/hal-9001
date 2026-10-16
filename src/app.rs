@@ -900,6 +900,9 @@ impl App {
                                     s.stage = MultibootIsoManagerStage::Copying {
                                         bytes_written: 0,
                                         total_bytes: size,
+                                        speed_mbps: 0.0,
+                                        eta_secs: 0,
+                                        flushing: false,
                                         file_name,
                                     };
                                     follow_up.push(Action::StorageMultibootAddIso {
