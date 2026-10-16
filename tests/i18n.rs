@@ -281,6 +281,15 @@ fn new_message_fields() -> Vec<MessageField> {
         ("filepicker_hint_hidden", |m| m.filepicker_hint_hidden),
         ("filepicker_hint_confirm", |m| m.filepicker_hint_confirm),
         ("filepicker_hint_cancel", |m| m.filepicker_hint_cancel),
+        ("storage_err_iso_exceeds_fat32_limit", |m| {
+            m.storage_err_iso_exceeds_fat32_limit
+        }),
+        ("storage_err_insufficient_free_space", |m| {
+            m.storage_err_insufficient_free_space
+        }),
+        ("multiboot_iso_mgr_flushing", |m| {
+            m.multiboot_iso_mgr_flushing
+        }),
     ]
 }
 

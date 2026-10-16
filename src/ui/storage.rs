@@ -942,6 +942,9 @@ fn draw_multiboot_iso_manager_modal(
         MultibootIsoManagerStage::Copying {
             bytes_written,
             total_bytes,
+            speed_mbps,
+            eta_secs,
+            flushing,
             file_name,
         } => {
             let pct = if *total_bytes > 0 {
@@ -949,16 +952,28 @@ fn draw_multiboot_iso_manager_modal(
             } else {
                 0.0
             };
+            let status_text = if *flushing {
+                m.multiboot_iso_mgr_flushing
+            } else {
+                m.multiboot_iso_mgr_copying
+            };
             lines.push(kv(m.storage_flash_iso_label, file_name, pal));
             lines.push(Line::from(Span::styled(
-                m.multiboot_iso_mgr_copying,
+                status_text,
                 Style::default().fg(pal.accent).add_modifier(Modifier::BOLD),
             )));
             lines.push(progress_line(pct, pal));
             lines.push(Line::from(format!(
-                "{} / {}",
+                "{} / {}   {:.1} MB/s   ETA {}s",
                 human_bytes(*bytes_written),
-                human_bytes(*total_bytes)
+                human_bytes(*total_bytes),
+                speed_mbps,
+                eta_secs
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                m.storage_flash_hint_cancel,
+                Style::default().fg(pal.dim),
             )));
         }
         MultibootIsoManagerStage::Removing { file_name } => {

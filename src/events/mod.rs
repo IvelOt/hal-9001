@@ -117,6 +117,9 @@ pub enum AppEvent {
         device_id: String,
         bytes_written: u64,
         total_bytes: u64,
+        speed_mbps: f64,
+        eta_secs: u64,
+        flushing: bool,
     },
 
     StorageMultibootIsoCopyDone {
@@ -245,6 +248,10 @@ pub enum Action {
     StorageMultibootAddIso {
         device_id: String,
         src_path: String,
+    },
+
+    StorageMultibootCopyCancel {
+        device_id: String,
     },
 
     StorageMultibootRemoveIso {
