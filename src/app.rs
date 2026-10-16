@@ -822,10 +822,7 @@ impl App {
                                 let message = m.storage_format_success.to_string();
                                 self.toast =
                                     Some((Toast::success(message.clone()), Instant::now()));
-                                FormatStage::Done {
-                                    ok: true,
-                                    message,
-                                }
+                                FormatStage::Done { ok: true, message }
                             }
                             Err(err) => {
                                 self.toast = Some((

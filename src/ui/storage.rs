@@ -625,7 +625,11 @@ fn draw_format_modal(app: &App, pal: &Palette, f: &mut Frame, s: &FormatModalSta
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_format_modal_configuring<'a>(app: &App, pal: &Palette, s: &FormatModalState) -> Vec<Line<'a>> {
+fn draw_format_modal_configuring<'a>(
+    app: &App,
+    pal: &Palette,
+    s: &FormatModalState,
+) -> Vec<Line<'a>> {
     let m = app.lang.messages();
     let mut lines: Vec<Line> = Vec::new();
     lines.push(kv(m.storage_format_target, &s.target_label, pal));
