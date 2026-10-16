@@ -242,6 +242,9 @@ pub enum MultibootIsoManagerStage {
     Copying {
         bytes_written: u64,
         total_bytes: u64,
+        speed_mbps: f64,
+        eta_secs: u64,
+        flushing: bool,
         file_name: String,
     },
     Removing {
@@ -772,17 +775,26 @@ impl App {
                 device_id,
                 bytes_written,
                 total_bytes,
+                speed_mbps,
+                eta_secs,
+                flushing,
             } => {
                 if let StorageModal::MultibootIsoManager(s) = &mut self.storage_modal {
                     if s.device_id == device_id {
                         if let MultibootIsoManagerStage::Copying {
                             bytes_written: bw,
                             total_bytes: tb,
+                            speed_mbps: sp,
+                            eta_secs: eta,
+                            flushing: fl,
                             ..
                         } = &mut s.stage
                         {
                             *bw = bytes_written;
                             *tb = total_bytes;
+                            *sp = speed_mbps;
+                            *eta = eta_secs;
+                            *fl = flushing;
                         }
                     }
                 }
@@ -1623,6 +1635,9 @@ impl App {
                             stage: MultibootIsoManagerStage::Copying {
                                 bytes_written: 0,
                                 total_bytes: size,
+                                speed_mbps: 0.0,
+                                eta_secs: 0,
+                                flushing: false,
                                 file_name,
                             },
                         })
@@ -1702,6 +1717,9 @@ impl App {
             },
             MultibootIsoManagerStage::Copying { .. } => {
                 if matches!(action, Action::ToggleConfig) {
+                    let _ = action_tx.send(Action::StorageMultibootCopyCancel {
+                        device_id: s.device_id.clone(),
+                    });
                     return StorageModal::None;
                 }
             }
@@ -2081,6 +2099,7 @@ impl App {
             | Action::StorageMultibootPrepare { .. }
             | Action::StorageMultibootListIsos { .. }
             | Action::StorageMultibootAddIso { .. }
+            | Action::StorageMultibootCopyCancel { .. }
             | Action::StorageMultibootRemoveIso { .. } => {
                 let _ = action_tx.send(action);
             }

@@ -238,6 +238,15 @@ fn new_message_fields() -> Vec<MessageField> {
         ("storage_err_format_generic_prefix", |m| {
             m.storage_err_format_generic_prefix
         }),
+        ("storage_err_iso_exceeds_fat32_limit", |m| {
+            m.storage_err_iso_exceeds_fat32_limit
+        }),
+        ("storage_err_insufficient_free_space", |m| {
+            m.storage_err_insufficient_free_space
+        }),
+        ("multiboot_iso_mgr_flushing", |m| {
+            m.multiboot_iso_mgr_flushing
+        }),
     ]
 }
 

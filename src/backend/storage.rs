@@ -1348,7 +1348,12 @@ fn disk_usage_for_mount(disks: &Disks, mount_point: &str) -> Option<u64> {
         .map(|d| d.total_space().saturating_sub(d.available_space()))
 }
 
-fn free_bytes_for_mount(mount_point: &str) -> Option<u64> {
+pub fn free_bytes_for_mount(mount_point: &str) -> Option<u64> {
+    if let Some(bytes) =
+        crate::backend::transfer::statvfs_free_bytes(std::path::Path::new(mount_point))
+    {
+        return Some(bytes);
+    }
     let disks = Disks::new_with_refreshed_list();
     disks
         .list()
@@ -1429,9 +1434,10 @@ async fn eject(conn: &Connection, drive: &DriveInfo) -> anyhow::Result<()> {
         if drive.ejectable {
             let _ = udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "Eject").await;
         }
-        unsafe {
+        let _ = tokio::task::spawn_blocking(|| unsafe {
             libc::sync();
-        }
+        })
+        .await;
         return Ok(());
     }
 
@@ -1441,9 +1447,10 @@ async fn eject(conn: &Connection, drive: &DriveInfo) -> anyhow::Result<()> {
     match udisks_call(conn, path, "org.freedesktop.UDisks2.Drive", "PowerOff").await {
         Ok(()) => Ok(()),
         Err(e) if is_no_usb_device_error(&e) => {
-            unsafe {
+            let _ = tokio::task::spawn_blocking(|| unsafe {
                 libc::sync();
-            }
+            })
+            .await;
             Ok(())
         }
         Err(e) => Err(e),
@@ -1493,6 +1500,7 @@ async fn open_device_fd(conn: &Connection, block_path: &str) -> anyhow::Result<s
 }
 
 async fn checksum_task(iso_path: String, lang: crate::i18n::Language, tx: EventTx) {
+    use std::os::fd::AsRawFd;
     let m = lang.messages();
     let path_buf = std::path::PathBuf::from(&iso_path);
     let file = match tokio::fs::File::open(&path_buf).await {
@@ -1505,6 +1513,8 @@ async fn checksum_task(iso_path: String, lang: crate::i18n::Language, tx: EventT
             return;
         }
     };
+    let raw_fd = file.as_raw_fd();
+    crate::backend::transfer::fadvise_sequential(raw_fd);
     let total = file.metadata().await.map(|m| m.len()).unwrap_or(0);
     let mut reader = tokio::io::BufReader::with_capacity(IO_BUFFER_SIZE, file);
     let mut hasher = Sha256::new();
@@ -1513,6 +1523,7 @@ async fn checksum_task(iso_path: String, lang: crate::i18n::Language, tx: EventT
     let mut last_emit = tokio::time::Instant::now();
 
     loop {
+        let chunk_start = read_total;
         let n = match reader.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => n,
@@ -1526,6 +1537,7 @@ async fn checksum_task(iso_path: String, lang: crate::i18n::Language, tx: EventT
         };
         hasher.update(&buf[..n]);
         read_total += n as u64;
+        crate::backend::transfer::fadvise_dontneed(raw_fd, chunk_start, n as u64);
         if total > 0 && last_emit.elapsed() >= PROGRESS_THROTTLE {
             let pct = (read_total as f32 / total as f32).clamp(0.0, 1.0);
             let _ = tx.send(AppEvent::StorageChecksumProgress {
@@ -1593,67 +1605,31 @@ fn flash_sync(
     lang: crate::i18n::Language,
     tx: &EventTx,
 ) -> anyhow::Result<()> {
-    let (is_gzip, total_bytes) = probe_image_sync(iso_path);
-    let raw_file = std::fs::File::open(iso_path)?;
-    let mut reader: Box<dyn Read> = if is_gzip {
-        Box::new(std::io::BufReader::with_capacity(
-            IO_BUFFER_SIZE,
-            GzDecoder::new(raw_file),
-        ))
-    } else {
-        Box::new(raw_file)
+    use crate::backend::transfer::{
+        BlockDirectSink, TransferConfig, TransferEngine, TransferSource,
     };
-    let mut dst = std::fs::OpenOptions::new().write(true).open(dev_node)?;
 
-    let mut buf = vec![0u8; IO_BUFFER_SIZE];
-    let mut written: u64 = 0;
-    let mut window_started = std::time::Instant::now();
-    let mut window_bytes: u64 = 0;
+    let (is_gzip, total_bytes) = probe_image_sync(iso_path);
+    let source = if is_gzip {
+        TransferSource::open_gzip(iso_path, total_bytes)?
+    } else {
+        TransferSource::open_plain(iso_path)?
+    };
+    let sink = Box::new(BlockDirectSink::open(std::path::Path::new(dev_node))?);
+    let cfg = TransferConfig {
+        chunk_size: IO_BUFFER_SIZE,
+        progress_throttle: PROGRESS_THROTTLE,
+        cancel_message: lang.messages().storage_err_flash_cancelled.to_string(),
+    };
 
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!(lang.messages().storage_err_flash_cancelled);
-        }
-        let mut n = 0;
-        while n < IO_BUFFER_SIZE {
-            match reader.read(&mut buf[n..]) {
-                Ok(0) => break,
-                Ok(k) => n += k,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e.into()),
-            }
-        }
-        if n == 0 {
-            break;
-        }
-        dst.write_all(&buf[..n])?;
-        written += n as u64;
-        window_bytes += n as u64;
-
-        if window_started.elapsed() >= PROGRESS_THROTTLE {
-            let (speed_mbps, eta_secs) = compute_speed_eta(
-                window_bytes,
-                window_started.elapsed().as_secs_f64(),
-                written,
-                total_bytes,
-            );
-            let _ = tx.send(AppEvent::StorageFlashProgress {
-                bytes_written: written,
-                total_bytes,
-                speed_mbps,
-                eta_secs,
-            });
-            window_started = std::time::Instant::now();
-            window_bytes = 0;
-        }
-    }
-
-    dst.flush()?;
-    dst.sync_all()?;
-
-    unsafe {
-        libc::sync();
-    }
+    let written = TransferEngine::run(source, sink, cancel, &cfg, |p| {
+        let _ = tx.send(AppEvent::StorageFlashProgress {
+            bytes_written: p.persisted_bytes,
+            total_bytes: p.total_bytes,
+            speed_mbps: p.speed_mbps,
+            eta_secs: p.eta_secs,
+        });
+    })?;
 
     let _ = tx.send(AppEvent::StorageFlashProgress {
         bytes_written: written,
@@ -2238,6 +2214,8 @@ async fn flash_elevated(
         format!("if={iso_path}"),
         format!("of={dev_node}"),
         "bs=4M".to_string(),
+        "oflag=direct".to_string(),
+        "iflag=fullblock".to_string(),
         "status=progress".to_string(),
         "conv=fsync".to_string(),
     ];
@@ -2250,28 +2228,20 @@ async fn flash_elevated(
         };
         let mut run = spawn_sudo(password, "dd".to_string(), args.clone())?;
 
-        let mut last_bytes = 0u64;
-        let mut window_started = tokio::time::Instant::now();
+        let mut meter = crate::backend::transfer::RateMeter::new(std::time::Instant::now());
         let mut last_emit = tokio::time::Instant::now();
         while let Some(line) = run.lines.recv().await {
             let Some(bytes) = parse_dd_bytes_copied(&line) else {
                 continue;
             };
             if last_emit.elapsed() >= PROGRESS_THROTTLE {
-                let (speed_mbps, eta_secs) = compute_speed_eta(
-                    bytes.saturating_sub(last_bytes),
-                    window_started.elapsed().as_secs_f64(),
-                    bytes,
-                    total_bytes,
-                );
+                let sample = meter.record(std::time::Instant::now(), bytes, total_bytes);
                 let _ = tx.send(AppEvent::StorageFlashProgress {
                     bytes_written: bytes,
                     total_bytes,
-                    speed_mbps,
-                    eta_secs,
+                    speed_mbps: sample.speed_mbps,
+                    eta_secs: sample.eta_secs,
                 });
-                last_bytes = bytes;
-                window_started = tokio::time::Instant::now();
                 last_emit = tokio::time::Instant::now();
             }
         }
@@ -2295,10 +2265,6 @@ async fn flash_elevated(
         speed_mbps: 0.0,
         eta_secs: 0,
     });
-
-    unsafe {
-        libc::sync();
-    }
     Ok(())
 }
 
@@ -2320,6 +2286,8 @@ fn flash_elevated_gzip_sync(
     cmd.arg("dd")
         .arg(format!("of={dev_node}"))
         .arg("bs=4M")
+        .arg("oflag=direct")
+        .arg("iflag=fullblock")
         .arg("status=progress")
         .arg("conv=fsync");
     cmd.stdin(std::process::Stdio::piped());
@@ -2335,11 +2303,13 @@ fn flash_elevated_gzip_sync(
     drop(child.stdout.take());
 
     let mut stderr = child.stderr.take().expect("stderr piped");
-    let tx_err = tx.clone();
+    let tx_prog = tx.clone();
     let stderr_thread = std::thread::spawn(move || -> String {
         let mut buf = [0u8; 4096];
         let mut partial: Vec<u8> = Vec::new();
         let mut full = String::new();
+        let mut meter = crate::backend::transfer::RateMeter::new(std::time::Instant::now());
+        let mut last_emit = std::time::Instant::now();
         loop {
             let n = match stderr.read(&mut buf) {
                 Ok(0) | Err(_) => break,
@@ -2351,7 +2321,19 @@ fn flash_elevated_gzip_sync(
                         let line = String::from_utf8_lossy(&partial).to_string();
                         full.push_str(&line);
                         full.push('\n');
-                        let _ = tx_err.send(AppEvent::Toast(Toast::info(line)));
+                        if let Some(bytes) = parse_dd_bytes_copied(&line) {
+                            if last_emit.elapsed() >= PROGRESS_THROTTLE {
+                                let sample =
+                                    meter.record(std::time::Instant::now(), bytes, total_bytes);
+                                let _ = tx_prog.send(AppEvent::StorageFlashProgress {
+                                    bytes_written: bytes,
+                                    total_bytes,
+                                    speed_mbps: sample.speed_mbps,
+                                    eta_secs: sample.eta_secs,
+                                });
+                                last_emit = std::time::Instant::now();
+                            }
+                        }
                         partial.clear();
                     }
                 } else {
@@ -2363,13 +2345,13 @@ fn flash_elevated_gzip_sync(
     });
 
     let write_result: anyhow::Result<()> = (|| {
+        use std::os::fd::AsRawFd;
         let raw_file = std::fs::File::open(iso_path)?;
+        let raw_fd = raw_file.as_raw_fd();
+        crate::backend::transfer::fadvise_sequential(raw_fd);
         let mut decoder =
             std::io::BufReader::with_capacity(IO_BUFFER_SIZE, GzDecoder::new(raw_file));
         let mut buf = vec![0u8; IO_BUFFER_SIZE];
-        let mut written: u64 = 0;
-        let mut window_started = std::time::Instant::now();
-        let mut window_bytes: u64 = 0;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 anyhow::bail!(lang.messages().storage_err_flash_cancelled);
@@ -2377,7 +2359,10 @@ fn flash_elevated_gzip_sync(
             let mut n = 0;
             while n < IO_BUFFER_SIZE {
                 match decoder.read(&mut buf[n..]) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        crate::backend::transfer::fadvise_dontneed(raw_fd, 0, 0);
+                        break;
+                    }
                     Ok(k) => n += k,
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => return Err(e.into()),
@@ -2387,25 +2372,6 @@ fn flash_elevated_gzip_sync(
                 break;
             }
             stdin.write_all(&buf[..n])?;
-            written += n as u64;
-            window_bytes += n as u64;
-
-            if window_started.elapsed() >= PROGRESS_THROTTLE {
-                let (speed_mbps, eta_secs) = compute_speed_eta(
-                    window_bytes,
-                    window_started.elapsed().as_secs_f64(),
-                    written,
-                    total_bytes,
-                );
-                let _ = tx.send(AppEvent::StorageFlashProgress {
-                    bytes_written: written,
-                    total_bytes,
-                    speed_mbps,
-                    eta_secs,
-                });
-                window_started = std::time::Instant::now();
-                window_bytes = 0;
-            }
         }
         Ok(())
     })();
@@ -2479,10 +2445,6 @@ async fn flash_elevated_gzip(
         speed_mbps: 0.0,
         eta_secs: 0,
     });
-
-    unsafe {
-        libc::sync();
-    }
     Ok(())
 }
 
@@ -2556,6 +2518,10 @@ async fn list_and_emit(mount_point: &str, device_id: String, tx: &EventTx) {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
+            if crate::backend::transfer::is_temp_part_file(&name) {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+                continue;
+            }
             raw.push((name, meta.len(), meta.modified().ok()));
         }
     }
@@ -2592,59 +2558,121 @@ async fn multiboot_list_isos_task(
     }
 }
 
-async fn copy_iso_inner(
-    src_path: &str,
-    dst_path: &str,
-    device_id: &str,
-    tx: &EventTx,
-) -> anyhow::Result<()> {
-    let mut src = tokio::fs::File::open(src_path).await?;
-    let total_bytes = src.metadata().await?.len();
-    let mut dst = tokio::fs::File::create(dst_path).await?;
+pub const MAX_FAT32_FILE_BYTES: u64 = 4_294_967_295; // 4 GiB - 1 byte (0xFFFF_FFFF)
 
-    let mut buf = vec![0u8; IO_BUFFER_SIZE];
-    let mut written: u64 = 0;
-    let mut last_emit = tokio::time::Instant::now();
-
-    loop {
-        let n = src.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        dst.write_all(&buf[..n]).await?;
-        written += n as u64;
-
-        if last_emit.elapsed() >= PROGRESS_THROTTLE {
-            let _ = tx.send(AppEvent::StorageMultibootIsoCopyProgress {
-                device_id: device_id.to_string(),
-                bytes_written: written,
-                total_bytes,
-            });
-            last_emit = tokio::time::Instant::now();
+pub fn check_multiboot_iso_fit(
+    fs: FsKind,
+    iso_size: u64,
+    free_bytes: Option<u64>,
+    lang: crate::i18n::Language,
+) -> Result<(), String> {
+    let m = lang.messages();
+    if matches!(fs, FsKind::Vfat) && iso_size > MAX_FAT32_FILE_BYTES {
+        return Err(m.storage_err_iso_exceeds_fat32_limit.to_string());
+    }
+    if let Some(free) = free_bytes {
+        if iso_size > free {
+            return Err(m.storage_err_insufficient_free_space.to_string());
         }
     }
+    Ok(())
+}
 
-    dst.flush().await?;
-    dst.sync_all().await?;
+fn copy_iso_sync(
+    src_path: &std::path::Path,
+    dst_path: &std::path::Path,
+    device_id: &str,
+    cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    use crate::backend::transfer::{
+        TransferConfig, TransferEngine, TransferPhase, TransferSource, WindowedSink,
+    };
+
+    let source = TransferSource::open_plain(src_path)?;
+    let sink = Box::new(WindowedSink::create(dst_path)?);
+    let cfg = TransferConfig {
+        chunk_size: IO_BUFFER_SIZE,
+        progress_throttle: PROGRESS_THROTTLE,
+        cancel_message: lang.messages().storage_err_cancelled_by_user.to_string(),
+    };
+
+    let dev_id = device_id.to_string();
+    let written = TransferEngine::run(source, sink, cancel, &cfg, |p| {
+        let _ = tx.send(AppEvent::StorageMultibootIsoCopyProgress {
+            device_id: dev_id.clone(),
+            bytes_written: p.persisted_bytes,
+            total_bytes: p.total_bytes,
+            speed_mbps: p.speed_mbps,
+            eta_secs: p.eta_secs,
+            flushing: p.phase == TransferPhase::Flushing,
+        });
+    })?;
 
     let _ = tx.send(AppEvent::StorageMultibootIsoCopyProgress {
         device_id: device_id.to_string(),
-        bytes_written: total_bytes,
-        total_bytes,
+        bytes_written: written,
+        total_bytes: written,
+        speed_mbps: 0.0,
+        eta_secs: 0,
+        flushing: false,
     });
     Ok(())
 }
 
+async fn copy_iso_inner(
+    src_path: &str,
+    dst_path: &str,
+    device_id: &str,
+    cancel: &Arc<AtomicBool>,
+    lang: crate::i18n::Language,
+    tx: &EventTx,
+) -> anyhow::Result<()> {
+    let src_buf = std::path::PathBuf::from(src_path);
+    let dst_buf = std::path::PathBuf::from(dst_path);
+    let dev_owned = device_id.to_string();
+    let cancel_owned = Arc::clone(cancel);
+    let tx_owned = tx.clone();
+    tokio::task::spawn_blocking(move || {
+        copy_iso_sync(
+            &src_buf,
+            &dst_buf,
+            &dev_owned,
+            &cancel_owned,
+            lang,
+            &tx_owned,
+        )
+    })
+    .await?
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn multiboot_add_iso_task(
     conn: Connection,
     device_id: String,
     part_path: String,
     existing_mount: Option<String>,
+    part_fs: FsKind,
     src_path: String,
+    cancel: Arc<AtomicBool>,
     lang: crate::i18n::Language,
     tx: EventTx,
 ) {
     let m = lang.messages();
+    let src_size = tokio::fs::metadata(&src_path)
+        .await
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+
+    if let Err(msg) = check_multiboot_iso_fit(part_fs.clone(), src_size, None, lang) {
+        let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
+            device_id,
+            result: Err(msg),
+        });
+        return;
+    }
+
     let mount_point = match ensure_mounted(&conn, &part_path, existing_mount).await {
         Ok(mp) => mp,
         Err(e) => {
@@ -2655,6 +2683,17 @@ async fn multiboot_add_iso_task(
             return;
         }
     };
+
+    let free_bytes = free_bytes_for_mount(&mount_point);
+    if let Err(msg) = check_multiboot_iso_fit(part_fs, src_size, free_bytes, lang) {
+        let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
+            device_id: device_id.clone(),
+            result: Err(msg),
+        });
+        list_and_emit(&mount_point, device_id, &tx).await;
+        return;
+    }
+
     let isos_dir = isos_subdir(&mount_point);
     if let Err(e) = tokio::fs::create_dir_all(&isos_dir).await {
         let _ = tx.send(AppEvent::StorageMultibootIsoCopyDone {
@@ -2669,7 +2708,7 @@ async fn multiboot_add_iso_task(
         .unwrap_or_else(|| "image.iso".to_string());
     let dst_path = format!("{isos_dir}/{file_name}");
 
-    let result = copy_iso_inner(&src_path, &dst_path, &device_id, &tx)
+    let result = copy_iso_inner(&src_path, &dst_path, &device_id, &cancel, lang, &tx)
         .await
         .map(|()| file_name.clone())
         .map_err(|e| e.to_string());
@@ -3240,6 +3279,9 @@ async fn handle_action(
             };
             let part_path = part.id.0.clone();
             let existing_mount = part.mount_points.first().cloned();
+            let part_fs = part.fs.clone();
+            let cancel = Arc::new(AtomicBool::new(false));
+            flash_cancels.insert(device_id.clone(), cancel.clone());
             tracing::warn!(target: "hal9001::storage", device = %device_id, src = %src_path, "cópia de ISO para o multi-boot solicitada");
             let conn2 = conn.clone();
             let txc = tx.clone();
@@ -3248,10 +3290,17 @@ async fn handle_action(
                 device_id,
                 part_path,
                 existing_mount,
+                part_fs,
                 src_path,
+                cancel,
                 lang,
                 txc,
             ));
+        }
+        Action::StorageMultibootCopyCancel { device_id } => {
+            if let Some(cancel) = flash_cancels.get(&device_id) {
+                cancel.store(true, Ordering::Relaxed);
+            }
         }
         Action::StorageMultibootRemoveIso {
             device_id,

@@ -588,3 +588,226 @@ fn qemu_uefi_boot_loads_grub_menu() {
         "QEMU serial log did not contain GRUB menu within 20s.\nLog:\n{log_content}"
     );
 }
+
+fn write_both_u16(dst: &mut [u8], val: u16) {
+    dst[0..2].copy_from_slice(&val.to_le_bytes());
+    dst[2..4].copy_from_slice(&val.to_be_bytes());
+}
+
+fn write_both_u32(dst: &mut [u8], val: u32) {
+    dst[0..4].copy_from_slice(&val.to_le_bytes());
+    dst[4..8].copy_from_slice(&val.to_be_bytes());
+}
+
+fn write_iso_dir_record(
+    dst: &mut [u8],
+    lba: u32,
+    data_len: u32,
+    is_dir: bool,
+    ident: &[u8],
+) -> usize {
+    let rec_len = (33 + ident.len() + usize::from(ident.len() % 2 == 0)) as u8;
+    dst[0] = rec_len;
+    dst[1] = 0;
+    write_both_u32(&mut dst[2..10], lba);
+    write_both_u32(&mut dst[10..18], data_len);
+    dst[25] = if is_dir { 0x02 } else { 0x00 };
+    write_both_u16(&mut dst[28..32], 1);
+    dst[32] = ident.len() as u8;
+    dst[33..33 + ident.len()].copy_from_slice(ident);
+    rec_len as usize
+}
+
+/// Construct a minimal valid ISO9660 image in memory containing `/boot/grub/loopback.cfg`.
+fn build_minimal_iso9660_with_loopback_cfg(volume_label: &str, loopback_cfg: &[u8]) -> Vec<u8> {
+    const SECTOR: usize = 2048;
+    const TOTAL_SECTORS: u32 = 24;
+    let mut iso = vec![0u8; TOTAL_SECTORS as usize * SECTOR];
+
+    // Sector 16: Primary Volume Descriptor
+    {
+        let pvd = &mut iso[16 * SECTOR..17 * SECTOR];
+        pvd[0] = 1;
+        pvd[1..6].copy_from_slice(b"CD001");
+        pvd[6] = 1;
+        pvd[8..40].fill(b' ');
+        pvd[8..16].copy_from_slice(b"HAL-9001");
+        pvd[40..72].fill(b' ');
+        let lbl = volume_label.as_bytes();
+        let copy_len = lbl.len().min(32);
+        pvd[40..40 + copy_len].copy_from_slice(&lbl[..copy_len]);
+        write_both_u32(&mut pvd[80..88], TOTAL_SECTORS);
+        write_both_u16(&mut pvd[120..124], 1);
+        write_both_u16(&mut pvd[124..128], 1);
+        write_both_u16(&mut pvd[128..132], SECTOR as u16);
+        write_iso_dir_record(&mut pvd[156..190], 18, SECTOR as u32, true, &[0]);
+    }
+
+    // Sector 17: Volume Descriptor Set Terminator
+    {
+        let term = &mut iso[17 * SECTOR..18 * SECTOR];
+        term[0] = 255;
+        term[1..6].copy_from_slice(b"CD001");
+        term[6] = 1;
+    }
+
+    // Sector 18: Root directory (`/`) -> contains `BOOT` at LBA 19
+    {
+        let dir = &mut iso[18 * SECTOR..19 * SECTOR];
+        let mut off = 0;
+        off += write_iso_dir_record(&mut dir[off..], 18, SECTOR as u32, true, &[0]);
+        off += write_iso_dir_record(&mut dir[off..], 18, SECTOR as u32, true, &[1]);
+        let _ = write_iso_dir_record(&mut dir[off..], 19, SECTOR as u32, true, b"BOOT");
+    }
+
+    // Sector 19: `/boot` directory -> contains `GRUB` at LBA 20
+    {
+        let dir = &mut iso[19 * SECTOR..20 * SECTOR];
+        let mut off = 0;
+        off += write_iso_dir_record(&mut dir[off..], 19, SECTOR as u32, true, &[0]);
+        off += write_iso_dir_record(&mut dir[off..], 18, SECTOR as u32, true, &[1]);
+        let _ = write_iso_dir_record(&mut dir[off..], 20, SECTOR as u32, true, b"GRUB");
+    }
+
+    // Sector 20: `/boot/grub` directory -> contains `LOOPBACK.CFG;1` at LBA 21
+    {
+        let dir = &mut iso[20 * SECTOR..21 * SECTOR];
+        let mut off = 0;
+        off += write_iso_dir_record(&mut dir[off..], 20, SECTOR as u32, true, &[0]);
+        off += write_iso_dir_record(&mut dir[off..], 19, SECTOR as u32, true, &[1]);
+        let _ = write_iso_dir_record(
+            &mut dir[off..],
+            21,
+            loopback_cfg.len() as u32,
+            false,
+            b"LOOPBACK.CFG;1",
+        );
+    }
+
+    // Sector 21: `/boot/grub/loopback.cfg` file content
+    {
+        let dst = &mut iso[21 * SECTOR..21 * SECTOR + loopback_cfg.len()];
+        dst.copy_from_slice(loopback_cfg);
+    }
+
+    iso
+}
+
+#[test]
+fn qemu_uefi_boot_executes_iso_loopback_without_net_or_device_errors() {
+    let ovmf_path = std::path::Path::new("/usr/share/edk2/x64/OVMF.4m.fd");
+    if !ovmf_path.exists() {
+        eprintln!(
+            "OVMF firmware not found at {} -- skipping QEMU ISO loopback test",
+            ovmf_path.display()
+        );
+        return;
+    }
+    let qemu_available = Command::new("qemu-system-x86_64")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !qemu_available {
+        eprintln!("qemu-system-x86_64 not available -- skipping QEMU ISO loopback test");
+        return;
+    }
+
+    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let disk_path = std::env::temp_dir().join("hal9001_qemu_iso_loopback_test.img");
+    let serial_log = std::env::temp_dir().join("hal9001_qemu_iso_loopback_serial.log");
+    let _ = std::fs::remove_file(&serial_log);
+
+    let layout = create_dual_boot_disk(&disk_path, &project_dir);
+
+    // Replace dummy.iso on the data partition with a real ISO9660 image containing
+    // `/boot/grub/loopback.cfg`, and switch grub.cfg to serial + timeout=1 so GRUB
+    // automatically boots Entry 0 (`Boot: dummy`) and executes `(loop)/boot/grub/loopback.cfg`.
+    let loopback_cfg = br#"
+echo "HAL9001_LOOPBACK_OK path=$iso_path label=$iso_label uuid=$mb_uuid imgdev=$imgdevpath"
+"#;
+    let iso_bytes = build_minimal_iso9660_with_loopback_cfg("HAL9001_ISO", loopback_cfg);
+
+    let raw_grub_cfg =
+        std::fs::read_to_string(project_dir.join("assets/multiboot/grub.cfg")).unwrap();
+    let automated_grub_cfg = raw_grub_cfg
+        .replace("set timeout=15", "set timeout=1")
+        .replace(
+            "terminal_output gfxterm",
+            "serial --unit=0 --speed=115200\nterminal_input serial console\nterminal_output serial console",
+        );
+
+    for offset in [layout.esp_offset, layout.data_offset] {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&disk_path)
+            .unwrap();
+        let mut wrapper = OffsetFile::new(file, offset);
+        let fs = fatfs::FileSystem::new(&mut wrapper, fatfs::FsOptions::new()).unwrap();
+        let root = fs.root_dir();
+        let mut cfg_file = root.open_file("boot/grub/grub.cfg").unwrap();
+        cfg_file.truncate().unwrap();
+        cfg_file.write_all(automated_grub_cfg.as_bytes()).unwrap();
+        if offset == layout.data_offset {
+            let mut iso_file = root.open_file("ISOs/dummy.iso").unwrap();
+            iso_file.truncate().unwrap();
+            iso_file.write_all(&iso_bytes).unwrap();
+        }
+    }
+
+    let mut child = Command::new("qemu-system-x86_64")
+        .arg("-bios")
+        .arg(ovmf_path)
+        .arg("-drive")
+        .arg(format!("file={},format=raw", disk_path.display()))
+        .arg("-m")
+        .arg("256")
+        .arg("-nographic")
+        .arg("-serial")
+        .arg(format!("file:{}", serial_log.display()))
+        .arg("-no-reboot")
+        .arg("-accel")
+        .arg("tcg")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn QEMU");
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(25);
+    loop {
+        if start.elapsed() >= timeout {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        if let Ok(content) = std::fs::read_to_string(&serial_log) {
+            if content.contains("HAL9001_LOOPBACK_OK") {
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let log_content = std::fs::read_to_string(&serial_log).unwrap_or_default();
+    let _ = std::fs::remove_file(&disk_path);
+    let _ = std::fs::remove_file(&serial_log);
+
+    assert!(
+        log_content.contains("HAL9001_LOOPBACK_OK path=/ISOs/dummy.iso label=HAL9001_ISO"),
+        "Expected loopback.cfg inside ISO to execute with relative iso_path and probed iso_label.\nSerial log:\n{log_content}"
+    );
+    assert!(
+        !log_content.contains("no server is specified"),
+        "GRUB emitted 'no server is specified' error!\nSerial log:\n{log_content}"
+    );
+    assert!(
+        !log_content.contains("you need to load the kernel first"),
+        "GRUB emitted 'you need to load the kernel first' error!\nSerial log:\n{log_content}"
+    );
+    assert!(
+        !log_content.contains("device not found"),
+        "GRUB emitted 'device not found' error!\nSerial log:\n{log_content}"
+    );
+}

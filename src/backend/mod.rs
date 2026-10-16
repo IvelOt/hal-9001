@@ -7,6 +7,7 @@ pub mod network;
 pub mod power;
 pub mod storage;
 pub mod system;
+pub mod transfer;
 pub mod updates;
 
 use tokio::sync::broadcast;

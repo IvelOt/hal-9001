@@ -40,12 +40,28 @@ pub fn count_isos(mount_point: &str) -> usize {
         .count()
 }
 
+fn write_and_sync(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(data)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+fn sync_dir_best_effort(dir: &Path) {
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
+}
+
 /// Write the UEFI bootloader (`EFI/BOOT/BOOTX64.EFI`). This is the only file
 /// the firmware itself must read, so it must live on a FAT (ESP) partition.
 fn write_efi_binary(mount_point: &Path) -> anyhow::Result<()> {
     let efi_dir = mount_point.join("EFI").join("BOOT");
     std::fs::create_dir_all(&efi_dir)?;
-    std::fs::write(efi_dir.join("BOOTX64.EFI"), BOOTX64_EFI)?;
+    write_and_sync(&efi_dir.join("BOOTX64.EFI"), BOOTX64_EFI)?;
+    sync_dir_best_effort(&efi_dir);
+    sync_dir_best_effort(mount_point);
     Ok(())
 }
 
@@ -53,7 +69,8 @@ fn write_efi_binary(mount_point: &Path) -> anyhow::Result<()> {
 fn write_grub_cfg(mount_point: &Path) -> anyhow::Result<()> {
     let grub_dir = mount_point.join("boot").join("grub");
     std::fs::create_dir_all(&grub_dir)?;
-    std::fs::write(grub_dir.join("grub.cfg"), GRUB_CFG)?;
+    write_and_sync(&grub_dir.join("grub.cfg"), GRUB_CFG.as_bytes())?;
+    sync_dir_best_effort(&grub_dir);
     Ok(())
 }
 
@@ -68,13 +85,14 @@ fn write_theme(mount_point: &Path) -> anyhow::Result<()> {
         .join("themes")
         .join("hal9001");
     std::fs::create_dir_all(&theme_dir)?;
-    std::fs::write(theme_dir.join("theme.txt"), THEME_TXT)?;
-    std::fs::write(theme_dir.join("background.png"), THEME_BACKGROUND)?;
-    std::fs::write(theme_dir.join("ascii.pf2"), THEME_ASCII)?;
-    std::fs::write(theme_dir.join("unicode.pf2"), THEME_UNICODE)?;
-    std::fs::write(theme_dir.join("select_c.png"), THEME_SELECT_C)?;
-    std::fs::write(theme_dir.join("select_w.png"), THEME_SELECT_W)?;
-    std::fs::write(theme_dir.join("select_e.png"), THEME_SELECT_E)?;
+    write_and_sync(&theme_dir.join("theme.txt"), THEME_TXT.as_bytes())?;
+    write_and_sync(&theme_dir.join("background.png"), THEME_BACKGROUND)?;
+    write_and_sync(&theme_dir.join("ascii.pf2"), THEME_ASCII)?;
+    write_and_sync(&theme_dir.join("unicode.pf2"), THEME_UNICODE)?;
+    write_and_sync(&theme_dir.join("select_c.png"), THEME_SELECT_C)?;
+    write_and_sync(&theme_dir.join("select_w.png"), THEME_SELECT_W)?;
+    write_and_sync(&theme_dir.join("select_e.png"), THEME_SELECT_E)?;
+    sync_dir_best_effort(&theme_dir);
     Ok(())
 }
 
@@ -85,8 +103,9 @@ fn write_isos_marker(mount_point: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&isos)?;
     let marker = marker_path(mount_point);
     if !marker.is_file() {
-        std::fs::write(&marker, b"")?;
+        write_and_sync(&marker, b"")?;
     }
+    sync_dir_best_effort(&isos);
     Ok(())
 }
 
@@ -97,6 +116,7 @@ pub fn prepare_multiboot(mount_point: &Path) -> anyhow::Result<()> {
     write_efi_binary(mount_point)?;
     write_grub_cfg(mount_point)?;
     write_theme(mount_point)?;
+    sync_dir_best_effort(mount_point);
     Ok(())
 }
 
@@ -111,6 +131,7 @@ pub fn prepare_multiboot_dual(esp_mount: &Path, data_mount: &Path) -> anyhow::Re
     write_isos_marker(data_mount)?;
     write_grub_cfg(data_mount)?;
     write_theme(data_mount)?;
+    sync_dir_best_effort(data_mount);
     Ok(())
 }
 
@@ -284,6 +305,46 @@ mod tests {
     }
 
     #[test]
+    fn grub_cfg_exports_root_uuid_and_supports_distro_loopback_boot() {
+        // Must load probe and linux modules and export device/UUID/ISO path
+        // variables so child submenus/configfiles never trigger net.mod's
+        // "error: no server is specified".
+        assert!(GRUB_CFG.contains("insmod probe"));
+        assert!(GRUB_CFG.contains("insmod linux"));
+        assert!(GRUB_CFG.contains("export mb_root"));
+        assert!(GRUB_CFG.contains("probe --set=mb_uuid --fs-uuid ($mb_root)"));
+        assert!(GRUB_CFG.contains("export mb_uuid"));
+        assert!(GRUB_CFG.contains("export imgdevpath"));
+        assert!(GRUB_CFG.contains("export iso_path"));
+        assert!(GRUB_CFG.contains("export isofile"));
+        assert!(GRUB_CFG.contains("export isoboot"));
+        assert!(GRUB_CFG.contains("probe --set=iso_label --label (loop)"));
+        assert!(GRUB_CFG.contains("export iso_label"));
+
+        // Must strip the (hdX,gptY) prefix into a relative path for kernel args.
+        assert!(GRUB_CFG.contains(r"regexp --set=1:iso_relpath '^\([^)]+\)(/.*)$'"));
+
+        // Must guard `loopback --delete loop` so it never emits "device not found".
+        assert!(GRUB_CFG.contains("if [ -d (loop)/ ]; then"));
+
+        // Must prioritize loopback.cfg and support direct kernel/initrd boot for
+        // Casper (Ubuntu/Mint), Archiso (Arch/CachyOS), Manjaro, Debian (live-boot),
+        // Fedora (dracut), and openSUSE.
+        assert!(GRUB_CFG.contains("configfile (loop)/boot/grub/loopback.cfg"));
+        assert!(GRUB_CFG.contains("boot=casper iso-scan/filename=$iso_path"));
+        assert!(GRUB_CFG.contains("archisobasedir=arch img_dev=$imgdevpath img_loop=$iso_path"));
+        assert!(GRUB_CFG.contains("vmlinuz-linux-cachyos"));
+        assert!(GRUB_CFG.contains("misobasedir=manjaro"));
+        assert!(GRUB_CFG.contains("boot=live components findiso=$iso_path"));
+        assert!(GRUB_CFG
+            .contains("root=live:CDLABEL=$iso_label rd.live.image iso-scan/filename=$iso_path"));
+
+        // Must NOT attempt UEFI chainloader on a GRUB loopback device or legacy isolinux.bin.
+        assert!(!GRUB_CFG.contains("chainloader /EFI/BOOT/BOOTX64.EFI"));
+        assert!(!GRUB_CFG.contains("chainloader /isolinux/isolinux.bin"));
+    }
+
+    #[test]
     fn bootx64_efi_embeds_exfat_and_ntfs_modules() {
         // The standalone bootloader must carry the exFAT/NTFS filesystem
         // drivers, otherwise GRUB cannot read the data partition at boot.
@@ -291,6 +352,12 @@ mod tests {
         assert!(has(b"exfat.mod"), "BOOTX64.EFI missing exfat.mod");
         assert!(has(b"ntfs.mod"), "BOOTX64.EFI missing ntfs.mod");
         assert!(has(b"ext2.mod"), "BOOTX64.EFI missing ext2.mod");
+        assert!(has(b"probe.mod"), "BOOTX64.EFI missing probe.mod");
+        assert!(has(b"loopback.mod"), "BOOTX64.EFI missing loopback.mod");
+        assert!(has(b"iso9660.mod"), "BOOTX64.EFI missing iso9660.mod");
+        assert!(has(b"linux.mod"), "BOOTX64.EFI missing linux.mod");
+        assert!(has(b"regexp.mod"), "BOOTX64.EFI missing regexp.mod");
+        assert!(has(b"search.mod"), "BOOTX64.EFI missing search.mod");
     }
 
     #[test]

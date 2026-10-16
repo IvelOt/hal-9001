@@ -683,6 +683,9 @@ pub struct Messages {
     pub display_status_disconnected: &'static str,
     pub storage_err_format_generic_prefix: &'static str,
     pub storage_err_mkfs_missing_suffix: &'static str,
+    pub storage_err_iso_exceeds_fat32_limit: &'static str,
+    pub storage_err_insufficient_free_space: &'static str,
+    pub multiboot_iso_mgr_flushing: &'static str,
 }
 
 pub static MESSAGES_PT_BR: Messages = Messages {
@@ -1239,6 +1242,9 @@ pub static MESSAGES_PT_BR: Messages = Messages {
     display_status_disconnected: "Desconectado",
     storage_err_format_generic_prefix: "Falha ao formatar",
     storage_err_mkfs_missing_suffix: "ausente — instale",
+    storage_err_iso_exceeds_fat32_limit: "a ISO excede o limite de 4 GiB do FAT32 — reformate o disco inteiro com a opção Multi-Boot (exFAT + ESP)",
+    storage_err_insufficient_free_space: "espaço livre insuficiente na partição de destino",
+    multiboot_iso_mgr_flushing: "Sincronizando buffers físicos no pendrive...",
 };
 
 pub static MESSAGES_EN_US: Messages = Messages {
@@ -1795,6 +1801,9 @@ pub static MESSAGES_EN_US: Messages = Messages {
     display_status_disconnected: "Disconnected",
     storage_err_format_generic_prefix: "Failed to format",
     storage_err_mkfs_missing_suffix: "missing — install",
+    storage_err_iso_exceeds_fat32_limit: "ISO exceeds the 4 GiB FAT32 file size limit — reformat the whole disk with the Multi-Boot (exFAT + ESP) option",
+    storage_err_insufficient_free_space: "insufficient free space on the target partition",
+    multiboot_iso_mgr_flushing: "Flushing physical buffers to the drive...",
 };
 
 pub static MESSAGES_ES_ES: Messages = Messages {
@@ -2351,4 +2360,7 @@ pub static MESSAGES_ES_ES: Messages = Messages {
     display_status_disconnected: "Desconectado",
     storage_err_format_generic_prefix: "Error al formatear",
     storage_err_mkfs_missing_suffix: "no encontrado — instale",
+    storage_err_iso_exceeds_fat32_limit: "la ISO supera el límite de 4 GiB de FAT32 — reformatee el disco entero con la opción Multi-Arranque (exFAT + ESP)",
+    storage_err_insufficient_free_space: "espacio libre insuficiente en la partición de destino",
+    multiboot_iso_mgr_flushing: "Sincronizando búferes físicos en la unidad...",
 };

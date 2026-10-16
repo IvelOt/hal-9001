@@ -1420,6 +1420,17 @@ fn render_multiboot_iso_manager_modal_in_every_stage_without_panic() {
         MultibootIsoManagerStage::Copying {
             bytes_written: 512,
             total_bytes: 1024,
+            speed_mbps: 18.5,
+            eta_secs: 12,
+            flushing: false,
+            file_name: "new.iso".to_string(),
+        },
+        MultibootIsoManagerStage::Copying {
+            bytes_written: 1024,
+            total_bytes: 1024,
+            speed_mbps: 14.2,
+            eta_secs: 0,
+            flushing: true,
             file_name: "new.iso".to_string(),
         },
         MultibootIsoManagerStage::Removing {
@@ -1749,4 +1760,111 @@ fn create_mbr_fat32_fails_for_path_too_small() {
 
     let result = create_mbr_fat32(path, 1024);
     assert!(result.is_err(), "should fail for a disk smaller than 2 MiB");
+}
+
+#[test]
+fn check_multiboot_iso_fit_rejects_over_4gib_on_fat32_and_accepts_on_exfat() {
+    use hal9001::backend::storage::{check_multiboot_iso_fit, MAX_FAT32_FILE_BYTES};
+    use hal9001::i18n::Language;
+
+    // Exactly 4 GiB - 1 byte fits on FAT32 when free space is sufficient
+    assert!(check_multiboot_iso_fit(
+        FsKind::Vfat,
+        MAX_FAT32_FILE_BYTES,
+        Some(8 * 1024 * 1024 * 1024),
+        Language::PtBr
+    )
+    .is_ok());
+
+    // 4 GiB (MAX_FAT32_FILE_BYTES + 1) fails on FAT32 even with 32 GiB free
+    let err_fat = check_multiboot_iso_fit(
+        FsKind::Vfat,
+        MAX_FAT32_FILE_BYTES + 1,
+        Some(32 * 1024 * 1024 * 1024),
+        Language::EnUs,
+    )
+    .unwrap_err();
+    assert!(err_fat.contains("4 GiB"));
+
+    // The same > 4 GiB ISO succeeds on exFAT, NTFS, and ext4
+    for fs in [FsKind::Exfat, FsKind::Ntfs, FsKind::Ext4] {
+        assert!(check_multiboot_iso_fit(
+            fs,
+            6 * 1024 * 1024 * 1024,
+            Some(32 * 1024 * 1024 * 1024),
+            Language::EnUs
+        )
+        .is_ok());
+    }
+
+    // Any filesystem rejects when ISO exceeds available free space
+    let err_space = check_multiboot_iso_fit(
+        FsKind::Exfat,
+        5 * 1024 * 1024 * 1024,
+        Some(2 * 1024 * 1024 * 1024),
+        Language::EnUs,
+    )
+    .unwrap_err();
+    assert!(err_space.contains("insufficient free space"));
+}
+
+#[test]
+fn multiboot_copy_progress_updates_speed_eta_flushing_and_esc_emits_cancel() {
+    use hal9001::app::{MultibootIsoManagerStage, MultibootIsoManagerState, StorageModal};
+
+    let mut app = app_with_usb_target("/dev/sdz", 16 * 1024 * 1024 * 1024);
+    app.storage_modal = StorageModal::MultibootIsoManager(MultibootIsoManagerState {
+        device_id: "/drives/usb-target/p1".to_string(),
+        target_label: "HAL9001".to_string(),
+        stage: MultibootIsoManagerStage::Copying {
+            bytes_written: 0,
+            total_bytes: 100 * 1024 * 1024,
+            speed_mbps: 0.0,
+            eta_secs: 0,
+            flushing: false,
+            file_name: "cachyos.iso".to_string(),
+        },
+    });
+
+    app.handle_event(AppEvent::StorageMultibootIsoCopyProgress {
+        device_id: "/drives/usb-target/p1".to_string(),
+        bytes_written: 50 * 1024 * 1024,
+        total_bytes: 100 * 1024 * 1024,
+        speed_mbps: 24.5,
+        eta_secs: 2,
+        flushing: true,
+    });
+
+    match &app.storage_modal {
+        StorageModal::MultibootIsoManager(s) => match &s.stage {
+            MultibootIsoManagerStage::Copying {
+                bytes_written,
+                total_bytes,
+                speed_mbps,
+                eta_secs,
+                flushing,
+                file_name,
+            } => {
+                assert_eq!(*bytes_written, 50 * 1024 * 1024);
+                assert_eq!(*total_bytes, 100 * 1024 * 1024);
+                assert!((speed_mbps - 24.5).abs() < 1e-6);
+                assert_eq!(*eta_secs, 2);
+                assert!(*flushing);
+                assert_eq!(file_name, "cachyos.iso");
+            }
+            other => panic!("expected Copying stage, got {other:?}"),
+        },
+        other => panic!("expected MultibootIsoManager modal, got {other:?}"),
+    }
+
+    // Pressing Esc (ToggleConfig) cancels the active copy and closes the modal
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    app.dispatch(Action::ToggleConfig, &tx);
+    assert_eq!(app.storage_modal, StorageModal::None);
+    match rx.try_recv() {
+        Ok(Action::StorageMultibootCopyCancel { device_id }) => {
+            assert_eq!(device_id, "/drives/usb-target/p1");
+        }
+        other => panic!("expected StorageMultibootCopyCancel, got {other:?}"),
+    }
 }
