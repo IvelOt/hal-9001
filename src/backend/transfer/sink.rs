@@ -201,7 +201,7 @@ pub struct BlockDirectSink {
     file: File,
     fd: RawFd,
     direct_enabled: bool,
-    aligned_buf: AlignedBuf,
+    aligned_buf: Option<AlignedBuf>,
     persisted_bytes: u64,
 }
 
@@ -241,7 +241,7 @@ impl BlockDirectSink {
             file,
             fd,
             direct_enabled,
-            aligned_buf: AlignedBuf::new_4k(DEFAULT_CHUNK_SIZE),
+            aligned_buf: None,
             persisted_bytes: 0,
         })
     }
@@ -254,13 +254,22 @@ impl BlockDirectSink {
         debug_assert_eq!(data.len() % DIRECT_ALIGN, 0);
         let mut offset = 0usize;
         while offset < data.len() {
-            let step = (data.len() - offset).min(self.aligned_buf.len());
-            debug_assert_eq!(step % DIRECT_ALIGN, 0);
-            let dst_slice = &mut self.aligned_buf.as_mut_slice()[..step];
-            dst_slice.copy_from_slice(&data[offset..offset + step]);
+            let src = &data[offset..];
+            let result = if src.as_ptr() as usize % DIRECT_ALIGN == 0 {
+                self.file.write_all(src).map(|()| src.len())
+            } else {
+                let bounce = self
+                    .aligned_buf
+                    .get_or_insert_with(|| AlignedBuf::new_4k(DEFAULT_CHUNK_SIZE));
+                let step = src.len().min(bounce.len());
+                debug_assert_eq!(step % DIRECT_ALIGN, 0);
+                let dst_slice = &mut bounce.as_mut_slice()[..step];
+                dst_slice.copy_from_slice(&src[..step]);
+                self.file.write_all(dst_slice).map(|()| step)
+            };
 
-            match self.file.write_all(dst_slice) {
-                Ok(()) => {
+            match result {
+                Ok(step) => {
                     offset += step;
                     self.persisted_bytes += step as u64;
                 }
